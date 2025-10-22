@@ -1,0 +1,353 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
+  </PropertyGroup>
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64">
+      <Configuration>Debug</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">
+      <Configuration>Release</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="MinSizeRel|x64">
+      <Configuration>MinSizeRel</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="RelWithDebInfo|x64">
+      <Configuration>RelWithDebInfo</Configuration>
+      <Platform>x64</Platform>
+    </ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{DEBCD99D-818E-35AE-9B82-B45BA88933BD}</ProjectGuid>
+    <Keyword>Win32Proj</Keyword>
+    <WindowsTargetPlatformVersion>10.0.26100.0</WindowsTargetPlatformVersion>
+    <Platform>x64</Platform>
+    <ProjectName>xmltest</ProjectName>
+    <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <CharacterSet>MultiByte</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\Debug\bin\main\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xmltest.dir\Debug\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">xmltest</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\Release\bin\main\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xmltest.dir\Release\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|x64'">xmltest</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\MinSizeRel\bin\main\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">xmltest.dir\MinSizeRel\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">xmltest</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">true</GenerateManifest>
+    <OutDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\RelWithDebInfo\bin\main\</OutDir>
+    <IntDir Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">xmltest.dir\RelWithDebInfo\</IntDir>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">xmltest</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">.exe</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">true</GenerateManifest>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>Disabled</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>Disabled</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;TINYXML2_DEBUG;CMAKE_INTDIR="Debug"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_DEBUG;_WINDOWS;TINYXML2_DEBUG;CMAKE_INTDIR=\"Debug\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\Debug\lib\main\tinyxml2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64/$(Configuration);C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64/$(Configuration);C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/Debug/lib/main/xmltest.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/Debug/bin/main/xmltest.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions2</EnableEnhancedInstructionSet>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <FloatingPointModel>Fast</FloatingPointModel>
+      <InlineFunctionExpansion>AnySuitable</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <WholeProgramOptimization>true</WholeProgramOptimization>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="Release"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"Release\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\Release\lib\main\tinyxml2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64/$(Configuration);C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64/$(Configuration);C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/Release/lib/main/xmltest.lib</ImportLibrary>
+      <LinkTimeCodeGeneration>UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <ProgramDataBaseFile>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/Release/bin/main/xmltest.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MinSpace</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="MinSizeRel"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <DebugInformationFormat>
+      </DebugInformationFormat>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"MinSizeRel\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\MinSizeRel\lib\main\tinyxml2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64/$(Configuration);C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64/$(Configuration);C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/MinSizeRel/lib/main/xmltest.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/MinSizeRel/bin/main/xmltest.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AssemblerListingLocation>$(IntDir)</AssemblerListingLocation>
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>OnlyExplicitInline</InlineFunctionExpansion>
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <MinimalRebuild></MinimalRebuild>
+      <Optimization>MaxSpeed</Optimization>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <SupportJustMyCode></SupportJustMyCode>
+      <UseFullPaths>false</UseFullPaths>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR="RelWithDebInfo"</PreprocessorDefinitions>
+      <ObjectFileName>$(IntDir)</ObjectFileName>
+      <ScanSourceForModuleDependencies>false</ScanSourceForModuleDependencies>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG;CMAKE_INTDIR=\"RelWithDebInfo\"</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\build\include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\osal\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\SOEM\oshw\win32;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\npcap-sdk-1.15\Include;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\lib\tinyxml2;C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC\14.44.35207\include;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\ucrt;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\um;C:\Program Files (x86)\Windows Kits\10\Include\10.0.26100.0\shared;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>..\..\RelWithDebInfo\lib\main\tinyxml2.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib</AdditionalDependencies>
+      <AdditionalLibraryDirectories>C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/ucrt/x64/$(Configuration);C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64;C:/Program Files (x86)/Windows Kits/10/Lib/10.0.26100.0/um/x64/$(Configuration);C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64;C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools/VC/Tools/MSVC/14.44.35207/lib/x64/$(Configuration);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <IgnoreSpecificDefaultLibraries>%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
+      <ImportLibrary>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/RelWithDebInfo/lib/main/xmltest.lib</ImportLibrary>
+      <ProgramDataBaseFile>D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/RelWithDebInfo/bin/main/xmltest.pdb</ProgramDataBaseFile>
+      <SubSystem>Console</SubSystem>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <CustomBuild Include="D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\CMakeLists.txt">
+      <UseUtf8Encoding>Always</UseUtf8Encoding>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Building Custom Rule D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-src/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">setlocal
+D:\msys64\mingw64\bin\cmake.exe -SD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++ -BD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang --check-stamp-file D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\tinyxml2.pc.gen;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\cmake\tinyxml2.pc.in;D:\msys64\mingw64\share\cmake\Modules\BasicConfigVersion-SameMajorVersion.cmake.in;D:\msys64\mingw64\share\cmake\Modules\CMakePackageConfigHelpers.cmake;D:\msys64\mingw64\share\cmake\Modules\CTest.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestTargets.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestUseLaunchers.cmake;D:\msys64\mingw64\share\cmake\Modules\DartConfiguration.tcl.in;D:\msys64\mingw64\share\cmake\Modules\GNUInstallDirs.cmake;D:\msys64\mingw64\share\cmake\Modules\WriteBasicConfigVersionFile.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Building Custom Rule D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-src/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">setlocal
+D:\msys64\mingw64\bin\cmake.exe -SD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++ -BD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang --check-stamp-file D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\tinyxml2.pc.gen;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\cmake\tinyxml2.pc.in;D:\msys64\mingw64\share\cmake\Modules\BasicConfigVersion-SameMajorVersion.cmake.in;D:\msys64\mingw64\share\cmake\Modules\CMakePackageConfigHelpers.cmake;D:\msys64\mingw64\share\cmake\Modules\CTest.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestTargets.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestUseLaunchers.cmake;D:\msys64\mingw64\share\cmake\Modules\DartConfiguration.tcl.in;D:\msys64\mingw64\share\cmake\Modules\GNUInstallDirs.cmake;D:\msys64\mingw64\share\cmake\Modules\WriteBasicConfigVersionFile.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='Release|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">Building Custom Rule D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-src/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">setlocal
+D:\msys64\mingw64\bin\cmake.exe -SD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++ -BD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang --check-stamp-file D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\tinyxml2.pc.gen;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\cmake\tinyxml2.pc.in;D:\msys64\mingw64\share\cmake\Modules\BasicConfigVersion-SameMajorVersion.cmake.in;D:\msys64\mingw64\share\cmake\Modules\CMakePackageConfigHelpers.cmake;D:\msys64\mingw64\share\cmake\Modules\CTest.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestTargets.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestUseLaunchers.cmake;D:\msys64\mingw64\share\cmake\Modules\DartConfiguration.tcl.in;D:\msys64\mingw64\share\cmake\Modules\GNUInstallDirs.cmake;D:\msys64\mingw64\share\cmake\Modules\WriteBasicConfigVersionFile.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='MinSizeRel|x64'">false</LinkObjects>
+      <Message Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">Building Custom Rule D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-src/CMakeLists.txt</Message>
+      <Command Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">setlocal
+D:\msys64\mingw64\bin\cmake.exe -SD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++ -BD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang --check-stamp-file D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal &amp; call :cmErrorLevel %errorlevel% &amp; goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd</Command>
+      <AdditionalInputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\tinyxml2.pc.gen;D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\cmake\tinyxml2.pc.in;D:\msys64\mingw64\share\cmake\Modules\BasicConfigVersion-SameMajorVersion.cmake.in;D:\msys64\mingw64\share\cmake\Modules\CMakePackageConfigHelpers.cmake;D:\msys64\mingw64\share\cmake\Modules\CTest.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestTargets.cmake;D:\msys64\mingw64\share\cmake\Modules\CTestUseLaunchers.cmake;D:\msys64\mingw64\share\cmake\Modules\DartConfiguration.tcl.in;D:\msys64\mingw64\share\cmake\Modules\GNUInstallDirs.cmake;D:\msys64\mingw64\share\cmake\Modules\WriteBasicConfigVersionFile.cmake;%(AdditionalInputs)</AdditionalInputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\CMakeFiles\generate.stamp</Outputs>
+      <LinkObjects Condition="'$(Configuration)|$(Platform)'=='RelWithDebInfo|x64'">false</LinkObjects>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-src\xmltest.cpp" />
+  </ItemGroup>
+  <ItemGroup />
+  <ItemGroup>
+    <ProjectReference Include="D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\ZERO_CHECK.vcxproj">
+      <Project>{16F060D5-613C-322F-A670-FCA368DCBA94}</Project>
+      <Name>ZERO_CHECK</Name>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <CopyToOutputDirectory>Never</CopyToOutputDirectory>
+    </ProjectReference>
+    <ProjectReference Include="D:\Yenhung\WORK\6Dof\PROG\WuSOEM_C++\build_clang\_deps\tinyxml2-build\tinyxml2.vcxproj">
+      <Project>{BD095D74-3E94-373D-90CA-583CE5BA9D17}</Project>
+      <Name>tinyxml2</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+  </ImportGroup>
+</Project>

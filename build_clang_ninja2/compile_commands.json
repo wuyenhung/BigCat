@@ -1,0 +1,146 @@
+[
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\main.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\main.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\main.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\main.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\EtherCATMaster.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\EtherCATMaster.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\EtherCATMaster.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\EtherCATMaster.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\Win32Window.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\Win32Window.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\Win32Window.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\Win32Window.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\MotionController.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\MotionController.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\MotionController.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\MotionController.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\PDOHelpers.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\PDOHelpers.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\PDOHelpers.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\PDOHelpers.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\StatusPane.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\StatusPane.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\StatusPane.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\StatusPane.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\Win32Utils.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\Win32Utils.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\Win32Utils.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\Win32Utils.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\StatusLogger.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\StatusLogger.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\StatusLogger.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\StatusLogger.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -Wall -Wextra -std=c11 -o CMakeFiles\\BigCat.dir\\src\\EsiParser.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\EsiParser.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\src\\EsiParser.cpp",
+  "output": "CMakeFiles\\BigCat.dir\\src\\EsiParser.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\windres.exe -O coff -D_UCRT -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -I D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\resources\\airwolf.rc CMakeFiles\\BigCat.dir\\resources\\airwolf.rc.obj",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\resources\\airwolf.rc",
+  "output": "CMakeFiles\\BigCat.dir\\resources\\airwolf.rc.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_base.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_base.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_base.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_base.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_coe.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_coe.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_coe.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_coe.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_config.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_config.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_config.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_config.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_dc.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_dc.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_dc.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_dc.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_eoe.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_eoe.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_eoe.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_eoe.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_foe.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_foe.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_foe.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_foe.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_main.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_main.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_main.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_main.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_print.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_print.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_print.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_print.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_soe.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_soe.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\src\\ec_soe.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\src\\ec_soe.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\osal\\win32\\osal.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\osal\\win32\\osal.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\osal\\win32\\osal.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\osal\\win32\\osal.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\oshw\\win32\\oshw.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\oshw\\win32\\oshw.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\oshw\\win32\\oshw.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\oshw\\win32\\oshw.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\cc.exe -D_UCRT -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32/wpcap/Include -O3 -DNDEBUG -std=c11 -Wall -Wextra -Wno-unused-parameter -o lib\\SOEM\\CMakeFiles\\soem.dir\\oshw\\win32\\nicdrv.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\oshw\\win32\\nicdrv.c",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\lib\\SOEM\\oshw\\win32\\nicdrv.c",
+  "output": "lib\\SOEM\\CMakeFiles\\soem.dir\\oshw\\win32\\nicdrv.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -fvisibility=hidden -fno-keep-inline-dllexport -o _deps\\tinyxml2-build\\CMakeFiles\\tinyxml2.dir\\tinyxml2.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\build_clang_ninja2\\_deps\\tinyxml2-src\\tinyxml2.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\build_clang_ninja2\\_deps\\tinyxml2-src\\tinyxml2.cpp",
+  "output": "_deps\\tinyxml2-build\\CMakeFiles\\tinyxml2.dir\\tinyxml2.cpp.obj"
+},
+{
+  "directory": "D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2",
+  "command": "D:\\msys64\\mingw64\\bin\\c++.exe -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/build/include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/osal/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/SOEM/oshw/win32 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/npcap-sdk-1.15/Include -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/lib/tinyxml2 -ID:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-src -O3 -DNDEBUG -std=gnu++17 -fvisibility=hidden -fno-keep-inline-dllexport -o _deps\\tinyxml2-build\\CMakeFiles\\xmltest.dir\\xmltest.cpp.obj -c D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\build_clang_ninja2\\_deps\\tinyxml2-src\\xmltest.cpp",
+  "file": "D:\\Yenhung\\WORK\\6Dof\\PROG\\WuSOEM_C++\\build_clang_ninja2\\_deps\\tinyxml2-src\\xmltest.cpp",
+  "output": "_deps\\tinyxml2-build\\CMakeFiles\\xmltest.dir\\xmltest.cpp.obj"
+}
+]

@@ -1,0 +1,10 @@
+^D:\YENHUNG\WORK\6DOF\PROG\WUSOEM_C++\BUILD_CLANG\_DEPS\TINYXML2-SUBBUILD\CMAKELISTS.TXT
+setlocal
+D:\msys64\mingw64\bin\cmake.exe -SD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-subbuild -BD:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-subbuild --check-stamp-file D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang/_deps/tinyxml2-subbuild/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

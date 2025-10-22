@@ -1,0 +1,31 @@
+依據選擇從站號 執行從站操作
+按下[電源關閉]按鈕 UI與實作需分離
+寫入6040的緩衝區= 0x0006
+不能直接操作PDO地址寫入
+
+
+UI與實作需分離
+須由snapshot 讀出PDO 與staging 寫入PDO
+if UI運動控制項目 按下[回原點]按鈕 and not BUSY and 據選擇從站號 and PDO讀取6040的緩衝區bit4=0 then
+    BUSY=True; //全區變數 回原點中狀態
+    SDO寫入6060=6 //原點模式 確認寫入完成才能繼續
+    SDO寫入6098=35 //當前位置作為 Home 確認寫入完成才能繼續
+    SDO寫入607C=0 //原點設定值 確認寫入完成才能繼續
+    PDO寫入6040的緩衝區=讀取6040的緩衝區
+    PDO寫入6040的緩衝區bit4=1 //寫入命令
+
+    if PDO讀取6041的緩衝區bit12=1 and bit10=1 and bit13=0 then
+        成功完成
+        BUSY=False
+    end_if
+
+    if PDO讀取6041的緩衝區bit13=1 then
+        發生錯誤
+        BUSY=False
+    end_if
+ 
+    if timeout超過3秒 then
+        發生超時
+        BUSY=False
+    end_if
+end_if 

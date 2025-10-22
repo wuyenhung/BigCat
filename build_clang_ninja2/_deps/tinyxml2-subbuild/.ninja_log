@@ -1,0 +1,21 @@
+# ninja log v6
+3	335	7827964231228474	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-mkdir	ef16b403a6d31891
+3	335	7827964231228474	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-mkdir	ef16b403a6d31891
+336	4803	7827964275979729	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-download	1376d0783cb738e7
+336	4803	7827964275979729	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-download	1376d0783cb738e7
+4803	5076	7827964276064398	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-update	9dc585a449ee9799
+4803	5076	7827964276064398	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-update	9dc585a449ee9799
+5077	5221	7827964280119609	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-patch	981dd00982af5d84
+5077	5221	7827964280119609	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-patch	981dd00982af5d84
+5221	5400	7827964281941980	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-configure	4eae8164e6710f09
+5221	5400	7827964281941980	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-configure	4eae8164e6710f09
+5400	5579	7827964283429517	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-build	f666d1ca0967133a
+5400	5579	7827964283429517	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-build	f666d1ca0967133a
+5579	5689	7827964284839826	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-install	cd4d3fcfddb88a52
+5579	5689	7827964284839826	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-install	cd4d3fcfddb88a52
+5689	5806	7827964286009409	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-test	509915ea4c67a3db
+5689	5806	7827964286009409	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-test	509915ea4c67a3db
+5806	5997	7827964287903184	CMakeFiles/tinyxml2-populate-complete	bcefd3d8ea50c05a
+5806	5997	7827964287903184	tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-done	bcefd3d8ea50c05a
+5806	5997	7827964287903184	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/CMakeFiles/tinyxml2-populate-complete	bcefd3d8ea50c05a
+5806	5997	7827964287903184	D:/Yenhung/WORK/6Dof/PROG/WuSOEM_C++/build_clang_ninja2/_deps/tinyxml2-subbuild/tinyxml2-populate-prefix/src/tinyxml2-populate-stamp/tinyxml2-populate-done	bcefd3d8ea50c05a
