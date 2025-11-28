@@ -1,0 +1,772 @@
+/* Page-specific styles for index.html */
+
+/* Industrial style: dark background, high contrast */
+html,
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: #222;
+  color: #fff;
+  line-height: 1.4;
+  overflow-x: hidden;
+  /* 防止水平滚动 */
+  max-width: 100vw;
+  /* 最大宽度为视窗宽度 */
+}
+
+/* 确保所有容器都不会超出屏幕 */
+* {
+  max-width: 100%;
+}
+
+/* 但允许某些元素有固定宽度 */
+input,
+select,
+button:not(.menu-toggle):not(.sidebar-buttons *),
+textarea {
+  max-width: none;
+}
+
+/* 為固定 header 留出空間（調整以配合更緊湊的頂部標題） */
+body {
+  padding-top: 52px; /* 減少空白，讓標題更貼近視窗頂部 */
+}
+
+.container {
+  max-width: 1200px;
+  width: 95%;
+  margin: 0 auto;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+.header {
+  background: #333;
+  border-bottom: 2px solid #555;
+  /* 更緊湊的內距並將內容靠頂部排列以讓標題位於視窗頂端 */
+  /* add extra left padding so the title won't overlap the hamburger/menu trigger */
+  /* left padding for header spacing now provided by sidebar-menu.css */
+  padding: 8px 20px 10px;
+  /* padding-left is set by sidebar-menu.css to make room for hamburger */
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start; /* 標題靠上 */
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+  position: fixed;
+  /* 固定定位 */
+  top: 0;
+  left: 0;
+  right: 0;
+  width: 100%;
+  z-index: 1000;
+  /* 高于普通内容 */
+  box-sizing: border-box;
+}
+
+.header h1 {
+  margin: 0;
+  padding-top: 2px; /* 微調讓文字更靠近頂部 */
+  font-size: 1.15rem;
+  color: #fff;
+  line-height: 1.05;
+  /* keep default (left/flow) for narrow screens; we'll center via media rules */
+}
+
+/* default: show header connection controls (visible on mobile & desktop). Layout specifics
+   will adjust in media queries. */
+.header-connection-controls {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+  margin-top: 6px;
+}
+
+/* header connection buttons style */
+.header-connection-controls button {
+  padding: var(--btn-padding);
+  /* make top header buttons equal width: distribute space evenly, but keep sensible min/max */
+  flex: 1 1 0;            /* share available width equally */
+  min-width: 72px;       /* don't shrink below touchable size */
+  max-width: 220px;      /* avoid overly wide buttons on large screens */
+  border-radius: 6px;
+  border: 2px solid #666;
+  background: #444;
+  color: #fff;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;    /* ensure consistent glyph alignment */
+}
+
+.header-connection-controls #btnConnectHeader {
+  background: #2e7d32;
+  border-color: #256029;
+}
+
+.header-connection-controls #btnDisconnectHeader {
+  background: #b71c1c;
+  border-color: #7a1414;
+}
+
+/* Auto start/stop buttons: clear success/error affordances */
+.header-connection-controls #btnStartAutoHeader {
+  background: linear-gradient(#04863b, #00702d); /* bright green */
+  border-color: #055e2d;
+  color: #fff;
+  font-weight: 700;
+  border: 2px solid #055e2d;
+}
+
+.header-connection-controls #btnStartAutoHeader:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.header-connection-controls #btnStopAutoHeader {
+  background: linear-gradient(#ff8c00, #e06b00); /* orange */
+  border-color: #c55800;
+  color: #fff;
+  font-weight: 700;
+  border: 2px solid #c55800;
+}
+
+.header-connection-controls #btnStopAutoHeader:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+/* Disabled style (low contrast) */
+.header-connection-controls button:disabled {
+  background: #444 !important;
+  color: #9aa !important;
+  display: inline-block;
+  vertical-align: middle;
+  text-align: center;
+}
+
+/* Local busy feedback for buttons during guardedPost; does NOT change disabled attr */
+button.busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* shared display style for configured/actual fields */
+.field-display {
+  background: #444;
+  border: 1px solid #666;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* input style for editable numeric/config fields (distinct from display-only) */
+.field-input {
+  background: #fff;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  color: #000;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end; /* align numbers to right */
+  padding: 0 12px;
+  cursor: text;
+}
+
+.field-input:focus {
+  outline: 2px solid #0a7;
+  box-shadow: 0 0 0 3px rgba(10, 160, 120, 0.08);
+}
+
+/* configuredPeriod uses same height as inputs; when displayed as non-editable display remove padding */
+#configuredPeriod.field-display {
+  padding: 0;
+}
+
+/* ensure input-like configuredPeriod aligns numbers to right despite global centering */
+#configuredPeriod.field-input {
+  justify-content: flex-end !important;
+  text-align: right;
+  color: #000 !important;
+  background: #fff !important;
+  border-color: #bbb !important;
+  cursor: text;
+}
+
+/* disabled state for clickable configuredPeriod display */
+#configuredPeriod.disabled {
+  pointer-events: none;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-group {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  height: var(--field-height);
+}
+
+/* page-level button styling excludes sidebar buttons so shared sidebar-menu.css is not overridden */
+button:not(.menu-toggle):not(.login-btn):not(.sidebar-buttons *) {
+  height: var(--btn-height);
+  min-width: var(--btn-min-width);
+  padding: var(--btn-padding);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.btn-group {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* Control row layout: allow wrapping when space is insufficient.
+   Each control group stacks label above input and has a sensible min-width so
+   period fields wrap to the next line on narrow screens. */
+.control-row {
+  display: flex;
+  gap: 16px;
+  align-items: stretch; /* allow child groups to match the tallest group's height */
+  flex-wrap: wrap;
+}
+
+.control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 0 1 220px; /* prefer ~220px but allow shrink and wrap */
+  min-width: 160px;
+  justify-content: center; /* center label+input vertically when group is stretched */
+}
+
+/* Ensure the input/display inside each group fills its intended field height so groups appear equal */
+.control-group .control-input {
+  flex: 0 0 var(--field-height); /* keep consistent input height */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Apply a reasonable minimum height for the first row so label+field fit nicely and rows are equal */
+.control-row:first-of-type .control-group {
+  min-height: calc(var(--field-height) + 28px);
+}
+
+/* Make control groups slightly smaller on extra small screens */
+@media (max-width: 480px) {
+  .control-group {
+    flex: 0 1 48%;
+    min-width: 140px;
+    justify-content: center;
+  }
+}
+
+button:not(.menu-toggle):not(.login-btn):not(.sidebar-buttons *) {
+  padding: var(--btn-padding);
+  border: 2px solid #666 !important;
+  border-radius: 4px;
+  background: #444;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+button:hover {
+  background: #555;
+  border-color: #888;
+}
+
+button:disabled {
+  background: #333;
+  color: #666;
+  cursor: not-allowed;
+}
+
+.status-display {
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.status-row {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.status-label {
+  font-weight: bold;
+  color: #ccc;
+  min-width: 100px;
+}
+
+.status-value {
+  background: #444;
+  padding: 5px 10px;
+  border-radius: 4px;
+  border: 1px solid #666;
+  color: #fff;
+  font-family: monospace;
+  min-width: 160px;
+  text-align: center;
+}
+
+/* Mobile: make status labels and values more compact to prevent overflow */
+@media (max-width: 600px) {
+  .status-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .status-item {
+    gap: 6px;
+  }
+
+  .status-label {
+    font-size: 0.85em;
+    min-width: 70px;
+  }
+
+  .status-value {
+    min-width: 0;
+    font-size: 0.9em;
+    padding: 4px 8px;
+  }
+
+  /* truncate long values if needed */
+  .status-value {
+    max-width: 12rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+.slaves-section {
+  background: #333;
+  border: 1px solid #555;
+  border-radius: 8px;
+  padding: 20px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+.slaves-section h3 {
+  margin-top: 0;
+  color: #fff;
+}
+
+/* Styles for slaves section header row */
+.slaves-section > div:nth-of-type(1) {
+  margin: 6px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.slaves-section > div:nth-of-type(1) > label {
+  margin: 0;
+  min-width: 90px;
+}
+
+/* ESI Browse button styles */
+#btnBrowseEsi {
+  display: inline-block;
+  margin-left: 8px;
+  border: 2px solid #666;
+  border-radius: 4px;
+  background: #444;
+  color: #fff;
+}
+
+/* SDO buttons row */
+.slaves-section > div:nth-of-type(3) {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #444;
+  color: #fff;
+}
+
+#sdoTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid #666;
+}
+
+#sdoTable th,
+#sdoTable td {
+  border: 1px solid #666;
+  padding: 6px;
+}
+
+th {
+  background: #555;
+  font-weight: bold;
+}
+
+.sdo-display {
+  background: #222;
+  border: 1px solid #666;
+  border-radius: 4px;
+  padding: 10px;
+  margin-top: 10px;
+  font-family: monospace;
+  white-space: pre-wrap;
+  max-height: var(--sdo-max-height);
+  overflow-y: auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* debug CSS removed: tables are visible by default */
+/* Ensure SDO area/table is always visible and readable */
+.sdo-display {
+  display: block !important;
+}
+
+.sdo-display table th,
+.sdo-display table td {
+  color: #fff;
+  background: transparent;
+  padding: 10px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  line-height: 1.2;
+}
+
+.sdo-display table th {
+  background: #333;
+}
+
+.auth-status {
+  color: #4CAF50;
+  font-weight: bold;
+}
+
+.auth-status.error {
+  color: #f44336;
+}
+
+/* enforce identical height and vertical centering for fields and buttons
+   exclude sidebar buttons so shared sidebar-menu.css is not overridden */
+button:not(.menu-toggle):not(.login-btn):not(.sidebar-buttons *),
+.control-input,
+#configuredPeriod,
+#actualPeriod {
+  height: var(--field-height) !important;
+  min-height: var(--field-height) !important;
+  padding: 0 12px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+}
+
+/* Numeric keypad overlay styles */
+#numKbOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+#numKb {
+  background: #333;
+  color: #fff;
+  border: 1px solid #666;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 320px;
+}
+
+.numKb-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.numKb-header div {
+  font-weight: bold;
+}
+
+#numKbInput {
+  font-size: 1.2rem;
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid #666;
+  background: #222;
+  color: #fff;
+  text-align: right;
+}
+
+#numKbClose {
+  background: #444;
+  border: 1px solid #666;
+  color: #fff;
+  border-radius: 4px;
+}
+
+.numKb-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.numBtn {
+  background: #444;
+  border: 1px solid #666;
+  color: #fff;
+  border-radius: 4px;
+  padding: 8px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.numBtn:hover {
+  background: #555;
+  border-color: #888;
+}
+
+.numKb-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#numKbCancel {
+  min-width: 100px;
+  background: #444;
+  border: 1px solid #666;
+  color: #fff;
+  border-radius: 6px;
+}
+
+#numKbOk {
+  min-width: 100px;
+  background: #0a7;
+  border: 1px solid #0c8;
+  color: #000;
+  border-radius: 6px;
+  font-weight: bold;
+}
+
+/* Desktop: center the page title while keeping the hamburger trigger usable */
+@media (min-width: 769px) {
+  .header h1 {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    /* limit width to avoid being overlapped by other chrome */
+    width: calc(100% - 160px);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 1; /* keep below toggle button so hamburger is clickable */
+  }
+
+  /* ensure hamburger stays on top-left and doesn't affect layout */
+  /* menu-toggle visual & placement provided by sidebar-menu.css */
+
+  /* show connection controls under title on desktop */
+  .header-connection-controls {
+    display: flex;
+    gap: 8px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    top: 52px; /* place below the centered title */
+    z-index: 1003;
+    justify-content: center;
+  }
+
+  /* ensure header has extra bottom space to contain controls */
+  .header {
+    padding-bottom: 36px;
+  }
+
+  /* make room for the taller header so content is not covered */
+  body {
+    padding-top: 96px;
+  }
+}
+
+/* Desktop: keep sidebar available so PC users can also open the side menu */
+@media (min-width: 769px) {
+  /* On desktop we prefer the side menu for navigation — hide header buttons near the title */
+  .header .login-section {
+    display: none !important;
+  }
+}
+
+/* ===== Mobile Sidebar Menu Styles ===== */
+
+/* menu-toggle styles provided by shared sidebar-menu.css (keep markup same) */
+
+/* Sidebar styling moved to shared file: sidebar-menu.css
+   We keep only page-specific overrides here if necessary. */
+
+/* Mobile responsive: Show hamburger, hide desktop buttons */
+@media (max-width: 768px) {
+
+  /* 防止所有元素超出屏幕宽度 */
+  body {
+    overflow-x: hidden !important;
+    position: relative;
+    width: 100%;
+  }
+
+  .container,
+  .control-panel,
+  .status-display,
+  .slaves-section,
+  table {
+    overflow-x: auto;
+    /* 内容过宽时内部滚动，而不是页面滚动 */
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  /* 确保所有行元素不超出 */
+  .control-row,
+  .status-row {
+    flex-wrap: wrap;
+    overflow: hidden;
+  }
+
+  /* Mobile header: allow top connection buttons to wrap instead of overflowing
+     and reduce their min-width so multiple buttons fit on narrow screens. */
+  .header-connection-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    width: 100%;
+    padding: 6px 6px 0 6px;
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+
+  .header-connection-controls button {
+    min-width: 64px;
+    padding: var(--btn-padding);
+    font-size: 0.9rem;
+    white-space: nowrap;
+    /* keep equal-width behavior on mobile rows too */
+    flex: 1 1 0;
+  }
+
+  /* Extra small screens - enlarge buttons and make two per row */
+  @media (max-width: 480px) {
+    .header-connection-controls {
+      gap: 8px;
+      padding: 8px 8px 6px 8px;
+    }
+
+    .header-connection-controls button {
+      /* force two equal columns per row */
+      flex: 0 1 48%;
+      min-width: 48%;
+      max-width: 48%;
+      padding: var(--btn-padding); /* larger touch target */
+      font-size: 1.00rem; /* larger text */
+      border-radius: 8px;
+    }
+
+    /* ensure the header remains a bit taller to fit two rows of buttons */
+    .header {
+      min-height: 110px;
+    }
+  }
+
+  /* menu-toggle positioning handled by shared sidebar-menu.css */
+
+  .header {
+    position: fixed; /* 固定在視窗頂端，確保標題在最上方 */
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1001;
+    /* header left spacing moved to shared CSS (sidebar-menu.css) */
+    padding-right: 10px;
+    /* Make room for hamburger button; on mobile we stack header elements to show controls under title */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 64px;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .header h1 {
+    font-size: clamp(0.75rem, 3vw, 0.95rem);
+    /* Responsive font size */
+    line-height: 1.3;
+    margin: 0;
+    padding-top: 4px; /* 更靠近頂端 */
+    /* on mobile keep normal flow so long titles ellipsize; on desktop we'll center the title */
+    flex: 1;
+    /* Take remaining space */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .login-section {
+    display: none !important;
+    /* Hide header buttons on mobile */
+  }
+
+  /* 把 body 上方留白調整為 header 固定高度，避免內容被蓋住 */
+  body {
+    padding-top: 96px; /* leave larger space on small screens to accommodate controls under title */
+  }
+
+  /* Adjust container padding on mobile */
+  .container {
+    padding: 10px;
+    width: 100%;
+    box-sizing: border-box;
+  }
+}

@@ -1,0 +1,1037 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STL 檔案檢視器 - 6DOF 控制</title>
+    <link rel="icon" href="ka52.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+    <!-- Prefer a local three.js for offline usage; fallback to CDN if local not present -->
+    <script>
+        (function() {
+            // Inject local copy first (path: js/three.min.js)
+            const localScript = document.createElement('script');
+            localScript.src = 'js/three.min.js';
+            localScript.defer = false;
+            // Append early so subsequent inline code can use it when available
+            document.head.appendChild(localScript);
+
+            function ensureThreeLoaded() {
+                return (typeof window.THREE !== 'undefined');
+            }
+
+            // If after a short delay THREE is still undefined, load from CDN as a fallback
+            setTimeout(() => {
+                if (!ensureThreeLoaded()) {
+                    console.warn('Local three.min.js not found — falling back to CDN');
+                    const cdn = document.createElement('script');
+                    cdn.src = 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js';
+                    cdn.defer = false;
+                    document.head.appendChild(cdn);
+                }
+            }, 150);
+        })();
+    </script>
+        <!-- Stylesheet load order (do not change):
+            1) shared-variables.css (global CSS variables - MUST be first)
+            2) sidebar-menu.css (shared layout/components that depend on variables)
+            3) page-specific styles (stay after shared files)
+        -->
+        <link rel="stylesheet" href="shared-variables.css">
+        <link rel="stylesheet" href="sidebar-menu.css">
+        <link rel="stylesheet" href="viewer_6dof.css">
+    <!-- Load auth.js early so initAuthCheck is available -->
+    <script src="auth.js"></script>
+</head>
+
+<body>
+    <div id="container">
+        <div id="canvas-container"></div>
+
+        <div id="info">
+            <h3>操作說明</h3>
+            <ul>
+                <li>左鍵拖曳：旋轉視角</li>
+                <li>滾輪滑動：縮放遠近</li>
+            </ul>
+        </div>
+
+        <div id="controls">
+            <!-- 檔案載入區 -->
+
+            <div class="input-source-row">
+                <label class="input-source-toggle" for="useExternalMmf">
+                    <input type="checkbox" id="useExternalMmf">
+                    <span>外部 MMF 輸入</span>
+                </label>
+                <span class="status-badge manual" id="inputSourceStatus">UI 手動輸入</span>
+            </div>
+
+            <!-- 第一行：X Y Z -->
+            <div class="control-row">
+                <div class="slider-group wide">
+                    <label>
+                        <span>X</span>
+                        <span class="value" id="posX-value">0.000</span>
+                    </label>
+                    <input type="range" id="posX" min="-200" max="200" value="0" step="0.001" title="X 偏移 (mm)">
+                </div>
+                <div class="slider-group wide">
+                    <label>
+                        <span>Y</span>
+                        <span class="value" id="posY-value">0.000</span>
+                    </label>
+                    <input type="range" id="posY" min="-200" max="200" value="0" step="0.001" title="Y 偏移 (mm)">
+                </div>
+                <div class="slider-group wide">
+                    <label>
+                        <span>Z</span>
+                        <span class="value-container">
+                            <span class="value" id="posZ-value">0.000</span>
+                        </span>
+                    </label>
+                    <input type="range" id="posZ" min="-200" max="200" value="0" step="0.001" title="Z 偏移 (mm)">
+                </div>
+            </div>
+
+            <!-- 第二行：Pitch Yaw Roll -->
+            <div class="control-row">
+                <div class="slider-group">
+                    <label>
+                        <span>Pitch</span>
+                        <span class="value" id="rotX-value">0.000°</span>
+                    </label>
+                    <input type="range" id="rotX" min="-30" max="30" value="0" step="0.001" title="Pitch (°)">
+                </div>
+                <div class="slider-group">
+                    <label>
+                        <span>Yaw</span>
+                        <span class="value" id="rotY-value">0.000°</span>
+                    </label>
+                    <input type="range" id="rotY" min="-30" max="30" value="0" step="0.001" title="Yaw (°)">
+                </div>
+                <div class="slider-group">
+                    <label>
+                        <span>Roll</span>
+                        <span class="value" id="rotZ-value">0.000°</span>
+                    </label>
+                    <input type="range" id="rotZ" min="-30" max="30" value="0" step="0.001" title="Roll (°)">
+                </div>
+            </div>
+
+        </div>
+
+        <!-- 按鈕群組 -->
+        <div class="button-group">
+            <button id="resetBtn" onclick="resetTransform()">姿態重置</button>
+            <button id="resetViewBtn" onclick="resetView()">視野重置</button>
+        </div>
+    </div>
+    </div>
+
+    <script>
+        let scene, camera, renderer, mesh, pivot, pivotBase, controls, offsetGroup, rotGroup;
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let cameraRotation = { x: 0, y: 0 };
+        let cameraDistance = 100;
+        const transformControlIds = ['posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ'];
+        let useExternalMmfInput = false;
+        let mmfPoseEventSource = null;
+        let mmfPoseStreamConnected = false;
+        let latestMmfPoseValues = null;
+
+        // 增量旋轉狀態 - 延遲初始化到 init() 函數中以確保 THREE 已加載
+        let currentAttitude; // 當前姿態
+        let lastRotX = 0, lastRotY = 0, lastRotZ = 0;  // 上次的旋轉滑桿值
+
+        // 增量位移狀態 - 延遲初始化到 init() 函數中以確保 THREE 已加載
+        let currentPosition;     // 當前位置 (相對於 pivotBase)
+        let lastPosX = 0, lastPosY = 0, lastPosZ = 0;  // 上次的位置滑桿值
+
+        function init() {
+            const container = document.getElementById('canvas-container');
+
+            // 初始化需要 THREE 的全局變量
+            currentAttitude = new THREE.Quaternion(); // 當前姿態
+            currentPosition = new THREE.Vector3();     // 當前位置 (相對於 pivotBase)
+
+            // 場景設定
+            scene = new THREE.Scene();
+
+            // 天空漸層背景
+            const skyColor = 0x87CEEB; // 天空藍
+            scene.background = new THREE.Color(skyColor);
+            scene.fog = new THREE.Fog(skyColor, 200, 1000);
+
+            // 相機設定
+            camera = new THREE.PerspectiveCamera(
+                45, // 調整 FOV 為 45 度，讓地面剛好在視窗底部附近
+                window.innerWidth / window.innerHeight,
+                0.1,
+                2000
+            );
+
+            // 調整相機位置與目標，讓地面位於視窗底部附近
+            // 假設直升機懸停高度約 50
+            cameraDistance = 150;
+            camera.position.set(0, 60, cameraDistance);
+
+            // 渲染器設定
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            container.appendChild(renderer.domElement);
+
+            // 地面平面
+            const groundGeometry = new THREE.PlaneGeometry(10000, 10000);
+            const groundMaterial = new THREE.MeshLambertMaterial({
+                color: 0x556B2F, // 深橄欖綠，更有地面感
+                side: THREE.DoubleSide
+            });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.rotation.x = -Math.PI / 2;
+            ground.position.y = 0;
+            ground.receiveShadow = true;
+            scene.add(ground);
+
+            // 光源
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            scene.add(ambientLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            sunLight.position.set(100, 200, 100);
+            sunLight.castShadow = true;
+            sunLight.shadow.mapSize.width = 2048;
+            sunLight.shadow.mapSize.height = 2048;
+            sunLight.shadow.camera.near = 0.5;
+            sunLight.shadow.camera.far = 1000;
+            const d = 200;
+            sunLight.shadow.camera.left = -d;
+            sunLight.shadow.camera.right = d;
+            sunLight.shadow.camera.top = d;
+            sunLight.shadow.camera.bottom = -d;
+            scene.add(sunLight);
+
+            // 網格地板(參考線) - 加大範圍
+            const gridHelper = new THREE.GridHelper(1000, 50, 0x000000, 0x000000);
+            gridHelper.material.opacity = 0.2;
+            gridHelper.material.transparent = true;
+            gridHelper.position.y = 0.1;
+            scene.add(gridHelper);
+
+            // 座標軸 (世界座標)
+            const axesHelper = new THREE.AxesHelper(30);
+            scene.add(axesHelper);
+
+            // 滑鼠控制
+            setupMouseControls();
+
+            // 輸入來源控制
+            setupInputSourceControls();
+
+            // 控制面板事件
+            setupControlListeners();
+
+            // 視窗調整
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('beforeunload', stopMmfPoseStream);
+
+            // 初始更新相機
+            updateCameraPosition();
+
+            // 載入預設模型
+            loadDefaultSTL();
+
+            animate();
+        }
+
+
+        function setupMouseControls() {
+            const canvas = renderer.domElement;
+
+            // Mouse Events
+            canvas.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                previousMousePosition = { x: e.clientX, y: e.clientY };
+            });
+
+            canvas.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+
+                    if (e.buttons === 1) { // Left click rotate
+                        handleRotate(deltaX, deltaY);
+                    }
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+
+            canvas.addEventListener('mouseup', () => { isDragging = false; });
+            canvas.addEventListener('mouseleave', () => { isDragging = false; });
+
+            canvas.addEventListener('wheel', (e) => {
+                e.preventDefault();
+                handleZoom(e.deltaY * 0.05);
+            }, { passive: false });
+
+            canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+            // Touch Events
+            let initialPinchDistance = null;
+            let lastTouchX = 0;
+            let lastTouchY = 0;
+
+            canvas.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 1) {
+                    isDragging = true;
+                    lastTouchX = e.touches[0].clientX;
+                    lastTouchY = e.touches[0].clientY;
+                } else if (e.touches.length === 2) {
+                    isDragging = false;
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    initialPinchDistance = Math.sqrt(dx * dx + dy * dy);
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault(); // Prevent scrolling/zooming the page
+                if (e.touches.length === 1 && isDragging) {
+                    const deltaX = e.touches[0].clientX - lastTouchX;
+                    const deltaY = e.touches[0].clientY - lastTouchY;
+                    handleRotate(deltaX, deltaY);
+                    lastTouchX = e.touches[0].clientX;
+                    lastTouchY = e.touches[0].clientY;
+                } else if (e.touches.length === 2 && initialPinchDistance) {
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    const currentDistance = Math.sqrt(dx * dx + dy * dy);
+                    const pinchDelta = initialPinchDistance - currentDistance;
+
+                    handleZoom(pinchDelta * 0.5); // Adjust sensitivity
+                    initialPinchDistance = currentDistance;
+                }
+            }, { passive: false });
+
+            canvas.addEventListener('touchend', () => {
+                isDragging = false;
+                initialPinchDistance = null;
+            });
+        }
+
+        function handleRotate(deltaX, deltaY) {
+            cameraRotation.y -= deltaX * 0.005; // Invert horizontal rotation
+            cameraRotation.x += deltaY * 0.005;
+            // Limit pitch to prevent going below ground (approx -0.1 rad is safe for distance 150-500)
+            cameraRotation.x = Math.max(-0.1, Math.min(Math.PI / 2.5, cameraRotation.x));
+            updateCameraPosition();
+        }
+
+        function handleZoom(delta) {
+            cameraDistance += delta;
+            cameraDistance = Math.max(50, Math.min(500, cameraDistance));
+            updateCameraPosition();
+        }
+
+        function updateCameraPosition() {
+            // 相機圍繞中心點 (0, 50, 0) 旋轉，這樣地面會保持在下方
+            const target = new THREE.Vector3(0, 50, 0);
+
+            const x = target.x + cameraDistance * Math.sin(cameraRotation.y) * Math.cos(cameraRotation.x);
+            const y = target.y + cameraDistance * Math.sin(cameraRotation.x);
+            const z = target.z + cameraDistance * Math.cos(cameraRotation.y) * Math.cos(cameraRotation.x);
+
+            camera.position.set(x, y, z);
+            camera.lookAt(target);
+        }
+
+        function getTransformValuesFromInputs() {
+            const values = {};
+
+            for (const id of transformControlIds) {
+                const elem = document.getElementById(id);
+                if (!elem) {
+                    console.warn(`找不到元素: ${id}`);
+                    return null;
+                }
+                values[id] = parseFloat(elem.value);
+            }
+
+            if (!Object.values(values).every(Number.isFinite)) {
+                console.warn('姿態控制值不是有效數字');
+                return null;
+            }
+
+            return values;
+        }
+
+        function isTransformValueSet(values) {
+            if (!values || typeof values !== 'object') {
+                return false;
+            }
+
+            return transformControlIds.every((id) => Number.isFinite(Number(values[id])));
+        }
+
+        function normalizeTransformValues(values) {
+            if (!isTransformValueSet(values)) {
+                return null;
+            }
+
+            return {
+                posX: Number(values.posX),
+                posY: -Number(values.posY),
+                posZ: Number(values.posZ),
+                rotX: Number(values.rotX),
+                rotY: Number(values.rotY),
+                rotZ: -Number(values.rotZ)
+            };
+        }
+
+        function normalizeDisplayValues(values) {
+            if (!isTransformValueSet(values)) {
+                return null;
+            }
+
+            return {
+                posX: Number(values.posX),
+                posY: Number(values.posY),
+                posZ: Number(values.posZ),
+                rotX: Number(values.rotX),
+                rotY: Number(values.rotY),
+                rotZ: Number(values.rotZ)
+            };
+        }
+
+        function updateTransformDisplay(values) {
+            const posXValue = document.getElementById('posX-value');
+            const posYValue = document.getElementById('posY-value');
+            const posZValue = document.getElementById('posZ-value');
+            const rotXValue = document.getElementById('rotX-value');
+            const rotYValue = document.getElementById('rotY-value');
+            const rotZValue = document.getElementById('rotZ-value');
+
+            if (posXValue) posXValue.textContent = values.posX.toFixed(3);
+            if (posYValue) posYValue.textContent = values.posY.toFixed(3);
+            if (posZValue) posZValue.textContent = values.posZ.toFixed(3);
+            if (rotXValue) rotXValue.textContent = values.rotX.toFixed(3) + '°';
+            if (rotYValue) rotYValue.textContent = values.rotY.toFixed(3) + '°';
+            if (rotZValue) rotZValue.textContent = values.rotZ.toFixed(3) + '°';
+        }
+
+        function syncTransformInputs(values) {
+            for (const id of transformControlIds) {
+                const elem = document.getElementById(id);
+                if (elem) {
+                    elem.value = values[id];
+                }
+            }
+
+            const displayValues = normalizeDisplayValues(values);
+            if (displayValues) {
+                updateTransformDisplay(displayValues);
+            }
+        }
+
+        function setManualTransformControlsEnabled(enabled) {
+            for (const id of transformControlIds) {
+                const elem = document.getElementById(id);
+                if (elem) {
+                    elem.disabled = !enabled;
+                }
+            }
+
+            const resetBtn = document.getElementById('resetBtn');
+            if (resetBtn) {
+                resetBtn.disabled = !enabled;
+            }
+        }
+
+        function updateInputSourceStatus(message = null) {
+            const statusEl = document.getElementById('inputSourceStatus');
+            if (!statusEl) {
+                return;
+            }
+
+            const statusText = message || (useExternalMmfInput
+                ? (mmfPoseStreamConnected ? '外部 MMF 輸入中' : '等待 MMF 串流')
+                : 'UI 手動輸入');
+
+            statusEl.textContent = statusText;
+            statusEl.classList.remove('manual', 'external', 'connected');
+            statusEl.classList.add(useExternalMmfInput ? 'external' : 'manual');
+            if (useExternalMmfInput && mmfPoseStreamConnected) {
+                statusEl.classList.add('connected');
+            }
+
+            document.body.classList.toggle('external-mmf-active', useExternalMmfInput);
+            setManualTransformControlsEnabled(!useExternalMmfInput);
+        }
+
+        function extractMmfPoseFromPayload(payload) {
+            if (!payload || !Array.isArray(payload.slaves) || payload.slaves.length < 6) {
+                return null;
+            }
+
+            const values = payload.slaves.slice(0, 6).map((slave) => Number(slave?.mmfIn));
+            if (!values.every(Number.isFinite)) {
+                return null;
+            }
+
+            // MMF Pose order: Sway, Surge, Heave, Pitch, Roll, FYaw.
+            // Viewer labels are X, Y, Z, Pitch, Yaw, Roll.
+            return {
+                posX: values[0],
+                posY: values[1],
+                posZ: values[2],
+                rotX: values[3],
+                rotY: values[5],
+                rotZ: values[4]
+            };
+        }
+
+        function cacheMmfPoseFromPayload(payload) {
+            const poseValues = extractMmfPoseFromPayload(payload);
+            if (!poseValues) {
+                return null;
+            }
+
+            latestMmfPoseValues = poseValues;
+            return poseValues;
+        }
+
+        function applyLatestMmfPose() {
+            if (!useExternalMmfInput || !latestMmfPoseValues) {
+                return false;
+            }
+
+            syncTransformInputs(latestMmfPoseValues);
+            updateTransform(latestMmfPoseValues);
+            return true;
+        }
+
+        function applyExternalMmfPose(payload) {
+            if (!cacheMmfPoseFromPayload(payload)) {
+                return false;
+            }
+
+            if (!useExternalMmfInput) {
+                return false;
+            }
+
+            return applyLatestMmfPose();
+        }
+
+        async function refreshMmfPoseSnapshot() {
+            try {
+                const response = await fetch('/pdo_data', { cache: 'no-store' });
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const payload = await response.json();
+                applyExternalMmfPose(payload);
+            } catch (error) {
+                console.warn('MMF 6DOF 快照讀取失敗:', error);
+            }
+        }
+
+        function ensureMmfPoseStream() {
+            if (mmfPoseEventSource) {
+                return;
+            }
+
+            refreshMmfPoseSnapshot();
+
+            if (!window.EventSource) {
+                updateInputSourceStatus('瀏覽器不支援 MMF 串流');
+                return;
+            }
+
+            try {
+                mmfPoseEventSource = new EventSource('/pdo_sse');
+                mmfPoseEventSource.onopen = () => {
+                    mmfPoseStreamConnected = true;
+                    updateInputSourceStatus();
+                };
+                mmfPoseEventSource.onerror = () => {
+                    mmfPoseStreamConnected = false;
+                    updateInputSourceStatus();
+                };
+                mmfPoseEventSource.onmessage = (event) => {
+                    let data = null;
+                    try {
+                        data = JSON.parse(event.data);
+                    } catch {
+                        return;
+                    }
+
+                    if (!data || data.type) {
+                        return;
+                    }
+
+                    applyExternalMmfPose(data);
+                };
+            } catch (error) {
+                console.warn('無法啟動 MMF 串流:', error);
+                mmfPoseEventSource = null;
+                mmfPoseStreamConnected = false;
+                updateInputSourceStatus('MMF 串流啟動失敗');
+            }
+        }
+
+        function stopMmfPoseStream() {
+            if (mmfPoseEventSource) {
+                mmfPoseEventSource.close();
+                mmfPoseEventSource = null;
+            }
+
+            mmfPoseStreamConnected = false;
+            updateInputSourceStatus();
+        }
+
+        function handleInputSourceToggle() {
+            const checkbox = document.getElementById('useExternalMmf');
+            useExternalMmfInput = Boolean(checkbox && checkbox.checked);
+            updateInputSourceStatus();
+
+            if (useExternalMmfInput) {
+                if (!applyLatestMmfPose()) {
+                    refreshMmfPoseSnapshot();
+                }
+            }
+        }
+
+        function setupInputSourceControls() {
+            const checkbox = document.getElementById('useExternalMmf');
+            if (!checkbox) {
+                return;
+            }
+
+            checkbox.addEventListener('change', handleInputSourceToggle);
+            useExternalMmfInput = checkbox.checked;
+            ensureMmfPoseStream();
+            if (useExternalMmfInput) {
+                applyLatestMmfPose();
+            }
+            updateInputSourceStatus();
+        }
+
+        function setupControlListeners() {
+            // 檔案載入（如果有檔案輸入元件才綁定）
+
+
+            // 位置控制
+            ['posX', 'posY', 'posZ'].forEach(id => {
+                const slider = document.getElementById(id);
+                if (slider) {
+                    slider.addEventListener('input', updateTransform);
+                } else {
+                    console.warn(`找不到元素: ${id}`);
+                }
+            });
+
+            // 旋轉控制
+            ['rotX', 'rotY', 'rotZ'].forEach(id => {
+                const slider = document.getElementById(id);
+                if (slider) {
+                    slider.addEventListener('input', updateTransform);
+                } else {
+                    console.warn(`找不到元素: ${id}`);
+                }
+            });
+        }
+
+
+
+        // 從 ArrayBuffer 建立模型並加入場景（抽出成函式以供檔案選擇與預設載入共用）
+        function loadSTLBuffer(buffer) {
+            const geometry = parseSTL(buffer);
+
+            if (pivot) {
+                scene.remove(pivot);
+                pivot = null;
+                mesh = null;
+                offsetGroup = null;
+                rotGroup = null;
+            }
+
+            const material = new THREE.MeshStandardMaterial({
+                color: 0xc0c0c0,
+                metalness: 0.5,
+                roughness: 0.4,
+                side: THREE.DoubleSide
+            });
+
+            mesh = new THREE.Mesh(geometry, material);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            geometry.computeBoundingBox();
+            const center = new THREE.Vector3();
+            geometry.boundingBox.getCenter(center);
+            geometry.translate(-center.x, -center.y, -center.z);
+
+            const size = new THREE.Vector3();
+            geometry.boundingBox.getSize(size);
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const targetSize = 40;
+            const scale = targetSize / maxDim;
+            // 放大兩倍以增加物件視覺大小
+            const finalScale = scale * 3.0;
+            mesh.scale.set(finalScale, finalScale, finalScale);
+
+            // 建立三層結構：pivot (world anchor at pivotBase) -> offsetGroup (平移) -> rotGroup (旋轉中心) -> mesh
+            pivot = new THREE.Object3D();
+            pivotBase = new THREE.Vector3(0, 50, 0); // 載入新模型時也重置高度
+            pivot.position.copy(pivotBase);
+
+            offsetGroup = new THREE.Object3D();
+            offsetGroup = new THREE.Object3D();
+            // 預設載入時將物件往前 100 單位（若 forward 定義為 -Z，使用 -100；如需反向請改為 +100）
+            offsetGroup.position.set(0, 0, 20);
+
+            rotGroup = new THREE.Object3D();
+            rotGroup.add(mesh);
+
+            offsetGroup.add(rotGroup);
+            pivot.add(offsetGroup);
+            scene.add(pivot);
+
+            // 補上 Local Axis Helper 顯示於旋轉群組上
+            const localAxes = new THREE.AxesHelper(20);
+            rotGroup.add(localAxes);
+        }
+
+        // 嘗試載入預設檔案 (相對於本 HTML 檔案的位置)
+        function loadDefaultSTL() {
+            const rawPath = 'AttackHelicopter.stl';
+            const url = encodeURI(rawPath); // AttackHelicopter.stl (or Attack%20helicopter.stl if spaces)
+            const statusEl = document.getElementById('loadStatus');
+            if (statusEl) statusEl.textContent = '預設載入: 準備嘗試 ' + url;
+
+            async function fetchWithRetries(url, attempts = 8, delayMs = 300) {
+                for (let i = 0; i < attempts; i++) {
+                    try {
+                        if (statusEl) statusEl.textContent = `預設載入: 嘗試 ${i + 1}/${attempts} ${url}`;
+                        console.log(`預設載入嘗試 ${i + 1}/${attempts}: ${url}`);
+                        
+                        const resp = await fetch(url, { 
+                            method: 'GET',
+                            cache: 'no-cache' // 確保不使用過期快取
+                        });
+                        
+                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+                        const buf = await resp.arrayBuffer();
+                        
+                        // 驗證緩衝區不為空
+                        if (!buf || buf.byteLength === 0) {
+                            throw new Error('Retrieved empty buffer');
+                        }
+                        
+                        return { ok: true, buffer: buf };
+                    } catch (err) {
+                        console.warn(`載入嘗試 ${i + 1}/${attempts} 失敗:`, err.message);
+                        if (i < attempts - 1) {
+                            await new Promise(r => setTimeout(r, delayMs));
+                        }
+                    }
+                }
+                return { ok: false, error: '全部重試失敗' };
+            }
+
+            (async () => {
+                const result = await fetchWithRetries(url, 8, 300);
+                if (result.ok) {
+                    try {
+                        loadSTLBuffer(result.buffer);
+                        if (statusEl) statusEl.textContent = '✓ 預設載入成功: ' + url;
+                        console.log('✓ 預設 STL 已成功載入：', url, '檔案大小:', result.buffer.byteLength, 'bytes');
+                    } catch (parseErr) {
+                        if (statusEl) statusEl.textContent = '✗ 預設載入: 解析失敗 (' + parseErr.message + ')';
+                        console.error('STL 解析失敗:', parseErr);
+                    }
+                } else {
+                    if (statusEl) statusEl.textContent = '✗ 預設載入失敗 (' + result.error + ')';
+                    console.warn('預設載入失敗：', result.error);
+                }
+            })();
+        }
+
+        function parseSTL(buffer) {
+            const view = new DataView(buffer);
+            const isASCII = (function () {
+                const header = new Uint8Array(buffer, 0, 5);
+                return String.fromCharCode.apply(null, header) === 'solid';
+            })();
+
+            if (isASCII) {
+                return parseASCIISTL(buffer);
+            } else {
+                return parseBinarySTL(view);
+            }
+        }
+
+        function parseBinarySTL(view) {
+            const faces = view.getUint32(80, true);
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const normals = [];
+
+            for (let i = 0; i < faces; i++) {
+                const offset = 84 + i * 50;
+
+                const nx = view.getFloat32(offset, true);
+                const ny = view.getFloat32(offset + 4, true);
+                const nz = view.getFloat32(offset + 8, true);
+
+                for (let j = 0; j < 3; j++) {
+                    const vOffset = offset + 12 + j * 12;
+                    vertices.push(
+                        view.getFloat32(vOffset, true),
+                        view.getFloat32(vOffset + 4, true),
+                        view.getFloat32(vOffset + 8, true)
+                    );
+                    normals.push(nx, ny, nz);
+                }
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+
+            return geometry;
+        }
+
+        function parseASCIISTL(buffer) {
+            const text = new TextDecoder().decode(buffer);
+            const geometry = new THREE.BufferGeometry();
+            const vertices = [];
+            const normals = [];
+
+            const vertexPattern = /vertex\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
+            const normalPattern = /facet normal\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
+
+            let match;
+            const normalMatches = [];
+            while ((match = normalPattern.exec(text)) !== null) {
+                normalMatches.push([parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3])]);
+            }
+
+            let normalIndex = 0;
+            let vertexCount = 0;
+            while ((match = vertexPattern.exec(text)) !== null) {
+                vertices.push(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
+
+                if (normalIndex < normalMatches.length) {
+                    normals.push(...normalMatches[normalIndex]);
+                }
+
+                vertexCount++;
+                if (vertexCount % 3 === 0) normalIndex++;
+            }
+
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+
+            return geometry;
+        }
+
+        function updateTransform(values = null) {
+            if (!mesh) return;
+
+            const sourceValues = isTransformValueSet(values) ? values : getTransformValuesFromInputs();
+            const nextValues = normalizeTransformValues(sourceValues);
+            const displayValues = normalizeDisplayValues(sourceValues);
+            if (!nextValues) {
+                return;
+            }
+
+            const { posX, posY, posZ, rotX, rotY, rotZ } = nextValues;
+
+            const toRad = Math.PI / 180;
+
+            if (pivot) {
+                if (!pivotBase) pivotBase = new THREE.Vector3(0, 50, 0);
+
+                // ============================================================
+                // 增量旋轉模式 - 支援任意順序操作
+                // ============================================================
+                // 計算每個軸的變化量 (delta)
+                // 然後繞「當前」的本地軸旋轉
+                // ============================================================
+
+                const deltaPitch = (rotX - lastRotX) * toRad;
+                const deltaYaw = (rotY - lastRotY) * toRad;
+                const deltaRoll = (rotZ - lastRotZ) * toRad;
+
+                // 更新上次的值
+                lastRotX = rotX;
+                lastRotY = rotY;
+                lastRotZ = rotZ;
+
+                // 依序套用增量旋轉 (每個都繞當前的本地軸)
+                // Pitch 增量 - 繞當前 Local X
+                if (Math.abs(deltaPitch) > 0.0001) {
+                    const currentX = new THREE.Vector3(1, 0, 0).applyQuaternion(currentAttitude);
+                    const qDelta = new THREE.Quaternion().setFromAxisAngle(currentX, deltaPitch);
+                    currentAttitude.premultiply(qDelta);
+                }
+
+                // Yaw 增量 - 繞當前 Local Y
+                if (Math.abs(deltaYaw) > 0.0001) {
+                    const currentY = new THREE.Vector3(0, 1, 0).applyQuaternion(currentAttitude);
+                    const qDelta = new THREE.Quaternion().setFromAxisAngle(currentY, deltaYaw);
+                    currentAttitude.premultiply(qDelta);
+                }
+
+                // Roll 增量 - 繞當前 Local Z
+                if (Math.abs(deltaRoll) > 0.0001) {
+                    const currentZ = new THREE.Vector3(0, 0, 1).applyQuaternion(currentAttitude);
+                    const qDelta = new THREE.Quaternion().setFromAxisAngle(currentZ, deltaRoll);
+                    currentAttitude.premultiply(qDelta);
+                }
+
+                // 正規化四元數 (避免數值誤差累積)
+                currentAttitude.normalize();
+
+                // ============================================================
+                // 增量位移模式 - 支援任意順序操作
+                // ============================================================
+                // 計算每個軸的變化量 (delta)
+                // 然後沿「當前」的本地軸移動
+                // ============================================================
+
+                const deltaPosX = posX - lastPosX;
+                const deltaPosY = posY - lastPosY;
+                const deltaPosZ = posZ - lastPosZ;
+
+                // 更新上次的值
+                lastPosX = posX;
+                lastPosY = posY;
+                lastPosZ = posZ;
+
+                // 將本地位移增量轉換為世界位移增量
+                // deltaX → 沿當前 Local X (左/右)
+                // deltaY → 沿當前 Local Z (前/後)
+                // deltaZ → 沿當前 Local Y (上/下)
+                // 乘上縮放因子以減小每次滑桿變化導致的移動量
+                const movementScale = 0.075; // 調整此值可微調移動靈敏度（更小，解析度更高）
+                const localDelta = new THREE.Vector3(deltaPosX, deltaPosZ, deltaPosY).multiplyScalar(movementScale);
+                const worldDelta = localDelta.applyQuaternion(currentAttitude);
+
+                // 累加到當前位置
+                currentPosition.add(worldDelta);
+
+                // ============================================================
+                // 套用最終位置和旋轉
+                // ============================================================
+                pivot.position.copy(pivotBase).add(currentPosition);
+                pivot.quaternion.copy(currentAttitude);
+            }
+
+            updateTransformDisplay(displayValues || nextValues);
+        }
+
+        function resetTransform() {
+            // 重置滑桿 - 安全檢查
+            ['posX', 'posY', 'posZ'].forEach(id => {
+                const elem = document.getElementById(id);
+                if (elem) elem.value = 0;
+            });
+            ['rotX', 'rotY', 'rotZ'].forEach(id => {
+                const elem = document.getElementById(id);
+                if (elem) elem.value = 0;
+            });
+
+            // 重置旋轉狀態
+            currentAttitude = new THREE.Quaternion();
+            lastRotX = 0;
+            lastRotY = 0;
+            lastRotZ = 0;
+
+            // 重置位置狀態
+            currentPosition = new THREE.Vector3();
+            lastPosX = 0;
+            lastPosY = 0;
+            lastPosZ = 0;
+
+            // 重置 pivot
+            if (pivot && pivotBase) {
+                pivot.position.copy(pivotBase);
+                pivot.quaternion.copy(currentAttitude);
+            }
+
+            // 更新顯示（重置為三位小數）
+            const posXValue = document.getElementById('posX-value');
+            const posYValue = document.getElementById('posY-value');
+            const posZValue = document.getElementById('posZ-value');
+            const rotXValue = document.getElementById('rotX-value');
+            const rotYValue = document.getElementById('rotY-value');
+            const rotZValue = document.getElementById('rotZ-value');
+
+            if (posXValue) posXValue.textContent = '0.000';
+            if (posYValue) posYValue.textContent = '0.000';
+            if (posZValue) posZValue.textContent = '0.000';
+            if (rotXValue) rotXValue.textContent = '0.000°';
+            if (rotYValue) rotYValue.textContent = '0.000°';
+            if (rotZValue) rotZValue.textContent = '0.000°';
+        }
+
+        function resetView() {
+            cameraDistance = 150;
+            cameraRotation = { x: 0, y: 0 };
+            updateCameraPosition();
+        }
+
+        function resetView() {
+            cameraDistance = 150;
+            cameraRotation = { x: 0, y: 0 };
+            updateCameraPosition();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+    </script>
+    <!-- 侧滑菜单功能 -->
+    <script src="sidebar-menu.js"></script>
+    
+    <script>
+        // 確保 Three.js 載入完成後再初始化
+        async function waitForThreeAndInit() {
+            if (typeof window.THREE !== 'undefined') {
+                // Three.js 已載入，檢查認證後初始化
+                await window.Auth.ready();
+                init();
+                const keepalive = window.Auth.createKeepalive();
+            } else {
+                // Three.js 還未載入，等待後重試
+                console.log('等待 Three.js 加載...');
+                setTimeout(waitForThreeAndInit, 100);
+            }
+        }
+        
+        // 監聽 DOMContentLoaded 確保 DOM 準備好
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', waitForThreeAndInit);
+        } else {
+            // DOM 已經準備好
+            waitForThreeAndInit();
+        }
+
+        window.Auth.installBfcacheReload();
+    </script>
+</body>
+
+</html>

@@ -1,0 +1,147 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "BigCat Release (MSVC Ninja)",
+      "description": "Primary preset for VS Code, command-line builds, and CTest discovery.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "environment": {
+        "PATH": "C:/Program Files/CMake/bin;C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja;C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64;C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64;$penv{PATH}",
+        "CTEST_OUTPUT_ON_FAILURE": "1"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON",
+        "ENABLE_CRASH_HANDLER": "ON",
+        "GENERATE_PDB_FOR_RELEASE": "ON",
+        "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY",
+        "CMAKE_C_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+        "CMAKE_CXX_COMPILER": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+        "CMAKE_AR": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/lib.exe",
+        "CMAKE_LINKER": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/link.exe",
+        "CMAKE_MAKE_PROGRAM": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe",
+        "CMAKE_RC_COMPILER": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/rc.exe",
+        "CMAKE_MT": "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64/mt.exe",
+        "BIGCAT_TEST_TIMEOUT_SECONDS": "300"
+      }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "BigCat Release (VS 2022)",
+      "description": "Fallback preset for machines with a normal Visual Studio 2022 install instead of the local VS 18 BuildTools Ninja layout.",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-vs2022",
+      "cacheVariables": {
+        "BUILD_TESTING": "ON",
+        "ENABLE_CRASH_HANDLER": "ON",
+        "GENERATE_PDB_FOR_RELEASE": "ON",
+        "CMAKE_TRY_COMPILE_TARGET_TYPE": "STATIC_LIBRARY",
+        "BIGCAT_TEST_TIMEOUT_SECONDS": "300"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "displayName": "Build BigCat Release",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "jobs": 8
+    },
+    {
+      "name": "vs2022",
+      "displayName": "Build BigCat Release (VS 2022)",
+      "configurePreset": "vs2022",
+      "configuration": "Release",
+      "jobs": 8
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "displayName": "CTest BigCat Release",
+      "configurePreset": "default",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 300,
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "smoke",
+      "displayName": "CTest BigCat Smoke",
+      "inherits": "default",
+      "filter": {
+        "include": {
+          "label": "smoke"
+        }
+      }
+    },
+    {
+      "name": "vs2022",
+      "displayName": "CTest BigCat Release (VS 2022)",
+      "configurePreset": "vs2022",
+      "configuration": "Release",
+      "output": {
+        "outputOnFailure": true,
+        "verbosity": "default"
+      },
+      "execution": {
+        "jobs": 4,
+        "timeout": 300,
+        "noTestsAction": "error"
+      }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "default",
+      "displayName": "Configure, Build, and Test Release",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "default"
+        },
+        {
+          "type": "build",
+          "name": "default"
+        },
+        {
+          "type": "test",
+          "name": "default"
+        }
+      ]
+    },
+    {
+      "name": "smoke",
+      "displayName": "Configure, Build, and Test Smoke",
+      "steps": [
+        {
+          "type": "configure",
+          "name": "default"
+        },
+        {
+          "type": "build",
+          "name": "default"
+        },
+        {
+          "type": "test",
+          "name": "smoke"
+        }
+      ]
+    }
+  ]
+}

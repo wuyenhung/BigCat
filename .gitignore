@@ -2,6 +2,8 @@
 
 # Build directories
 build/
+build-*/
+Testing/
 out/
 bin/
 obj/
@@ -18,6 +20,7 @@ obj/
 # CMake
 CMakeCache.txt
 CMakeFiles/
+CMakeUserPresets.json
 cmake_install.cmake
 Makefile
 *.cmake
@@ -53,7 +56,13 @@ Makefile
 
 # IDE
 .idea/
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/c_cpp_properties.json
+!.vscode/launch.json
+!.vscode/extensions.json
 *.swp
 *.swo
 *~

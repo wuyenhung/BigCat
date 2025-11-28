@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>說明 — BigCat 運動控制系統</title>
+    <meta name="description" content="BigCat 運動控制系統操作說明與版權宣告" />
+    <link rel="icon" href="ka52.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+    <!-- Stylesheet load order (do not change):
+         1) shared-variables.css (global CSS variables - MUST be first)
+         2) sidebar-menu.css (shared layout/components that depend on variables)
+         3) page-specific styles (stay after shared files)
+    -->
+    <link rel="stylesheet" href="shared-variables.css">
+    <link rel="stylesheet" href="sidebar-menu.css">
+    <style>
+        /* Theme variables moved to shared-variables.css */
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        /* ─── Page Header ─── */
+        .help-header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+            padding: 28px 20px 22px 60px;
+            text-align: center;
+            border-bottom: 2px solid rgba(79, 172, 254, 0.3);
+            position: relative;
+        }
+
+        .help-header h1 {
+            font-size: clamp(1.3rem, 4.5vw, 2rem);
+            font-weight: 700;
+            background: linear-gradient(90deg, #4facfe, #00f2fe);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: 0.04em;
+        }
+
+        .help-header .subtitle {
+            font-size: clamp(0.75rem, 2.5vw, 0.95rem);
+            color: rgba(255, 255, 255, 0.55);
+            margin-top: 4px;
+        }
+
+        /* ─── Main Content Area ─── */
+        .help-container {
+            max-width: 860px;
+            margin: 0 auto;
+            padding: 24px 18px 60px;
+        }
+
+        /* ─── Section Cards ─── */
+        .help-section {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 24px 22px;
+            margin-bottom: 22px;
+            transition: border-color 0.3s, box-shadow 0.3s;
+        }
+
+        .help-section:hover {
+            border-color: rgba(79, 172, 254, 0.25);
+            box-shadow: 0 4px 24px rgba(79, 172, 254, 0.06);
+        }
+
+        .help-section h2 {
+            font-size: clamp(1.05rem, 3.5vw, 1.35rem);
+            font-weight: 700;
+            color: #4facfe;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid rgba(79, 172, 254, 0.15);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .help-section h2 .icon {
+            font-size: 1.3em;
+        }
+
+        .help-section h3 {
+            font-size: clamp(0.95rem, 3vw, 1.1rem);
+            font-weight: 600;
+            color: #e0e0e0;
+            margin: 18px 0 10px;
+        }
+
+        .help-section p,
+        .help-section li {
+            font-size: clamp(0.85rem, 2.8vw, 1rem);
+            line-height: 1.75;
+            color: rgba(255, 255, 255, 0.78);
+        }
+
+        .help-section ul,
+        .help-section ol {
+            padding-left: 22px;
+            margin: 8px 0 14px;
+        }
+
+        .help-section li {
+            margin-bottom: 6px;
+        }
+
+        .help-section li strong {
+            color: #e0e0e0;
+        }
+
+        /* Warning / safety callout */
+        .callout-warning {
+            background: rgba(255, 193, 7, 0.08);
+            border-left: 4px solid #ffc107;
+            border-radius: 6px;
+            padding: 14px 16px;
+            margin: 14px 0;
+        }
+
+        .callout-warning p {
+            color: #ffd54f;
+        }
+
+        .callout-warning strong {
+            color: #ffecb3;
+        }
+
+        /* ─── Copyright block ─── */
+        .copyright-block {
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 8px;
+            padding: 18px 20px;
+            margin: 12px 0;
+            font-size: clamp(0.8rem, 2.5vw, 0.92rem);
+            line-height: 1.8;
+            color: rgba(255, 255, 255, 0.65);
+        }
+
+        .copyright-block .cr-title {
+            font-weight: 700;
+            color: #4facfe;
+            margin-bottom: 8px;
+            display: block;
+            font-size: 1.05em;
+        }
+
+        .copyright-block a {
+            color: #4facfe;
+            text-decoration: none;
+        }
+
+        .copyright-block a:hover {
+            text-decoration: underline;
+        }
+
+        .lang-divider {
+            height: 1px;
+            background: rgba(255, 255, 255, 0.08);
+            margin: 16px 0;
+        }
+
+        /* ─── Step badges ─── */
+        .step-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #4facfe, #00f2fe);
+            color: #000;
+            font-weight: 700;
+            font-size: 0.85rem;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+
+        .step-list {
+            list-style: none;
+            padding-left: 0;
+        }
+
+        .step-list li {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .step-list li .step-text {
+            flex: 1;
+        }
+
+        /* ─── Version / footer ─── */
+        .help-footer {
+            text-align: center;
+            padding: 20px 16px 32px;
+            font-size: 0.82rem;
+            color: rgba(255, 255, 255, 0.35);
+        }
+
+        /* ─── Responsive ─── */
+        @media (max-width: 600px) {
+            .help-header {
+                padding: 22px 14px 18px 50px;
+            }
+
+            .help-container {
+                padding: 16px 10px 48px;
+            }
+
+            .help-section {
+                padding: 18px 14px;
+            }
+        }
+    </style>
+    <script src="auth.js"></script>
+</head>
+
+<body>
+    <!-- Sidebar menu elements will be injected by sidebar-menu.js -->
+
+    <div class="help-header">
+        <h1>📖 操作說明 / Help</h1>
+        <div class="subtitle">BigCat 運動控制系統 — Operation Guide &amp; Copyright</div>
+    </div>
+
+    <div class="help-container">
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Section 1: 基本操作說明                       -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-guide">
+            <h2><span class="icon">🎮</span> 基本操作說明</h2>
+
+            <h3>1. 系統啟動流程</h3>
+            <ol class="step-list">
+                <li>
+                    <span class="step-badge">1</span>
+                    <span class="step-text">確認所有伺服驅動器已上電，EtherCAT 通訊線纜連接正常。</span>
+                </li>
+                <li>
+                    <span class="step-badge">2</span>
+                    <span class="step-text">啟動 BigCat 應用程式，程式將自動掃描可用的網路介面卡。</span>
+                </li>
+                <li>
+                    <span class="step-badge">3</span>
+                    <span class="step-text">在<strong>主頁</strong>選擇正確的網路介面卡，並設定通訊週期（預設 1.00 ms）。</span>
+                </li>
+                <li>
+                    <span class="step-badge">4</span>
+                    <span class="step-text">點擊 <strong>「連接」</strong> 按鈕，系統將建立 EtherCAT 主站連線並掃描從站。</span>
+                </li>
+                <li>
+                    <span class="step-badge">5</span>
+                    <span class="step-text">連線成功後，可使用 <strong>「自動程序啟動」</strong> 進入自動控制畫面。</span>
+                </li>
+            </ol>
+
+            <h3>2. 自動畫面操作</h3>
+            <ul>
+                <li><strong>連線運轉</strong> — 啟動伺服馬達連線運轉模式（需 EtherCAT 已連線、原點設定完成、系統就緒）。</li>
+                <li><strong>到下原點</strong> — 驅動所有軸返回原點位置。</li>
+                <li><strong>異常重置</strong> — 清除驅動器異常狀態（伺服 Fault Reset）。</li>
+                <li><strong>立即停止</strong> — 立即停止所有軸運動。</li>
+                <li><strong>緊急停止</strong> — 觸發緊急停止功能，立即切斷馬達動力。</li>
+                <li><strong>狀態訊息</strong> — 查看系統日誌與狀態資訊。</li>
+            </ul>
+
+            <h3>3. 狀態指示燈說明</h3>
+            <ul>
+                <li><strong>oEtherCatOk</strong> — EtherCAT 主站通訊正常（綠燈）。</li>
+                <li><strong>oBusy</strong> — 系統正在執行運動指令（藍燈）。</li>
+                <li><strong>oError</strong> — 系統偵測到錯誤（紅燈）。</li>
+                <li><strong>oReady</strong> — 系統就緒，可接受指令（綠燈）。</li>
+                <li><strong>oHomeDone</strong> — 所有軸已完成原點復歸（綠燈）。</li>
+                <li><strong>oOnline</strong> — 伺服馬達已上線運轉中（綠燈）。</li>
+            </ul>
+
+            <h3>4. 其他功能頁面</h3>
+            <ul>
+                <li><strong>示波器</strong> — 即時顯示軸角度波形（RT Scope）。</li>
+                <li><strong>姿態顯示</strong> — 3D 視覺化平台姿態（6DoF Viewer）。</li>
+                <li><strong>機構設定</strong> — Stewart 平台幾何參數設定。</li>
+            </ul>
+
+            <div class="callout-warning">
+                <p>
+                    <strong>⚠️ 安全警告：</strong>本系統控制之運動平台涉及機械運動，具有造成人員傷亡及設備損壞之潛在風險。操作前請確保：操作區域淨空、緊急停止裝置可用、操作人員受過適當訓練。
+                </p>
+            </div>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!-- Section 2: 版權宣告（中文）                    -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-copyright">
+            <h2><span class="icon">©</span> 版權宣告 / Copyright</h2>
+
+            <div class="copyright-block">
+                <span class="cr-title">中文版權宣告</span>
+
+                <strong>BigCat 專有軟體</strong><br>
+                Copyright &copy; 2025-2026 巫彥鴻 (wuyenhung). All rights reserved.<br>
+                立洋科技 · <a href="mailto:wuyenhung@gmail.com" data-login-exempt="true">wuyenhung@gmail.com</a><br><br>
+
+                本軟體並非開源軟體，不適用 MIT、GPL、Apache 或其他任何開源授權條款。<br>
+                未經作者 巫彥鴻 (wuyenhung) 事先書面同意，任何個人或組織不得使用、修改、散布或以其他方式處理本軟體之任何部分。<br><br>
+
+                <strong>限制事項：</strong><br>
+                ① 不得以任何目的執行、部署或使用本軟體。<br>
+                ② 不得修改、改作、衍生、反編譯或逆向工程。<br>
+                ③ 不得複製、散布、轉授權或提供予第三方。<br>
+                ④ 不得移除、規避、破解 TPM 硬體綁定驗證或其他技術保護措施。<br><br>
+
+                <strong>試用模式：</strong>本軟體內建免序號試用功能，使用者無需授權金鑰即可進行評估與測試。試用模式下，使用者應自行負責一切安全風險，作者不對任何損害承擔責任。<br><br>
+
+                <strong>第三方程式庫：</strong><br>
+                · SOEM (Simple Open EtherCAT Master) — GPLv2 / Commercial License<br>
+                · tinyxml2 — zlib License<br>
+                · Npcap SDK — Npcap License<br><br>
+
+                如需取得授權，請聯繫：<a href="mailto:wuyenhung@gmail.com" data-login-exempt="true">wuyenhung@gmail.com</a>
+            </div>
+
+            <div class="lang-divider"></div>
+
+            <div class="copyright-block">
+                <span class="cr-title">English Copyright Notice</span>
+
+                <strong>BigCat Proprietary Software</strong><br>
+                Copyright &copy; 2025-2026 Yen-Hung Wu (wuyenhung). All rights reserved.<br>
+                Li-Yang Technology Co. · <a href="mailto:wuyenhung@gmail.com"
+                    data-login-exempt="true">wuyenhung@gmail.com</a><br><br>
+
+                This software is NOT open-source software. It is NOT licensed under the MIT, GPL, Apache, or any other
+                open-source license.<br>
+                Without the prior written consent of the author, Yen-Hung Wu (wuyenhung), no individual or organization
+                shall use, modify, distribute, or otherwise deal with any part of this software.<br><br>
+
+                <strong>Restrictions:</strong><br>
+                ① No use — Execute, deploy, or use any part of the Software for any purpose.<br>
+                ② No modification — Modify, adapt, decompile, or reverse-engineer.<br>
+                ③ No distribution — Copy, distribute, sublicense, or make available to third parties.<br>
+                ④ No circumvention — Remove, bypass, or crack TPM hardware-bound verification or any technical
+                protection measures.<br><br>
+
+                <strong>Trial Mode:</strong> The Software includes a built-in trial function that allows execution
+                without a license key for evaluation and testing. Users assume all responsibility and safety risks
+                during trial mode. The author assumes no liability for any damages.<br><br>
+
+                <strong>Third-Party Libraries:</strong><br>
+                · SOEM (Simple Open EtherCAT Master) — GPLv2 / Commercial License<br>
+                · tinyxml2 — zlib License<br>
+                · Npcap SDK — Npcap License<br><br>
+
+                For licensing inquiries, contact: <a href="mailto:wuyenhung@gmail.com"
+                    data-login-exempt="true">wuyenhung@gmail.com</a>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="help-footer">
+        BigCat Motion Control System v1.0 — 立洋科技 / Li-Yang Technology Co.<br>
+        &copy; 2025-2026 巫彥鴻 (Yen-Hung Wu)
+    </div>
+
+    <!-- Shared sidebar-menu.js must appear AFTER auth.js -->
+    <script src="sidebar-menu.js"></script>
+</body>
+
+</html>

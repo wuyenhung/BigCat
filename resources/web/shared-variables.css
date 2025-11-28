@@ -1,0 +1,71 @@
+/* Shared CSS variables used across all web pages and sidebar styles */
+:root {
+  /* Sidebar sizing */
+  --sidebar-width: 240px;
+  --sidebar-hidden-offset: -260px; /* normally - (sidebar-width + 20) */
+
+  /* header spacing so hamburger/menu toggle doesn't overlap title
+     Pages can override these if they need a different layout */
+  --sidebar-header-padding-left-desktop: 56px;
+  --sidebar-header-padding-left-mobile: 48px;
+
+  /* Generic page-level padding variables (pages should use these for consistent spacing) */
+  --page-padding-left: 15px;
+  --page-padding-right: 12px;
+}
+
+/* Mobile overrides: make sidebar half the viewport on small screens and
+   compute the hidden offset from the width so page layout stays consistent */
+@media (max-width: 768px) {
+  :root {
+    --sidebar-width: 50vw;
+    --sidebar-hidden-offset: calc(-1 * var(--sidebar-width));
+  }
+}
+
+/* ===== Shared theme and sizing variables (used across multiple pages) ===== */
+:root {
+  /* Colors / theme (page-specific files can override these) */
+  --bg-color: #222; /* default page background */
+  --panel-bg: #2d2d2d; /* panel or card background */
+  --text-color: #ffffff; /* default body text color */
+
+  /* Accent / highlight colors */
+  --accent: #3b82f6; /* primary accent */
+  --accent-strong: #2563eb; /* stronger accent */
+  --accent-color: var(--accent);
+
+  /* Button palettes (start/end for gradient buttons) */
+  --btn-green-start: #00d400;
+  --btn-green-end: #008000;
+  --btn-blue-start: #0080ff;
+  --btn-blue-end: #0000a0;
+  --btn-yellow-start: #ffd700;
+  --btn-yellow-end: #b8860b;
+  --btn-red-start: #ff4d4d;
+  --btn-red-end: #b30000;
+  --btn-darkred-start: #cc0000;
+  --btn-darkred-end: #800000;
+
+  /* Lamp / indicator colors */
+  --lamp-blue: #000080;
+  --lamp-text: #ffffff;
+
+  /* Generic components */
+  --border-color: #444;
+
+  /* Control sizing -- apps can override if special needs */
+  --field-width: 220px;
+  --field-height: 40px;
+  --btn-height: var(--field-height);
+  --btn-min-width: 120px;
+  /* default padding for buttons (top/bottom left/right) — used by page buttons */
+  --btn-padding: 15px 20px;
+  /* sidebar menu buttons use more compact padding */
+  --sidebar-btn-padding: 10px 14px;
+  --sidebar-btn-height: 42px; /* Fixed height for sidebar buttons to ensure consistency across pages */
+  --sdo-max-height: 200px;
+
+  /* base font sizing for controls (JS may adjust this at runtime) */
+  --base-font-size: 16px;
+}

@@ -1,0 +1,54 @@
+/* RT_scope.html Styles */
+
+/* MMF Info Display */
+#mmfInfo {
+    font-size: 0.75em;
+    color: #888;
+    margin-left: 24px;
+}
+
+/* Color Dot Indicators */
+.color-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    vertical-align: middle;
+}
+
+/* Specific color classes for data type indicators */
+.color-dot-actual-pos {
+    background: #36A2EB;
+}
+
+.color-dot-target-pos {
+    background: #4BC0C0;
+}
+
+.color-dot-actual-vel {
+    background: #FF6384;
+}
+
+.color-dot-target-vel {
+    background: #FF9F40;
+}
+
+.color-dot-mmf-in {
+    background: #9966FF;
+}
+
+.color-dot-mmf-in-vel {
+    background: #B39DDB;
+}
+
+.color-dot-filter {
+    background: #FFCD56;
+}
+
+.color-dot-filter-vel {
+    background: #E91E63;
+}
+
+.color-dot-filter-acc {
+    background: #00BCD4;
+}

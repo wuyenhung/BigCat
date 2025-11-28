@@ -1,0 +1,34 @@
+{
+  "configurations": [
+    {
+      "name": "Win32",
+      "configurationProvider": "ms-vscode.cmake-tools",
+      "intelliSenseMode": "msvc-x64",
+      "compilerPath": "C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
+      "cStandard": "c11",
+      "cppStandard": "c++17",
+      "defines": [
+        "UNICODE",
+        "_UNICODE",
+        "WIN32",
+        "HAVE_REMOTE",
+        "WPCAP"
+      ],
+      "includePath": [
+        "${default}",
+        "${workspaceFolder}/**",
+        "${workspaceFolder}/lib/SOEM/include",
+        "${workspaceFolder}/lib/SOEM/build/include"
+      ],
+      "browse": {
+        "path": [
+          "${workspaceFolder}/include",
+          "${workspaceFolder}/src"
+        ],
+        "limitSymbolsToIncludedHeaders": true
+      }
+    }
+  ],
+  "version": 4
+}

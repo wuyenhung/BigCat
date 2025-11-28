@@ -1,0 +1,33 @@
+InitializePDOData: 為 6 個從站設置安全初始值...
+  從站 1 (Sim Axis 1): 輸出偏移=0, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+  從站 2 (Sim Axis 2): 輸出偏移=12, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+  從站 3 (Sim Axis 3): 輸出偏移=24, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+  從站 4 (Sim Axis 4): 輸出偏移=36, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+  從站 5 (Sim Axis 5): 輸出偏移=48, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+  從站 6 (Sim Axis 6): 輸出偏移=60, 字節數=12
+    設置 Controlword = 0x0006
+    設置 Target Position = 0
+    設置 Target Velocity = 0
+InitializePDOData: 完成
+[退出流程] 停止週期性資料交換...
+[退出流程] [OK] 週期性執行緒已停止
+[退出流程] 停止 PDO 處理執行緒...
+[退出流程] [OK] PDO 處理執行緒已停止
+[退出流程] 停止 MMF 輸出/輸入 (if enabled)...
+[退出流程] [OK] MMF 輸出/輸入已停止
+[退出流程] 開始狀態轉換: SAFE_OP → PRE_OP → INIT
