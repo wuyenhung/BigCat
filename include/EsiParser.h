@@ -11,6 +11,8 @@ struct EsiObjectEntry {
     int bitlen; // size in bits
     std::string dataType; // textual DataType from ESI (eg. "DWORD", "BYTE")
     std::string access; // access string from ESI (eg. "rw", "ro", "wo")
+    std::string accessNormalized; // normalized access token used for internal checks (eg. "rw", "ro", "wo")
+    std::string defaultValue; // default value text from ESI (if any)
 };
 
 struct EsiPdoEntry {

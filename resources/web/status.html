@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>狀態訊息</title>
+  <link rel="icon" href="ka52.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+    <!-- Stylesheet load order (do not change):
+      1) shared-variables.css (global CSS variables - MUST be first)
+      2) sidebar-menu.css (shared layout/components that depend on variables)
+      3) page-specific styles (stay after shared files)
+    -->
+    <link rel="stylesheet" href="shared-variables.css">
+    <link rel="stylesheet" href="sidebar-menu.css">
+  <style>
+    :root {
+      /* Fluid typography: starts at 16px, scales with viewport */
+      --font-size: clamp(16px, 4vw, 20px);
+    }
+
+    body {
+      font-family: "Segoe UI", "Microsoft JhengHei UI", sans-serif;
+      margin: 0;
+      padding: 12px;
+      height: 100vh;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      font-size: var(--font-size);
+      background-color: #fff;
+      color: #333;
+    }
+
+    #controls {
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+
+    /* page-level button styling excludes sidebar buttons so shared sidebar-menu.css is not overridden */
+    button:not(.menu-toggle):not(.sidebar-buttons *) {
+      font-size: inherit;
+      padding: 0.4em 0.8em;
+      cursor: pointer;
+    }
+
+    /* Use shared sizing for controls so page-level buttons match site-wide tokens */
+    #controls button {
+      height: var(--btn-height);
+      min-width: var(--btn-min-width);
+      display: inline-flex;
+      align-items: center;
+      padding: 8px 12px; /* keep sensible touch target */
+    }
+
+    /* Sidebar button sizing is now provided by shared sidebar-menu.css */
+
+    label {
+      -webkit-user-select: none; /* Safari 3+ */
+      display: flex;
+      align-items: center;
+      gap: 0.5em;
+      cursor: pointer;
+      user-select: none;
+    }
+
+    input[type="checkbox"] {
+      width: 1.2em;
+      height: 1.2em;
+      margin: 0;
+    }
+
+    pre {
+      background: #f4f4f4;
+      border: 1px solid #ddd;
+      padding: 12px;
+      flex: 1;
+      overflow: auto;
+      margin: 0;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.9em;
+      /* Ensure text wraps on small screens so no horizontal scroll is needed for text */
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+  </style>
+  <!-- Load auth.js early so initAuthCheck is available -->
+  <script src="auth.js"></script>
+</head>
+
+<body>
+  <h1 class="status-header">狀態訊息</h1>
+  <div id="controls">
+    <button id="btnClearStatus" title="清除訊息">清除訊息</button>
+    <label class="controls-label">自動刷新:<input id="auto" type="checkbox" checked title="自動刷新"></label>
+  </div>
+  <div id="statusMessage" aria-live="polite" class="status-message"></div>
+  <pre id="log">載入中...</pre>
+  <script>
+    const log = document.getElementById('log');
+    const chk = document.getElementById('auto');
+    async function load() {
+      try {
+        const r = await fetch('/status');
+        if (r.ok) {
+          const t = await r.text();
+          log.textContent = t;
+          // show newest logs at top: scroll to top instead of bottom
+          log.scrollTop = 0;
+        } else {
+          log.textContent = '無法載入狀態: ' + r.status;
+        }
+      } catch (e) {
+        log.textContent = '錯誤: ' + e.toString();
+      }
+    }
+    // Refresh button removed; auto-refresh remains enabled via checkbox
+    // Clear status button: call server POST /clear_status and refresh viewer
+    const btnClear = document.getElementById('btnClearStatus');
+    if (btnClear) {
+      const msg = document.getElementById('statusMessage');
+      const showMsg = (t, ok) => {
+        if (!msg) return;
+        msg.textContent = t;
+        msg.style.display = 'block';
+        msg.style.background = ok ? 'rgba(0,128,0,0.75)' : 'rgba(180,20,20,0.9)';
+        setTimeout(() => { msg.style.display = 'none'; }, 2500);
+      };
+
+      btnClear.addEventListener('click', async () => {
+        try {
+          btnClear.disabled = true;
+          const r = await fetch('/clear_status', { method: 'POST', credentials: 'same-origin' });
+          if (r.status === 401) {
+            // Not authorized — user likely needs to login
+            showMsg('需要登入，請回到首頁登入', false);
+            return;
+          }
+          if (!r.ok) {
+            showMsg('清除失敗 (' + r.status + ')', false);
+            console.error('清除狀態失敗', r.status);
+            return;
+          }
+          // success
+          showMsg('已清除狀態', true);
+        } catch (e) {
+          console.error('清除狀態失敗:', e);
+          showMsg('發生網路錯誤', false);
+        } finally {
+          // always re-enable and refresh view
+          btnClear.disabled = false;
+          await load();
+        }
+      });
+    }
+    // Initialize: Check auth and start loading
+    (async function init() {
+      await window.Auth.ready();
+        setInterval(() => { if (chk.checked) load(); }, 5000);
+        load();
+        
+        window.Auth.installBfcacheReload();
+    })();
+  </script>
+  <!-- 侧滑菜单功能 -->
+  <script src="sidebar-menu.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,1194 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AutoWindow Control Panel</title>
+    <link rel="icon" href="ka52.ico" type="image/x-icon">
+    <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+    <!-- 侧滑菜单样式 -->
+    <!-- Stylesheet load order (do not change):
+            1) shared-variables.css (global CSS variables - MUST be first)
+            2) sidebar-menu.css (shared layout/components that depend on variables)
+            3) page-specific styles (stay after shared files)
+        -->
+    <link rel="stylesheet" href="shared-variables.css">
+    <link rel="stylesheet" href="sidebar-menu.css">
+    <style>
+        /* Theme variables moved to shared-variables.css */
+
+        /* Top-level: when small device is in landscape (wider than small portrait),
+           reduce button height and allow page scroll so rotating phones can still scroll entire layout */
+        @media (max-width: 900px) and (orientation: landscape) {
+
+            html,
+            body {
+                overflow-y: auto !important;
+                height: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+            }
+
+            body {
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
+                height: auto;
+            }
+
+            .container {
+                height: auto !important;
+                overflow: visible !important;
+            }
+
+            .btn {
+                font-size: clamp(14px, 3.8vw, 20px);
+                padding: 10px 10px;
+                min-height: 48px;
+                height: auto;
+            }
+
+            .lamp {
+                height: 36px;
+                min-height: 32px;
+                font-size: 12px;
+            }
+
+            th,
+            td {
+                font-size: clamp(12px, 3.2vw, 16px);
+                padding: 6px 6px;
+            }
+        }
+
+        /* Fallback: target touch devices explicitly (covers iOS/Android even when width thresholds behave differently) */
+        @media (hover: none) and (pointer: coarse) {
+
+            html,
+            body {
+                overflow-y: auto !important;
+                height: auto !important;
+                min-height: 100vh;
+                -webkit-overflow-scrolling: touch !important;
+            }
+
+            .container {
+                height: auto !important;
+                overflow: visible !important;
+                -webkit-overflow-scrolling: touch;
+            }
+
+            .table-container {
+                overflow: visible !important;
+                -webkit-overflow-scrolling: touch;
+            }
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            overflow: hidden;
+            /* Prevent body scroll, handle in container */
+        }
+
+        .container {
+            width: 100%;
+            max-width: 600px;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5vh;
+            padding: 10px;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+            /* smooth scrolling on iOS */
+            touch-action: pan-y;
+            /* allow vertical touch gestures to scroll */
+            /* Allow scrolling within container if needed */
+        }
+
+        /* Buttons Grid */
+        .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            /* more breathing room between buttons */
+            flex-shrink: 0;
+        }
+
+        .btn {
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 8px;
+            color: white;
+            font-size: clamp(20px, 6vw, 32px);
+            font-weight: bold;
+            padding: 22px 18px;
+            /* larger click/touch area */
+            cursor: pointer;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: transform 0.1s, filter 0.1s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 120px;
+            /* larger buttons */
+            height: 18vh;
+            max-height: 200px;
+        }
+
+        .btn:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 3px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Disabled visual state for div-based buttons */
+        .btn.disabled {
+            opacity: 0.45;
+            filter: grayscale(40%);
+            cursor: not-allowed;
+            pointer-events: none;
+            /* prevent clicks when disabled */
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-green {
+            background: linear-gradient(to bottom, var(--btn-green-start), var(--btn-green-end));
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .btn-green.lamp-off {
+            background: linear-gradient(to bottom, #006000, #003000);
+        }
+
+        .btn-blue {
+            background: linear-gradient(to bottom, var(--btn-blue-start), var(--btn-blue-end));
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .btn-blue.lamp-off {
+            background: linear-gradient(to bottom, #004a84, #00284a);
+        }
+
+        .btn-yellow {
+            background: linear-gradient(to bottom, var(--btn-yellow-start), var(--btn-yellow-end));
+            color: #fff;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .btn-yellow.lamp-off {
+            background: linear-gradient(to bottom, #8a7200, #4a3c00);
+        }
+
+        .btn-red {
+            background: linear-gradient(to bottom, var(--btn-red-start), var(--btn-red-end));
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .btn-red.lamp-off {
+            background: linear-gradient(to bottom, #6b0000, #300000);
+        }
+
+        .btn-darkred {
+            background: linear-gradient(to bottom, var(--btn-darkred-start), var(--btn-darkred-end));
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .btn-darkred.lamp-off {
+            background: linear-gradient(to bottom, #6b0000, #300000);
+        }
+
+        .btn-white {
+            background: linear-gradient(to bottom, #ffffff, #cccccc);
+            color: black;
+            text-shadow: none;
+        }
+
+        /* Status Lamps Grid */
+        .status-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+            /* match button row gap for visual alignment */
+            align-items: stretch;
+            /* force lamps to fill column width/height consistently */
+            flex-shrink: 0;
+            width: 100%;
+        }
+
+        .lamp {
+            background-color: var(--lamp-blue);
+            color: var(--lamp-text);
+            padding: 5px;
+            text-align: center;
+            border: 1px solid #444;
+            border-radius: 4px;
+            font-size: clamp(12px, 3.5vw, 16px);
+            transition: background-color 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            /* Make lamp fill its grid cell horizontally so width matches buttons */
+            width: 100%;
+            box-sizing: border-box;
+            min-width: 0;
+            height: 6vh;
+            max-height: 60px;
+            min-height: 40px;
+        }
+
+        /* Mobile: shrink the lamp label text and ensure it truncates cleanly */
+        @media (max-width: 600px) {
+            .status-grid {
+                grid-template-columns: 1fr 1fr;
+                gap: 8px;
+            }
+
+            .lamp {
+                font-size: 12px;
+                min-height: 36px;
+                height: auto;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+        }
+
+        .lamp.active {
+            background-color: #00d400;
+            /* Green */
+            box-shadow: 0 0 10px #00d400;
+            font-weight: bold;
+        }
+
+        .lamp.active-green {
+            background-color: #00d400;
+            box-shadow: 0 0 10px #00d400;
+        }
+
+        .lamp.active-blue {
+            background-color: #0040ff;
+            box-shadow: 0 0 10px #0040ff;
+        }
+
+        .lamp.active-yellow {
+            background-color: #ffd700;
+            color: black;
+            box-shadow: 0 0 10px #ffd700;
+        }
+
+        .lamp.error {
+            background-color: #ff0000;
+            box-shadow: 0 0 10px #ff0000;
+        }
+
+        /* Table */
+        .table-container {
+            background-color: #000;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: auto;
+            -webkit-overflow-scrolling: touch;
+            /* Make the table container take remaining vertical space and scroll internally.
+                    Using flex:1 and min-height:0 ensures the container shrinks properly inside a flex column
+                    and prevents the last row from being clipped by the viewport. */
+            flex: 1 1 auto;
+            max-height: none;
+            min-height: 0;
+        }
+
+        table {
+            width: 100%;
+            max-width: 100%;
+            border-collapse: collapse;
+            /* keep layout predictable and avoid overflow by distributing width evenly */
+            table-layout: fixed;
+            /* Slightly smaller default font to help keep the table inside the viewport */
+            font-size: clamp(12px, 2.7vw, 16px);
+        }
+
+        .col-actual,
+        .col-error-code {
+            width: 30%;
+        }
+
+        .col-input {
+            width: 40%;
+        }
+
+        th,
+        td {
+            /* reduce padding slightly so the table fits better (make rows a bit shorter) */
+            padding: 6px 5px;
+            text-align: left;
+            border-bottom: 1px solid #333;
+            border-right: 1px solid #333;
+        }
+
+        /* Ensure cells don't cause horizontal overflow; allow numbers to wrap if needed */
+        th,
+        td {
+            box-sizing: border-box;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Make numeric cells more prominent */
+        td {
+            font-weight: 600;
+        }
+
+        th {
+            background-color: #e0e0e0;
+            color: #000;
+            font-weight: bold;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        td {
+            color: #fff;
+            font-family: 'Consolas', 'Monaco', monospace;
+        }
+
+        /* Keep bottom border on last row so grid doesn't show a gap under the final row */
+        tr:last-child td {
+            border-bottom: 1px solid #333;
+        }
+
+        td:last-child,
+        th:last-child {
+            border-right: none;
+        }
+
+        /* Connection status styles are provided by auth.js StatusUI (injected stylesheet) */
+
+        /* Toast Notification */
+        .toast {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(0, 0, 0, 0.9);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 24px;
+            font-size: 14px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+            z-index: 1000;
+            white-space: nowrap;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        /* Landscape / Short Screen Adjustments */
+        @media (max-height: 500px) {
+            .container {
+                gap: 5px;
+                padding: 5px;
+            }
+
+            .btn {
+                height: 64px;
+                min-height: 56px;
+                font-size: 15px;
+                padding: 14px 12px;
+            }
+
+            .lamp {
+                height: 30px;
+                min-height: 25px;
+                font-size: 11px;
+            }
+
+            th,
+            td {
+                padding: 5px;
+            }
+        }
+
+        /* Mobile / small width layout: make UI fill the viewport and let table take remaining space */
+        @media (max-width: 600px) {
+
+            /* On small screens we want page-level scrolling; iOS Safari requires the html/body to allow overflow */
+            html,
+            body {
+                height: auto !important;
+                min-height: 100vh;
+                overflow-y: auto !important;
+                -webkit-overflow-scrolling: touch !important;
+                /* iOS smooth scrolling */
+            }
+
+            body {
+                align-items: stretch;
+                /* make container span full width */
+                justify-content: flex-start;
+                /* start from top */
+                padding: 0;
+            }
+
+            .container {
+                max-width: 100vw;
+                width: 100vw;
+                height: auto;
+                /* page can grow so users can scroll to see everything */
+                /* remove large bottom padding and increase vertical spacing */
+                padding: 8px 8px 2px 8px;
+                gap: 14px;
+                overflow: visible;
+                /* let page scroll vertically */
+            }
+
+            /* (landscape mobile) moved to top-level media query so it always applies when device rotates */
+
+            .btn-row {
+                gap: 10px;
+            }
+
+            .btn {
+                padding: 20px 16px;
+                font-size: clamp(20px, 6.5vw, 32px);
+                min-height: 96px;
+                /* even larger targets on phones */
+                height: auto;
+                border-radius: 14px;
+            }
+
+            .status-grid {
+                gap: 10px;
+            }
+
+            .lamp {
+                height: 48px;
+                min-height: 44px;
+                font-size: 15px;
+            }
+
+            /* On mobile we want the page to scroll — let table expand rather than force internal scrolling */
+            .table-container {
+                flex: 0 1 auto;
+                /* do not force inner scrolling — allow page scroll */
+                max-height: none;
+                min-height: 0;
+                overflow: visible;
+                border-radius: 4px;
+            }
+
+            /* Slightly reduce mobile table row height: smaller padding and modest font size */
+            th,
+            td {
+                padding: 8px 6px;
+            }
+
+            th,
+            td {
+                font-size: clamp(14px, 4.2vw, 18px);
+            }
+
+            /* Ensure sticky header works inside the scrolling container */
+            table {
+                width: 100%;
+            }
+        }
+    </style>
+    <!-- Load auth.js early so initAuthCheck is available -->
+    <script src="auth.js"></script>
+</head>
+
+<body>
+
+    <div id="conn-status" title="Connection Status"></div>
+
+    <div class="container">
+        <!-- Top Row Buttons -->
+        <div class="btn-row">
+            <div class="btn btn-green disabled lamp-off" id="btnConnect" onclick="handleConnect()">連線運轉</div>
+            <div class="btn btn-blue disabled lamp-off" id="btnHome" onclick="handleDownToOrigin()">到下原點</div>
+            <div class="btn btn-yellow disabled lamp-off" id="btnReset" onclick="handleFaultReset()">異常重置</div>
+        </div>
+
+        <!-- Middle Row Buttons -->
+        <div class="btn-row">
+            <div class="btn btn-red disabled lamp-off" id="btnStop" onclick="handleImmediateStop()">立即停止</div>
+            <div class="btn btn-darkred disabled lamp-off" id="btnEStop" onclick="handleEStop()">緊急停止</div>
+            <div class="btn btn-white" id="btnStatus" onclick="toggleStatusAndOpen()">狀態訊息</div>
+        </div>
+
+        <!-- Status Lamps -->
+        <div class="status-grid">
+            <div class="lamp" id="lamp-ethercat">oEtherCatOk</div>
+            <div class="lamp" id="lamp-busy">oBusy</div>
+            <div class="lamp" id="lamp-error">oError</div>
+            <div class="lamp" id="lamp-ready">oReady</div>
+            <div class="lamp" id="lamp-homedone">oHomeDone</div>
+            <div class="lamp" id="lamp-online">oOnline</div>
+        </div>
+
+        <!-- Data Table -->
+        <div class="table-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th class="col-actual">實際角度</th>
+                        <th class="col-input" id="mmf-input-header">輸入角度</th>
+                        <th class="col-error-code">0x603F異常碼</th>
+                    </tr>
+                </thead>
+                <tbody id="axis-table-body">
+                    <!-- Rows generated by JS -->
+                    <tr>
+                        <td>軸1=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>軸2=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>軸3=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>軸4=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>軸5=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                    <tr>
+                        <td>軸6=N/A</td>
+                        <td>N/A</td>
+                        <td>N/A</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="toast" class="toast">Message</div>
+
+    <script>
+        // Configuration
+        let API_KEY = ""; // Will be loaded from server
+        const HOST = window.location.origin;
+
+        // State
+        let isConnected = false;
+        // Server /ui_state may mark some UI controls disabled (map keys -> boolean)
+        let uiConnectDisabled = true;
+        let uiFaultResetDisabled = true;
+        let uiDownToOriginDisabled = true;
+        let uiImmediateStopDisabled = true;
+        let uiEmergencyStopDisabled = true;
+        // Last known auto status flags (kept in sync with SSE updates)
+        let lastAutoStatus = { oEtherCatOk: false, oBusy: false, oError: false, oReady: false, oHomeDone: false, oOnline: false };
+        let currentMmf1InputMode = 'ServoAngle';
+        let eventSource = null;
+
+        function isPose6DInputMode(mode) {
+            return mode === 'Pose6D';
+        }
+
+        function getMmfInputHeaderText(mode) {
+            return isPose6DInputMode(mode) ? '6DOF座標值' : '輸入角度';
+        }
+
+        function updateMmfInputHeader(mode) {
+            const el = document.getElementById('mmf-input-header');
+            if (el) el.textContent = getMmfInputHeaderText(mode);
+        }
+
+        function formatMmfInputUnavailable(index, mode) {
+            if (isPose6DInputMode(mode)) {
+                const names = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw'];
+                const unit = index < 3 ? 'mm' : 'deg';
+                return `${names[index] || 'N/A'}=N/A ${unit}`;
+            }
+            return 'N/A';
+        }
+
+        function formatMmfInputValue(index, value, mode) {
+            if (typeof value !== 'number') return formatMmfInputUnavailable(index, mode);
+            if (isPose6DInputMode(mode)) {
+                const names = ['X', 'Y', 'Z', 'Roll', 'Pitch', 'Yaw'];
+                const unit = index < 3 ? 'mm' : 'deg';
+                return `${names[index] || 'N/A'}=${value.toFixed(4)} ${unit}`;
+            }
+            return `${value.toFixed(4)} deg`;
+        }
+
+        function formatActualValue(index, slave) {
+            const prefix = `軸${index + 1}=`;
+            if (!slave) return `${prefix}N/A`;
+
+            const hasTextA = typeof slave.aPosText === 'string' && slave.aPosText.length > 0;
+            if (hasTextA) {
+                return `${prefix}${slave.aPosText}`;
+            }
+
+            if (typeof slave.aPos === 'number') {
+                return `${prefix}${slave.aPos.toFixed(4)} deg`;
+            }
+
+            return `${prefix}N/A`;
+        }
+
+        function formatErrorCode603F(slave) {
+            if (!slave || !slave.errorCode603FValid) return 'N/A';
+            if (slave.errorCode603FReadFailed) return 'N/A';
+            if (typeof slave.errorCode603F !== 'number') return 'N/A';
+            return `0x${slave.errorCode603F.toString(16).toUpperCase().padStart(4, '0')}`;
+        }
+
+        // Helper: Show Toast
+        function showToast(msg) {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.classList.add('show');
+            setTimeout(() => t.classList.remove('show'), 3000);
+        }
+
+        // Load API key from server
+        async function loadApiKey() {
+            try {
+                const response = await fetch('/api/get-key', { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    API_KEY = data.api_key || '';
+                    console.log('API key loaded');
+                } else {
+                    console.error('Failed to load API key');
+                }
+            } catch (error) {
+                console.error('Error loading API key:', error);
+            }
+        }
+
+        // Helper: API Request
+        async function apiRequest(path, method = 'POST', body = null) {
+            try {
+                const headers = { 'X-API-Key': API_KEY };
+                if (body) headers['Content-Type'] = 'application/json; charset=utf-8'; // or text/plain depending on endpoint
+
+                const opts = { method, headers };
+                if (body) opts.body = body;
+
+                const resp = await fetch(HOST + path, opts);
+                // For auto endpoints, return response even if not ok so caller can handle errors
+                if (path === '/auto_connect' || path === '/auto/fault_reset' || path === '/auto/down_to_origin') {
+                    return resp;
+                }
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                return resp;
+            } catch (err) {
+                console.error("API Error:", err);
+                showToast(`Error: ${err.message}`);
+                return null;
+            }
+        }
+
+        // Action Handlers
+        function postAction(path, successMsg) {
+            if (navigator.vibrate) navigator.vibrate(50);
+            apiRequest(path).then(r => {
+                if (r) showToast(successMsg);
+            });
+        }
+
+        function handleImmediateStop() {
+            if (!window._loggedIn || uiImmediateStopDisabled) { showToast('按鈕已被伺服器禁用'); return; }
+            postAction('/auto/immediate_stop', '立即停止指令已發送');
+        }
+
+        async function toggleStatusAndOpen() {
+            if (navigator.vibrate) navigator.vibrate(50);
+            // Do not send a request to the native PC to toggle its child status view (status message page).
+            // Only navigate the browser to the status page.
+            showToast('切換至狀態頁面');
+            window.location.href = '/status.html';
+        }
+
+        function updateConnectButtonState() {
+            const el = document.getElementById('btnConnect');
+            if (!el) return;
+
+            const disableConnect = !window._loggedIn || uiConnectDisabled;
+
+            if (disableConnect) el.classList.add('disabled');
+            else el.classList.remove('disabled');
+        }
+
+        function updateResetButtonState() {
+            const el = document.getElementById('btnReset');
+            if (!el) return;
+
+            if (!window._loggedIn || uiFaultResetDisabled) el.classList.add('disabled');
+            else el.classList.remove('disabled');
+        }
+
+        function updateHomeButtonState() {
+            const el = document.getElementById('btnHome');
+            if (!el) return;
+
+            const disableHome = !window._loggedIn || uiDownToOriginDisabled;
+            if (disableHome) el.classList.add('disabled'); else el.classList.remove('disabled');
+        }
+
+        function updateStopButtonState() {
+            const stopButton = document.getElementById('btnStop');
+            if (stopButton) {
+                if (!window._loggedIn || uiImmediateStopDisabled) stopButton.classList.add('disabled');
+                else stopButton.classList.remove('disabled');
+            }
+            const emergencyButton = document.getElementById('btnEStop');
+            if (emergencyButton) {
+                if (!window._loggedIn || uiEmergencyStopDisabled) emergencyButton.classList.add('disabled');
+                else emergencyButton.classList.remove('disabled');
+            }
+        }
+
+        function setActionButtonLamp(id, active) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.toggle('lamp-off', !active);
+        }
+
+        function applyAutoActionButtonState(data) {
+            if (!data) return;
+            if (typeof data.auto_connect !== 'undefined') uiConnectDisabled = !!data.auto_connect;
+            else if (typeof data.connect !== 'undefined') uiConnectDisabled = !!data.connect;
+            if (typeof data.fault_reset !== 'undefined') uiFaultResetDisabled = !!data.fault_reset;
+            if (typeof data.down_to_origin !== 'undefined') uiDownToOriginDisabled = !!data.down_to_origin;
+            if (typeof data.immediate_stop !== 'undefined') uiImmediateStopDisabled = !!data.immediate_stop;
+            if (typeof data.emergency_stop !== 'undefined') uiEmergencyStopDisabled = !!data.emergency_stop;
+            if (typeof data.auto_connect_lamp !== 'undefined') setActionButtonLamp('btnConnect', !!data.auto_connect_lamp);
+            if (typeof data.down_to_origin_lamp !== 'undefined') setActionButtonLamp('btnHome', !!data.down_to_origin_lamp);
+            if (typeof data.fault_reset_lamp !== 'undefined') setActionButtonLamp('btnReset', !!data.fault_reset_lamp);
+            if (typeof data.immediate_stop_lamp !== 'undefined') setActionButtonLamp('btnStop', !!data.immediate_stop_lamp);
+            if (typeof data.emergency_stop_lamp !== 'undefined') setActionButtonLamp('btnEStop', !!data.emergency_stop_lamp);
+            updateAllButtonStates();
+        }
+
+        // Disable all action buttons when user is not logged in
+        function disableAllButtons() {
+            const buttonIds = ['btnConnect', 'btnHome', 'btnReset', 'btnStop', 'btnEStop', 'btnStatus'];
+            buttonIds.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) btn.classList.add('disabled');
+            });
+        }
+
+        // Re-enable buttons based on server state when user logs in
+        function updateAllButtonStates() {
+            updateConnectButtonState();
+            updateResetButtonState();
+            updateHomeButtonState();
+            updateStopButtonState();
+        }
+
+        // Poll /ui_state to respect server-side UI disable map (same as index.html)
+        async function pollUiState() {
+            try {
+                const r = await fetch('/ui_state', { cache: 'no-store' });
+                if (!r.ok) return;
+                const j = await r.json();
+                // Prefer auto_connect if available, otherwise fall back to connect
+                if (typeof j.auto_connect !== 'undefined') {
+                    uiConnectDisabled = !!j.auto_connect;
+                } else if (typeof j.connect !== 'undefined') {
+                    uiConnectDisabled = !!j.connect;
+                }
+                // server may expose a fault_reset key (true => disabled)
+                uiFaultResetDisabled = !!j.fault_reset;
+                uiDownToOriginDisabled = !!j.down_to_origin;
+                applyAutoActionButtonState(j);
+            } catch (e) { /* ignore */ }
+        }
+
+        // We will rely on SSE messages for UI state changes (server broadcasts ui_state via SSE),
+        // so we no longer poll /ui_state every second.
+
+        function handleConnect() {
+            // Check if user is logged in
+            if (!window._loggedIn) {
+                showToast('請先登入');
+                return;
+            }
+
+            // AutoWindow-style Connect/Run: trigger the Auto connect flow on the native app
+
+            // Check if button is disabled (CSS should prevent this, but double-check)
+            const btn = document.getElementById('btnConnect');
+            if (btn && btn.classList.contains('disabled')) {
+                console.log('Connect button is disabled, ignoring click');
+                return;
+            }
+
+            if (navigator.vibrate) navigator.vibrate(50);
+            if (uiConnectDisabled) { showToast('按鈕已被伺服器禁用'); return; }
+
+            apiRequest('/auto_connect').then(async r => {
+                if (r) {
+                    if (r.status === 400) {
+                        // Server rejected due to preconditions
+                        try {
+                            const errData = await r.json();
+                            let msg = '前置條件不滿足: ';
+                            if (!errData.oEtherCatOk) msg += 'EtherCAT未連線 ';
+                            if (!errData.oReady) msg += '系統未就緒 ';
+                            if (!errData.oHomeDone) msg += '未完成Homing ';
+                            if (errData.oError) msg += '系統錯誤 ';
+                            if (errData.oBusy) msg += '系統忙碌 ';
+                            showToast(msg);
+                        } catch (e) {
+                            showToast('請求被拒絕: 前置條件不滿足');
+                        }
+                    } else {
+                        showToast('Auto Connect 已啟動');
+                    }
+                }
+            });
+        }
+
+        function handleFaultReset() {
+            // Check if user is logged in
+            if (!window._loggedIn) {
+                showToast('請先登入');
+                return;
+            }
+
+            // Check if button is disabled (server controls the enable/disable state)
+            const btn = document.getElementById('btnReset');
+            if (btn && btn.classList.contains('disabled')) {
+                console.log('Fault reset button is disabled, ignoring click');
+                return;
+            }
+
+            if (navigator.vibrate) navigator.vibrate(50);
+
+            // Send request to server - all preconditions are validated server-side
+            apiRequest('/auto/fault_reset').then(async r => {
+                if (r) {
+                    if (r.status === 400) {
+                        try {
+                            const errData = await r.json();
+                            showToast('異常重置被拒絕: ' + (errData.error || '條件不滿足'));
+                        } catch (e) {
+                            showToast('異常重置被拒絕: 條件不滿足');
+                        }
+                    } else {
+                        showToast('異常重置指令已發送');
+                    }
+                }
+            });
+        }
+
+        function handleDownToOrigin() {
+            // Check if user is logged in
+            if (!window._loggedIn) {
+                showToast('請先登入');
+                return;
+            }
+
+            // Check if button is disabled
+            const btn = document.getElementById('btnHome');
+            if (btn && btn.classList.contains('disabled')) {
+                console.log('Down to origin button is disabled, ignoring click');
+                return;
+            }
+
+            if (navigator.vibrate) navigator.vibrate(50);
+            if (uiDownToOriginDisabled) { showToast('按鈕已被伺服器禁用'); return; }
+
+            executeDownToOrigin();
+        }
+
+        function executeDownToOrigin() {
+            apiRequest('/auto/down_to_origin').then(async r => {
+                if (r) {
+                    if (r.status === 400) {
+                        try {
+                            const errData = await r.json();
+                            showToast('到下原點被拒絕: ' + (errData.error || '條件不滿足'));
+                        } catch (e) {
+                            showToast('到下原點被拒絕: 條件不滿足');
+                        }
+                    } else {
+                        showToast('原點設定指令已發送');
+                    }
+                }
+            });
+        }
+
+        function handleEStop() {
+            if (!window._loggedIn || uiEmergencyStopDisabled) { showToast('按鈕已被伺服器禁用'); return; }
+            if (navigator.vibrate) navigator.vibrate(50);
+            postAction('/auto/emergency_stop', '緊急停止指令已發送');
+        }
+
+        function fetchStatus() {
+            apiRequest('/status', 'GET').then(async r => {
+                if (r) {
+                    const text = await r.text();
+                    console.log("Status:", text);
+                    showToast("狀態已更新 (見 Console)");
+                    // Parse text if needed, or just rely on SSE for real-time updates
+                }
+            });
+        }
+
+        // Fetch initial state to populate lastAutoStatus before SSE updates arrive
+        async function fetchInitialState() {
+            try {
+                const response = await fetch(HOST + '/pdo_data', { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (typeof data.mmf1InputMode === 'string' && data.mmf1InputMode.length > 0) {
+                        currentMmf1InputMode = data.mmf1InputMode;
+                        updateMmfInputHeader(currentMmf1InputMode);
+                    }
+                    // Initialize lastAutoStatus with current server state
+                    if (typeof data.oEtherCatOk !== 'undefined') lastAutoStatus.oEtherCatOk = !!data.oEtherCatOk;
+                    if (typeof data.oBusy !== 'undefined') lastAutoStatus.oBusy = !!data.oBusy;
+                    if (typeof data.oError !== 'undefined') lastAutoStatus.oError = !!data.oError;
+                    if (typeof data.oReady !== 'undefined') lastAutoStatus.oReady = !!data.oReady;
+                    if (typeof data.oHomeDone !== 'undefined') lastAutoStatus.oHomeDone = !!data.oHomeDone;
+                    if (typeof data.oOnline !== 'undefined') lastAutoStatus.oOnline = !!data.oOnline;
+
+                    // Update UI with initial state
+                    updateUI(data);
+                    console.log("Initial state loaded:", lastAutoStatus);
+                }
+            } catch (err) {
+                console.error("Failed to fetch initial state:", err);
+            }
+        }
+
+        // SSE Handling
+        async function startSSE() {
+            if (eventSource) return;
+
+            // Fetch initial state before establishing SSE connection
+            await fetchInitialState();
+
+            eventSource = new EventSource(HOST + '/pdo_sse');
+
+            eventSource.onopen = () => {
+                console.log("SSE Connected");
+                try { if (window.StatusUI && typeof window.StatusUI.setConnected === 'function') window.StatusUI.setConnected(); } catch (_) {}
+                try { if (window._loggedIn && window.StatusUI && typeof window.StatusUI.setHeartbeat === 'function') window.StatusUI.setHeartbeat(true); } catch (_) {}
+                isConnected = true;
+            };
+
+            eventSource.onerror = () => {
+                console.log("SSE Error");
+                try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {}
+                isConnected = false;
+                // Optional: Auto-reconnect logic is built-in to EventSource, 
+                // but we might want to close and reopen if it fails persistently.
+            };
+
+            eventSource.onmessage = (e) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    // Update last-known flags and UI, then recompute connect button state
+                    if (typeof data.oEtherCatOk !== 'undefined') lastAutoStatus.oEtherCatOk = !!data.oEtherCatOk;
+                    if (typeof data.oBusy !== 'undefined') lastAutoStatus.oBusy = !!data.oBusy;
+                    if (typeof data.oError !== 'undefined') lastAutoStatus.oError = !!data.oError;
+                    if (typeof data.oReady !== 'undefined') lastAutoStatus.oReady = !!data.oReady;
+                    if (typeof data.oHomeDone !== 'undefined') lastAutoStatus.oHomeDone = !!data.oHomeDone;
+                    if (typeof data.oOnline !== 'undefined') lastAutoStatus.oOnline = !!data.oOnline;
+
+                    updateUI(data);
+
+                } catch (err) {
+                    console.error("Parse Error", err);
+                }
+            };
+        }
+
+        // UI Update Logic
+        function updateUI(data) {
+            if (!data) return;
+            applyAutoActionButtonState(data);
+
+            const slaves = data.slaves || [];
+            const mmfReady = !!data.mmfReady;
+            const tbody = document.getElementById('axis-table-body');
+            if (typeof data.mmf1InputMode === 'string' && data.mmf1InputMode.length > 0) {
+                currentMmf1InputMode = data.mmf1InputMode;
+            }
+            updateMmfInputHeader(currentMmf1InputMode);
+
+            // Update Table
+            // Assuming we want to show first 6 axes
+            for (let i = 0; i < 6; i++) {
+                const tr = tbody.children[i];
+                if (!tr) break;
+
+                const slave = slaves[i];
+                if (slave) {
+                    // Column 1: 實際角度 (Actual Position)
+                    tr.children[0].textContent = formatActualValue(i, slave);
+
+                    // Column 2: MMF1 input, formatted by active mode
+                    if (data.mmfInRunning) {
+                        tr.children[1].textContent = formatMmfInputValue(i, slave.mmfIn, currentMmf1InputMode);
+                    } else {
+                        tr.children[1].textContent = formatMmfInputUnavailable(i, currentMmf1InputMode);
+                    }
+
+                    if (tr.children[2]) {
+                        tr.children[2].textContent = formatErrorCode603F(slave);
+                    }
+                } else {
+                    tr.children[0].textContent = `軸${i + 1}=N/A`;
+                    tr.children[1].textContent = formatMmfInputUnavailable(i, currentMmf1InputMode);
+                    if (tr.children[2]) {
+                        tr.children[2].textContent = 'N/A';
+                    }
+                }
+            }
+
+            // Update Lamps
+            // Use server-provided flags if available (from Win32Window::GetAutoGlobalStatus)
+            if (typeof data.oEtherCatOk !== 'undefined') {
+                updateLamp('lamp-ethercat', data.oEtherCatOk, 'green');
+                updateLamp('lamp-busy', data.oBusy, 'yellow');
+                updateLamp('lamp-error', data.oError, 'error');
+                updateLamp('lamp-ready', data.oReady, 'green');
+                updateLamp('lamp-homedone', data.oHomeDone, 'blue');
+                updateLamp('lamp-online', data.oOnline, 'green');
+            } else {
+                // Fallback for older server versions
+                const slaveCount = data.count || slaves.length || 0;
+                const hasSlaves = slaveCount > 0;
+                updateLamp('lamp-ethercat', hasSlaves, 'green');
+
+                let allReady = hasSlaves;
+                let anyError = false;
+                if (hasSlaves) {
+                    for (let i = 0; i < Math.min(slaveCount, 6); i++) {
+                        const sw = slaves[i].sw;
+                        if (sw !== 0x1637) allReady = false;
+                        if ((sw & 0x0008)) anyError = true; // Bit 3 is Fault
+                    }
+                } else {
+                    allReady = false;
+                }
+
+                updateLamp('lamp-ready', allReady, 'green');
+                updateLamp('lamp-error', anyError, 'error');
+            }
+        }
+
+        function updateLamp(id, active, type = 'blue') {
+            const el = document.getElementById(id);
+            // Remove all active classes
+            el.classList.remove('active', 'active-green', 'active-blue', 'active-yellow', 'error');
+
+            if (active) {
+                if (type === 'error') {
+                    el.classList.add('error');
+                } else if (type === 'green') {
+                    el.classList.add('active-green');
+                } else if (type === 'yellow') {
+                    el.classList.add('active-yellow');
+                } else {
+                    el.classList.add('active-blue');
+                }
+            }
+        }
+
+        // Initialize: Check auth and start SSE
+        (async function init() {
+            await window.Auth.ready();
+
+            // Initialize button states based on login status
+            if (!window._loggedIn) {
+                disableAllButtons();
+            } else {
+                updateAllButtonStates();
+            }
+
+            loadApiKey().then(() => startSSE());
+            const keepalive = window.Auth.createKeepalive({ url: HOST + '/session_status' });
+
+            // Listen for auth changes (logout event) and close SSE connection
+            window.addEventListener('wusoem-auth-change', (e) => {
+                const loggedIn = !!(e && e.detail && e.detail.loggedIn);
+                if (!loggedIn) {
+                    console.log("Auth change: logging out");
+                    // Clear API key to prevent further API calls
+                    API_KEY = '';
+                    // Clear cached status data to avoid showing stale information
+                    lastAutoStatus = { oEtherCatOk: false, oBusy: false, oError: false, oReady: false, oHomeDone: false, oOnline: false };
+                    // Close SSE connection
+                    if (eventSource) {
+                        eventSource.close();
+                        eventSource = null;
+                    }
+                    try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {}
+                    isConnected = false;
+                    // Disable all buttons when logging out
+                    disableAllButtons();
+                } else {
+                    console.log("Auth change: logging in, restoring SSE connection");
+                    // Reload API key and restore SSE connection when user logs in
+                    loadApiKey().then(() => {
+                        // Close any existing SSE connection and restart it
+                        if (eventSource) {
+                            eventSource.close();
+                            eventSource = null;
+                        }
+                        startSSE();
+                        try { if (window.StatusUI && typeof window.StatusUI.setHeartbeat === 'function' && window._loggedIn) window.StatusUI.setHeartbeat(true); } catch(_) {}
+                        // Re-enable buttons based on server state
+                        updateAllButtonStates();
+                    });
+                }
+            });
+
+            // If we missed the initial wusoem-auth-change event (initAuthCheck ran earlier),
+            // start heartbeat now when the page is already logged in.
+            try { if (window._loggedIn) { try { if (window.StatusUI && typeof window.StatusUI.setHeartbeat === 'function') window.StatusUI.setHeartbeat(true); } catch(_) {} } } catch (_) { }
+
+            window.Auth.installBfcacheReload();
+        })();
+
+    </script>
+    <!-- 侧滑菜单功能 -->
+    <script src="sidebar-menu.js"></script>
+</body>
+
+</html>

@@ -1,94 +1,326 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Device name="DS_P100E-7">
-  <Object index="0x1000" subindex="0x00" name="Device type" dataType="DWORD" access="ro" bitlen="32" hex="0x00 0x02 0x01 0x92" />
-  <Object index="0x1001" subindex="0x00" name="Error register" dataType="BYTE" access="ro" bitlen="8" hex="0x00" />
-  <Object index="0x1008" subindex="0x00" name="Device name" dataType="STRING(20)" access="ro" bitlen="160" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x37 0x2D 0x45 0x30 0x30 0x31 0x50 0x5F 0x53 0x44" />
-  <Object index="0x1009" subindex="0x00" name="Hardware version" dataType="STRING(3)" access="ro" bitlen="24" hex="0x2E 0x31 0x56" />
-  <Object index="0x100A" subindex="0x00" name="Software version" dataType="STRING(3)" access="ro" bitlen="24" hex="0x32 0x31 0x56" />
-  <Object index="0x1018" subindex="0x00" name="Identity" dataType="DT1018" bitlen="144" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x04" />
-  <Object index="0x1600" subindex="0x00" name="1st receive PDO Mapping" dataType="DT1600" access="rw" bitlen="336" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x04" />
-  <Object index="0x1701" subindex="0x00" name="258th receive PDO Mapping" dataType="DT1701" access="ro" bitlen="144" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x04" />
-  <Object index="0x1702" subindex="0x00" name="259th receive PDO Mapping" dataType="DT1702" access="ro" bitlen="240" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x07" />
-  <Object index="0x1703" subindex="0x00" name="260th receive PDO Mapping" dataType="DT1702" access="ro" bitlen="240" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x07" />
-  <Object index="0x1704" subindex="0x00" name="261th receive PDO Mapping" dataType="DT1704" access="ro" bitlen="304" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x09" />
-  <Object index="0x1705" subindex="0x00" name="262th receive PDO Mapping" dataType="DT1705" access="ro" bitlen="272" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x08" />
-  <Object index="0x1A00" subindex="0x00" name="1st transmit PDO Mapping" dataType="DT1A00" access="rw" bitlen="336" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x04" />
-  <Object index="0x1B01" subindex="0x00" name="258th transmit PDO Mapping" dataType="DT1B01" access="ro" bitlen="304" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x09" />
-  <Object index="0x1B02" subindex="0x00" name="259th transmit PDO Mapping" dataType="DT1B01" access="ro" bitlen="304" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x09" />
-  <Object index="0x1B03" subindex="0x00" name="260th transmit PDO Mapping" dataType="DT1B03" access="ro" bitlen="336" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x0A" />
-  <Object index="0x1B04" subindex="0x00" name="261th transmit PDO Mapping" dataType="DT1B03" access="ro" bitlen="336" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x0A" />
-  <Object index="0x1C00" subindex="0x00" name="Sync manager type" dataType="DT1C00" bitlen="48" hex="0x00 0x00 0x00 0x00 0x00 0x04" />
-  <Object index="0x1C12" subindex="0x00" name="SyncManager 2 assignment" dataType="DT1C12" bitlen="48" hex="0x00 0x00 0x00 0x00 0x00 0x01" />
-  <Object index="0x1C13" subindex="0x00" name="SyncManager 3 assignment" dataType="DT1C13" bitlen="48" hex="0x00 0x00 0x00 0x00 0x00 0x01" />
-  <Object index="0x1C32" subindex="0x00" name="SM output parameter" dataType="DT1C32" bitlen="488" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x20" />
-  <Object index="0x1C33" subindex="0x00" name="SM input parameter" dataType="DT1C33" bitlen="488" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x20" />
-  <Object index="0x2000" subindex="0x00" name="Basic Control Parameter" dataType="DT2000" access="ro" bitlen="224" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x0D" />
-  <Object index="0x2001" subindex="0x00" name="PID Adjust Parameter" dataType="DT2001" access="ro" bitlen="144" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x08" />
-  <Object index="0x2002" subindex="0x00" name="Communication Parameter" dataType="DT2002" access="ro" bitlen="64" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03" />
-  <Object index="0x2003" subindex="0x00" name="Input Port Function Definition" dataType="DT2003" access="ro" bitlen="144" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x08" />
-  <Object index="0x2004" subindex="0x00" name="Output Port Function Definition" dataType="DT2004" access="ro" bitlen="112" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x06" />
-  <Object index="0x2005" subindex="0x00" name="Auxiliary Function Parameter" dataType="DT2005" access="ro" bitlen="64" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03" />
-  <Object index="0x2006" subindex="0x00" name="Monitor Parameter" dataType="DT2006" access="ro" bitlen="64" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x03" />
-  <Object index="0x2007" subindex="0x00" name="ServoMoto Parameter" dataType="DT2007" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x01" />
+  <Object index="0x1000" subindex="0x00" name="Device type" dataType="DWORD" access="ro" bitlen="32" hex="0x020192" value="131474" />
+  <Object index="0x1001" subindex="0x00" name="Error register" dataType="BYTE" access="ro" bitlen="8" hex="0x00" value="0" />
+  <Object index="0x1008" subindex="0x00" name="Device name" dataType="STRING(20)" access="ro" bitlen="160" hex="0x372D45303031505F5344" value="4985537775859094340" />
+  <Object index="0x1009" subindex="0x00" name="Hardware version" dataType="STRING(3)" access="ro" bitlen="24" hex="0x302E3156" value="3027286" />
+  <Object index="0x100A" subindex="0x00" name="Software version" dataType="STRING(3)" access="ro" bitlen="24" hex="0x3333312E323156" value="3289430" />
+  <Object index="0x1018" subindex="0x00" name="Identity" dataType="DT1018" bitlen="144" hex="0x04" value="4" />
+  <Object index="0x1018" subindex="0x01" name="Vendor ID" dataType="DT1018" bitlen="144" hex="0x445653" value="4478547" />
+  <Object index="0x1018" subindex="0x02" name="Product code" dataType="DT1018" bitlen="144" hex="0x9252" value="37458" />
+  <Object index="0x1018" subindex="0x03" name="Revision" dataType="DT1018" bitlen="144" hex="0x01" value="1" />
+  <Object index="0x1018" subindex="0x04" name="Serial number" dataType="DT1018" bitlen="144" hex="0x01" value="1" />
+  <Object index="0x1600" subindex="0x00" name="1st receive PDO Mapping" dataType="DT1600" access="rw" bitlen="336" hex="0x04" value="4" />
+  <Object index="0x1600" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1600" access="rw" bitlen="336" hex="0x60400010" value="1614807056" />
+  <Object index="0x1600" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1600" access="rw" bitlen="336" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1600" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1600" access="rw" bitlen="336" hex="0x60FF0020" value="1627324448" />
+  <Object index="0x1600" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1600" access="rw" bitlen="336" hex="0x60710010" value="1618018320" />
+  <Object index="0x1701" subindex="0x00" name="258th receive PDO Mapping" dataType="DT1701" access="ro" bitlen="144" hex="0x04" value="4" />
+  <Object index="0x1701" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1701" access="ro" bitlen="144" hex="0x60400010" value="1614807056" />
+  <Object index="0x1701" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1701" access="ro" bitlen="144" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1701" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1701" access="ro" bitlen="144" hex="0x60B80010" value="1622671376" />
+  <Object index="0x1701" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1701" access="ro" bitlen="144" hex="0x60FE0120" value="1627259168" />
+  <Object index="0x1702" subindex="0x00" name="259th receive PDO Mapping" dataType="DT1702" access="ro" bitlen="240" hex="0x07" value="7" />
+  <Object index="0x1702" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60400010" value="1614807056" />
+  <Object index="0x1702" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1702" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60FF0020" value="1627324448" />
+  <Object index="0x1702" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60710010" value="1618018320" />
+  <Object index="0x1702" subindex="0x05" name="5th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60600008" value="1616904200" />
+  <Object index="0x1702" subindex="0x06" name="6th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60B80010" value="1622671376" />
+  <Object index="0x1702" subindex="0x07" name="7th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x607F0020" value="1618935840" />
+  <Object index="0x1703" subindex="0x00" name="260th receive PDO Mapping" dataType="DT1702" access="ro" bitlen="240" hex="0x07" value="7" />
+  <Object index="0x1703" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60400010" value="1614807056" />
+  <Object index="0x1703" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1703" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60FF0020" value="1627324448" />
+  <Object index="0x1703" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60600008" value="1616904200" />
+  <Object index="0x1703" subindex="0x05" name="5th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60B80010" value="1622671376" />
+  <Object index="0x1703" subindex="0x06" name="6th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60E00010" value="1625292816" />
+  <Object index="0x1703" subindex="0x07" name="7th Output Object to be mapped" dataType="DT1702" access="ro" bitlen="240" hex="0x60E10010" value="1625358352" />
+  <Object index="0x1704" subindex="0x00" name="261th receive PDO Mapping" dataType="DT1704" access="ro" bitlen="304" hex="0x09" value="9" />
+  <Object index="0x1704" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60400010" value="1614807056" />
+  <Object index="0x1704" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1704" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60FF0020" value="1627324448" />
+  <Object index="0x1704" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60710010" value="1618018320" />
+  <Object index="0x1704" subindex="0x05" name="5th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60600008" value="1616904200" />
+  <Object index="0x1704" subindex="0x06" name="6th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60B80010" value="1622671376" />
+  <Object index="0x1704" subindex="0x07" name="7th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x607F0020" value="1618935840" />
+  <Object index="0x1704" subindex="0x08" name="8th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60E00010" value="1625292816" />
+  <Object index="0x1704" subindex="0x09" name="9th Output Object to be mapped" dataType="DT1704" access="ro" bitlen="304" hex="0x60E10010" value="1625358352" />
+  <Object index="0x1705" subindex="0x00" name="262th receive PDO Mapping" dataType="DT1705" access="ro" bitlen="272" hex="0x08" value="8" />
+  <Object index="0x1705" subindex="0x01" name="1st Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60400010" value="1614807056" />
+  <Object index="0x1705" subindex="0x02" name="2nd Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x607A0020" value="1618608160" />
+  <Object index="0x1705" subindex="0x03" name="3rd Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60FF0020" value="1627324448" />
+  <Object index="0x1705" subindex="0x04" name="4th Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60600008" value="1616904200" />
+  <Object index="0x1705" subindex="0x05" name="5th Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60B80010" value="1622671376" />
+  <Object index="0x1705" subindex="0x06" name="6th Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60E00010" value="1625292816" />
+  <Object index="0x1705" subindex="0x07" name="7th Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60E10010" value="1625358352" />
+  <Object index="0x1705" subindex="0x08" name="8th Output Object to be mapped" dataType="DT1705" access="ro" bitlen="272" hex="0x60B20010" value="1622278160" />
+  <Object index="0x1A00" subindex="0x00" name="1st transmit PDO Mapping" dataType="DT1A00" access="rw" bitlen="336" hex="0x04" value="4" />
+  <Object index="0x1A00" subindex="0x01" name="1st Input Object to be mapped" dataType="DT1A00" access="rw" bitlen="336" hex="0x60410010" value="1614872592" />
+  <Object index="0x1A00" subindex="0x02" name="2nd Input Object to be mapped" dataType="DT1A00" access="rw" bitlen="336" hex="0x60640020" value="1617166368" />
+  <Object index="0x1A00" subindex="0x03" name="3rd Input Object to be mapped" dataType="DT1A00" access="rw" bitlen="336" hex="0x606C0020" value="1617690656" />
+  <Object index="0x1A00" subindex="0x04" name="4th Input Object to be mapped" dataType="DT1A00" access="rw" bitlen="336" hex="0x60770010" value="1618411536" />
+  <Object index="0x1B01" subindex="0x00" name="258th transmit PDO Mapping" dataType="DT1B01" access="ro" bitlen="304" hex="0x09" value="9" />
+  <Object index="0x1B01" subindex="0x01" name="1st Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x603F0010" value="1614741520" />
+  <Object index="0x1B01" subindex="0x02" name="2nd Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60410010" value="1614872592" />
+  <Object index="0x1B01" subindex="0x03" name="3rd Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60640020" value="1617166368" />
+  <Object index="0x1B01" subindex="0x04" name="4th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60770010" value="1618411536" />
+  <Object index="0x1B01" subindex="0x05" name="5th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60F40020" value="1626603552" />
+  <Object index="0x1B01" subindex="0x06" name="6th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60B90010" value="1622736912" />
+  <Object index="0x1B01" subindex="0x07" name="7th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60BA0020" value="1622802464" />
+  <Object index="0x1B01" subindex="0x08" name="8th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60BC0020" value="1622933536" />
+  <Object index="0x1B01" subindex="0x09" name="9th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60FD0020" value="1627193376" />
+  <Object index="0x1B02" subindex="0x00" name="259th transmit PDO Mapping" dataType="DT1B01" access="ro" bitlen="304" hex="0x09" value="9" />
+  <Object index="0x1B02" subindex="0x01" name="1st Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x603F0010" value="1614741520" />
+  <Object index="0x1B02" subindex="0x02" name="2nd Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60410010" value="1614872592" />
+  <Object index="0x1B02" subindex="0x03" name="3rd Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60640020" value="1617166368" />
+  <Object index="0x1B02" subindex="0x04" name="4th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60770010" value="1618411536" />
+  <Object index="0x1B02" subindex="0x05" name="5th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60610008" value="1616969736" />
+  <Object index="0x1B02" subindex="0x06" name="6th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60B90010" value="1622736912" />
+  <Object index="0x1B02" subindex="0x07" name="7th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60BA0020" value="1622802464" />
+  <Object index="0x1B02" subindex="0x08" name="8th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60BC0020" value="1622933536" />
+  <Object index="0x1B02" subindex="0x09" name="9th Input Object to be mapped" dataType="DT1B01" access="ro" bitlen="304" hex="0x60FD0020" value="1627193376" />
+  <Object index="0x1B03" subindex="0x00" name="260th transmit PDO Mapping" dataType="DT1B03" access="ro" bitlen="336" hex="0x0A" value="10" />
+  <Object index="0x1B03" subindex="0x01" name="1st Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x603F0010" value="1614741520" />
+  <Object index="0x1B03" subindex="0x02" name="2nd Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60410010" value="1614872592" />
+  <Object index="0x1B03" subindex="0x03" name="3rd Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60640020" value="1617166368" />
+  <Object index="0x1B03" subindex="0x04" name="4th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60770010" value="1618411536" />
+  <Object index="0x1B03" subindex="0x05" name="5th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60F40020" value="1626603552" />
+  <Object index="0x1B03" subindex="0x06" name="6th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60610008" value="1616969736" />
+  <Object index="0x1B03" subindex="0x07" name="7th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60B90010" value="1622736912" />
+  <Object index="0x1B03" subindex="0x08" name="8th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60BA0020" value="1622802464" />
+  <Object index="0x1B03" subindex="0x09" name="9th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60BC0020" value="1622933536" />
+  <Object index="0x1B03" subindex="0x0A" name="10th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60FD0020" value="1627193376" />
+  <Object index="0x1B04" subindex="0x00" name="261th transmit PDO Mapping" dataType="DT1B03" access="ro" bitlen="336" hex="0x0A" value="10" />
+  <Object index="0x1B04" subindex="0x01" name="1st Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x603F0010" value="1614741520" />
+  <Object index="0x1B04" subindex="0x02" name="2nd Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60410010" value="1614872592" />
+  <Object index="0x1B04" subindex="0x03" name="3rd Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60640020" value="1617166368" />
+  <Object index="0x1B04" subindex="0x04" name="4th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60770010" value="1618411536" />
+  <Object index="0x1B04" subindex="0x05" name="5th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60610008" value="1616969736" />
+  <Object index="0x1B04" subindex="0x06" name="6th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60F40020" value="1626603552" />
+  <Object index="0x1B04" subindex="0x07" name="7th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60B90010" value="1622736912" />
+  <Object index="0x1B04" subindex="0x08" name="8th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60BA0020" value="1622802464" />
+  <Object index="0x1B04" subindex="0x09" name="9th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x60BC0020" value="1622933536" />
+  <Object index="0x1B04" subindex="0x0A" name="10th Input Object to be mapped" dataType="DT1B03" access="ro" bitlen="336" hex="0x606C0020" value="1617690656" />
+  <Object index="0x1C00" subindex="0x00" name="Sync manager type" dataType="DT1C00" bitlen="48" hex="0x04" value="4" />
+  <Object index="0x1C00" subindex="0x01" name="SubIndex 001" dataType="DT1C00" bitlen="48" hex="0x01" value="1" />
+  <Object index="0x1C00" subindex="0x02" name="SubIndex 002" dataType="DT1C00" bitlen="48" hex="0x02" value="2" />
+  <Object index="0x1C00" subindex="0x03" name="SubIndex 003" dataType="DT1C00" bitlen="48" hex="0x03" value="3" />
+  <Object index="0x1C00" subindex="0x04" name="SubIndex 004" dataType="DT1C00" bitlen="48" hex="0x04" value="4" />
+  <Object index="0x1C12" subindex="0x00" name="SyncManager 2 assignment" dataType="DT1C12" bitlen="48" hex="0x01" value="1" />
+  <Object index="0x1C12" subindex="0x01" name="SubIndex 001" dataType="DT1C12" bitlen="48" hex="0x1600" value="5632" />
+  <Object index="0x1C13" subindex="0x00" name="SyncManager 3 assignment" dataType="DT1C13" bitlen="48" hex="0x01" value="1" />
+  <Object index="0x1C13" subindex="0x01" name="SubIndex 001" dataType="DT1C13" bitlen="48" hex="0x1A00" value="6656" />
+  <Object index="0x1C32" subindex="0x00" name="SM output parameter" dataType="DT1C32" bitlen="488" hex="0x20" value="32" />
+  <Object index="0x1C32" subindex="0x01" name="Synchronization Type" dataType="DT1C32" bitlen="488" hex="0x02" value="2" />
+  <Object index="0x1C32" subindex="0x02" name="Cycle Time" dataType="DT1C32" bitlen="488" hex="0x5B8D80" value="6000000" />
+  <Object index="0x1C32" subindex="0x03" name="Synchronization Types supported" dataType="DT1C32" bitlen="488" />
+  <Object index="0x1C32" subindex="0x04" name="Minimum Cycle Time" dataType="DT1C32" bitlen="488" hex="0x401E" value="16414" />
+  <Object index="0x1C32" subindex="0x05" name="Calc and Copy Time" dataType="DT1C32" bitlen="488" hex="0xC3500000" value="3276800000" />
+  <Object index="0x1C32" subindex="0x06" name="Get Cycle Time" dataType="DT1C32" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C32" subindex="0x07" name="Delay Time" dataType="DT1C32" bitlen="488" />
+  <Object index="0x1C32" subindex="0x08" name="Sync0 Cycle Time" dataType="DT1C32" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C32" subindex="0x09" name="SM-Event Missed" dataType="DT1C32" bitlen="488" hex="0x8480" value="33920" />
+  <Object index="0x1C32" subindex="0x0A" name="Cycle Time Too Small" dataType="DT1C32" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C32" subindex="0x0B" name="Sync Error" dataType="DT1C32" bitlen="488" hex="0x8480" value="33920" />
+  <Object index="0x1C33" subindex="0x00" name="SM input parameter" dataType="DT1C33" bitlen="488" hex="0x20" value="32" />
+  <Object index="0x1C33" subindex="0x01" name="Synchronization Type" dataType="DT1C33" bitlen="488" hex="0x02" value="2" />
+  <Object index="0x1C33" subindex="0x02" name="Cycle Time" dataType="DT1C33" bitlen="488" hex="0x5B8D80" value="6000000" />
+  <Object index="0x1C33" subindex="0x03" name="Synchronization Types supported" dataType="DT1C33" bitlen="488" />
+  <Object index="0x1C33" subindex="0x04" name="Minimum Cycle Time" dataType="DT1C33" bitlen="488" hex="0x401E" value="16414" />
+  <Object index="0x1C33" subindex="0x05" name="Calc and Copy Time" dataType="DT1C33" bitlen="488" hex="0xC3500000" value="3276800000" />
+  <Object index="0x1C33" subindex="0x06" name="Get Cycle Time" dataType="DT1C33" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C33" subindex="0x07" name="Delay Time" dataType="DT1C33" bitlen="488" />
+  <Object index="0x1C33" subindex="0x08" name="Sync0 Cycle Time" dataType="DT1C33" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C33" subindex="0x09" name="SM-Event Missed" dataType="DT1C33" bitlen="488" hex="0x8480" value="33920" />
+  <Object index="0x1C33" subindex="0x0A" name="Cycle Time Too Small" dataType="DT1C33" bitlen="488" hex="0x00" value="0" />
+  <Object index="0x1C33" subindex="0x0B" name="Sync Error" dataType="DT1C33" bitlen="488" hex="0x8480" value="33920" />
+  <Object index="0x2000" subindex="0x00" name="Basic Control Parameter" dataType="DT2000" access="ro" bitlen="224" hex="0x0D" value="13" />
+  <Object index="0x2000" subindex="0x01" name="SubIndex 001" dataType="DT2000" access="ro" bitlen="224" hex="0x07" value="7" />
+  <Object index="0x2000" subindex="0x02" name="SubIndex 002" dataType="DT2000" access="ro" bitlen="224" hex="0x00" value="0" />
+  <Object index="0x2000" subindex="0x03" name="SubIndex 003" dataType="DT2000" access="ro" bitlen="224" hex="0x01F4" value="500" />
+  <Object index="0x2000" subindex="0x04" name="SubIndex 004" dataType="DT2000" access="ro" bitlen="224" hex="0x64" value="100" />
+  <Object index="0x2000" subindex="0x05" name="SubIndex 005" dataType="DT2000" access="ro" bitlen="224" hex="0x0BB8" value="3000" />
+  <Object index="0x2000" subindex="0x06" name="SubIndex 006" dataType="DT2000" access="ro" bitlen="224" hex="0x00" value="0" />
+  <Object index="0x2000" subindex="0x07" name="SubIndex 007" dataType="DT2000" access="ro" bitlen="224" hex="0x00" value="0" />
+  <Object index="0x2000" subindex="0x08" name="SubIndex 008" dataType="DT2000" access="ro" bitlen="224" hex="0x00" value="0" />
+  <Object index="0x2000" subindex="0x09" name="SubIndex 009" dataType="DT2000" access="ro" bitlen="224" hex="0x02" value="2" />
+  <Object index="0x2000" subindex="0x0A" name="SubIndex 010" dataType="DT2000" access="ro" bitlen="224" hex="0x04" value="4" />
+  <Object index="0x2000" subindex="0x0B" name="SubIndex 011" dataType="DT2000" access="ro" bitlen="224" hex="0x11" value="17" />
+  <Object index="0x2000" subindex="0x0C" name="SubIndex 012" dataType="DT2000" access="ro" bitlen="224" hex="0x05" value="5" />
+  <Object index="0x2000" subindex="0x0D" name="SubIndex 013" dataType="DT2000" access="ro" bitlen="224" hex="0x5A" value="90" />
+  <Object index="0x2001" subindex="0x00" name="PID Adjust Parameter" dataType="DT2001" access="ro" bitlen="144" hex="0x08" value="8" />
+  <Object index="0x2001" subindex="0x01" name="SubIndex 001" dataType="DT2001" access="ro" bitlen="144" hex="0x012C" value="300" />
+  <Object index="0x2001" subindex="0x02" name="SubIndex 002" dataType="DT2001" access="ro" bitlen="144" hex="0x96" value="150" />
+  <Object index="0x2001" subindex="0x03" name="SubIndex 003" dataType="DT2001" access="ro" bitlen="144" hex="0x4B" value="75" />
+  <Object index="0x2001" subindex="0x04" name="SubIndex 004" dataType="DT2001" access="ro" bitlen="144" hex="0xC8" value="200" />
+  <Object index="0x2001" subindex="0x05" name="SubIndex 005" dataType="DT2001" access="ro" bitlen="144" hex="0x64" value="100" />
+  <Object index="0x2001" subindex="0x06" name="SubIndex 006" dataType="DT2001" access="ro" bitlen="144" hex="0x64" value="100" />
+  <Object index="0x2001" subindex="0x07" name="SubIndex 007" dataType="DT2001" access="ro" bitlen="144" hex="0x64" value="100" />
+  <Object index="0x2001" subindex="0x08" name="SubIndex 008" dataType="DT2001" access="ro" bitlen="144" hex="0x64" value="100" />
+  <Object index="0x2002" subindex="0x00" name="Communication Parameter" dataType="DT2002" access="ro" bitlen="64" hex="0x03" value="3" />
+  <Object index="0x2002" subindex="0x01" name="SubIndex 001" dataType="DT2002" access="ro" bitlen="64" hex="0x00" value="0" />
+  <Object index="0x2002" subindex="0x02" name="SubIndex 002" dataType="DT2002" access="ro" bitlen="64" hex="0x00" value="0" />
+  <Object index="0x2002" subindex="0x03" name="SubIndex 003" dataType="DT2002" access="ro" bitlen="64" hex="0x01" value="1" />
+  <Object index="0x2003" subindex="0x00" name="Input Port Function Definition" dataType="DT2003" access="ro" bitlen="144" hex="0x08" value="8" />
+  <Object index="0x2003" subindex="0x01" name="SubIndex 001" dataType="DT2003" access="ro" bitlen="144" hex="0x31" value="49" />
+  <Object index="0x2003" subindex="0x02" name="SubIndex 002" dataType="DT2003" access="ro" bitlen="144" hex="0x32" value="50" />
+  <Object index="0x2003" subindex="0x03" name="SubIndex 003" dataType="DT2003" access="ro" bitlen="144" hex="0x33" value="51" />
+  <Object index="0x2003" subindex="0x04" name="SubIndex 004" dataType="DT2003" access="ro" bitlen="144" hex="0x34" value="52" />
+  <Object index="0x2003" subindex="0x05" name="SubIndex 005" dataType="DT2003" access="ro" bitlen="144" hex="0x35" value="53" />
+  <Object index="0x2003" subindex="0x06" name="SubIndex 006" dataType="DT2003" access="ro" bitlen="144" hex="0x36" value="54" />
+  <Object index="0x2003" subindex="0x07" name="SubIndex 007" dataType="DT2003" access="ro" bitlen="144" hex="0x37" value="55" />
+  <Object index="0x2003" subindex="0x08" name="SubIndex 008" dataType="DT2003" access="ro" bitlen="144" hex="0x38" value="56" />
+  <Object index="0x2004" subindex="0x00" name="Output Port Function Definition" dataType="DT2004" access="ro" bitlen="112" hex="0x06" value="6" />
+  <Object index="0x2004" subindex="0x01" name="SubIndex 001" dataType="DT2004" access="ro" bitlen="112" hex="0x02" value="2" />
+  <Object index="0x2004" subindex="0x02" name="SubIndex 002" dataType="DT2004" access="ro" bitlen="112" hex="0x03" value="3" />
+  <Object index="0x2004" subindex="0x03" name="SubIndex 003" dataType="DT2004" access="ro" bitlen="112" hex="0x05" value="5" />
+  <Object index="0x2004" subindex="0x04" name="SubIndex 004" dataType="DT2004" access="ro" bitlen="112" hex="0x08" value="8" />
+  <Object index="0x2004" subindex="0x05" name="SubIndex 005" dataType="DT2004" access="ro" bitlen="112" hex="0x06" value="6" />
+  <Object index="0x2004" subindex="0x06" name="SubIndex 006" dataType="DT2004" access="ro" bitlen="112" hex="0x07" value="7" />
+  <Object index="0x2005" subindex="0x00" name="Auxiliary Function Parameter" dataType="DT2005" access="ro" bitlen="64" hex="0x03" value="3" />
+  <Object index="0x2005" subindex="0x01" name="SubIndex 001" dataType="DT2005" access="ro" bitlen="64" hex="0x00" value="0" />
+  <Object index="0x2005" subindex="0x02" name="SubIndex 002" dataType="DT2005" access="ro" bitlen="64" hex="0x00" value="0" />
+  <Object index="0x2005" subindex="0x03" name="SubIndex 003" dataType="DT2005" access="ro" bitlen="64" hex="0x01" value="1" />
+  <Object index="0x2006" subindex="0x00" name="Monitor Parameter" dataType="DT2006" access="ro" bitlen="64" hex="0x03" value="3" />
+  <Object index="0x2006" subindex="0x01" name="SubIndex 001" dataType="DT2006" access="ro" bitlen="64" hex="0xFFDA" value="65498" />
+  <Object index="0x2006" subindex="0x02" name="SubIndex 002" dataType="DT2006" access="ro" bitlen="64" hex="0x34" value="52" />
+  <Object index="0x2006" subindex="0x03" name="SubIndex 003" dataType="DT2006" access="ro" bitlen="64" hex="0x013E" value="318" />
+  <Object index="0x2007" subindex="0x00" name="ServoMoto Parameter" dataType="DT2007" access="ro" bitlen="32" hex="0x01" value="1" />
+  <Object index="0x2007" subindex="0x01" name="SubIndex 001" dataType="DT2007" access="ro" bitlen="32" hex="0x05" value="5" />
   <Object index="0x2008" subindex="0x00" name="Step Mode Parameter I" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x01" name="SubIndex 001" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x02" name="SubIndex 002" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x03" name="SubIndex 003" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x04" name="SubIndex 004" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x05" name="SubIndex 005" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x06" name="SubIndex 006" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x07" name="SubIndex 007" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x08" name="SubIndex 008" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x09" name="SubIndex 009" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x0A" name="SubIndex 010" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x0B" name="SubIndex 011" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x0C" name="SubIndex 012" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x0D" name="SubIndex 013" dataType="DT2008" access="rw" bitlen="240" />
+  <Object index="0x2008" subindex="0x0E" name="SubIndex 014" dataType="DT2008" access="rw" bitlen="240" />
   <Object index="0x2009" subindex="0x00" name="Step Mode Parameter II" dataType="DT2009" access="rw" bitlen="320" />
-  <Object index="0x603F" subindex="0x00" name="ErrorCode" dataType="UINT" access="ro" bitlen="16" hex="0x00 0x3D" />
-  <Object index="0x6040" subindex="0x00" name="Controlword" dataType="UINT" access="rw" bitlen="16" hex="0x00 0x06" />
-  <Object index="0x6041" subindex="0x00" name="StatusWord" dataType="UINT" access="ro" bitlen="16" hex="0x16 0x18" />
-  <Object index="0x605A" subindex="0x00" name="Quick Stop Option Code" dataType="INT" access="rw" bitlen="16" hex="0x00 0x01" />
-  <Object index="0x605B" subindex="0x00" name="Shutdown Option Code" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x605C" subindex="0x00" name="Disable Operation Option Code" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x605D" subindex="0x00" name="Halt option Code" dataType="INT" access="rw" bitlen="16" hex="0x00 0x01" />
-  <Object index="0x605E" subindex="0x00" name="Fault Reaction Code" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x6060" subindex="0x00" name="Modes of operation" dataType="SINT" access="rw" bitlen="8" hex="0x08" />
-  <Object index="0x6061" subindex="0x00" name="Modes of operation display" dataType="SINT" access="ro" bitlen="8" hex="0x08" />
-  <Object index="0x6062" subindex="0x00" name="Position demand value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x6063" subindex="0x00" name="Position actual value*" dataType="DINT" access="ro" bitlen="32" hex="0xFF 0xFF 0xF8 0xB0" />
-  <Object index="0x6064" subindex="0x00" name="Position actual value" dataType="DINT" access="ro" bitlen="32" hex="0xFF 0xFF 0xF8 0xAF" />
-  <Object index="0x6065" subindex="0x00" name="Following error window" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x00 0x0B 0xB8" />
-  <Object index="0x6067" subindex="0x00" name="Position window" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x82" />
-  <Object index="0x6068" subindex="0x00" name="Position window time" dataType="UINT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x606C" subindex="0x00" name="Velocity actual value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x606D" subindex="0x00" name="Velocity window" dataType="UINT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x606E" subindex="0x00" name="Velocity window time" dataType="UINT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x6071" subindex="0x00" name="Target torque" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x6072" subindex="0x00" name="Max Torque" dataType="UINT" access="rw" bitlen="16" hex="0x0B 0xB8" />
-  <Object index="0x6074" subindex="0x00" name="Torque demand" dataType="INT" access="ro" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x6076" subindex="0x00" name="Motor rated torque" dataType="DWORD" access="ro" bitlen="32" hex="0x00 0x00 0x01 0x2C" />
-  <Object index="0x6077" subindex="0x00" name="Torque Actual Value" dataType="INT" access="ro" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x607A" subindex="0x00" name="Target Position" dataType="DINT" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x607C" subindex="0x00" name="Home offset" dataType="DINT" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x607D" subindex="0x00" name="Software Position Limit" dataType="DT607D" access="ro" bitlen="80" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02" />
-  <Object index="0x607E" subindex="0x00" name="Polarity" dataType="BYTE" access="rw" bitlen="8" hex="0x00" />
-  <Object index="0x607F" subindex="0x00" name="Max profile velocity" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x78 0x00 0x00" />
-  <Object index="0x6081" subindex="0x00" name="Profile velocity" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x32 0x00 0x00" />
-  <Object index="0x6083" subindex="0x00" name="Profile acceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x32 0x00 0x00" />
-  <Object index="0x6084" subindex="0x00" name="Profile deceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x32 0x00 0x00" />
-  <Object index="0x6085" subindex="0x00" name="Quick Stop Deceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x3C 0x00 0x00" />
-  <Object index="0x6086" subindex="0x00" name="Motion profile type" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x6087" subindex="0x00" name="Torque slope" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x01" />
-  <Object index="0x6091" subindex="0x00" name="Gear ratio" dataType="DT6091" access="ro" bitlen="80" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02" />
-  <Object index="0x6098" subindex="0x00" name="Homing method" dataType="SINT" access="rw" bitlen="8" hex="0x11" />
-  <Object index="0x6099" subindex="0x00" name="Homing speeds" dataType="DT6099" access="ro" bitlen="80" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02" />
-  <Object index="0x609A" subindex="0x00" name="Homing acceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x00 0x28 0x00 0x00" />
-  <Object index="0x60B0" subindex="0x00" name="Position offset" dataType="DINT" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60B1" subindex="0x00" name="Velocity offset" dataType="DINT" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60B2" subindex="0x00" name="Torque offset" dataType="INT" access="rw" bitlen="16" hex="0x00 0x00" />
-  <Object index="0x60B8" subindex="0x00" name="Touch probe function" dataType="UINT" access="rw" bitlen="16" hex="0x31 0x31" />
-  <Object index="0x60B9" subindex="0x00" name="Touch Probe Status" dataType="UINT" access="ro" bitlen="16" hex="0x01 0x01" />
-  <Object index="0x60BA" subindex="0x00" name="Touch Probe pos 1 pos value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60BB" subindex="0x00" name="Touch Probe pos 1 neg value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60BC" subindex="0x00" name="Touch Probe pos 2 pos value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60BD" subindex="0x00" name="Touch Probe pos 2 neg value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60E0" subindex="0x00" name="Positive torque limit value" dataType="UINT" access="rw" bitlen="16" hex="0x0B 0xB8" />
-  <Object index="0x60C2" subindex="0x00" name="Interpolation time period" dataType="DT60C2" access="ro" bitlen="48" hex="0x00 0x00 0x00 0x00 0x00 0x02" />
-  <Object index="0x60E1" subindex="0x00" name="Negative torque limit value" dataType="UINT" access="rw" bitlen="16" hex="0x0B 0xB8" />
-  <Object index="0x60E3" subindex="0x00" name="Support homing method" dataType="DT60E3" access="ro" hex="0x00 0x00 0x00 0x1F" />
-  <Object index="0x60E6" subindex="0x00" name="Actual Position Calucation Method" dataType="BYTE" access="rw" bitlen="8" hex="0x00" />
-  <Object index="0x60F4" subindex="0x00" name="Following error actual value" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60FC" subindex="0x00" name="Position demand value*" dataType="DINT" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60FD" subindex="0x00" name="Digital inputs" dataType="DWORD" access="ro" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x60FE" subindex="0x00" name="Digital outputs" dataType="DT60FE" access="ro" bitlen="80" hex="0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x02" />
-  <Object index="0x60FF" subindex="0x00" name="Target velocity" dataType="DINT" access="rw" bitlen="32" hex="0x00 0x00 0x00 0x00" />
-  <Object index="0x6502" subindex="0x00" name="Supported Drive Modes" dataType="DWORD" access="ro" bitlen="32" hex="0x00 0x00 0x03 0xAD" />
+  <Object index="0x2009" subindex="0x01" name="SubIndex 001" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x02" name="SubIndex 002" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x03" name="SubIndex 003" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x04" name="SubIndex 004" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x05" name="SubIndex 005" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x06" name="SubIndex 006" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x07" name="SubIndex 007" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x08" name="SubIndex 008" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x09" name="SubIndex 009" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0A" name="SubIndex 010" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0B" name="SubIndex 011" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0C" name="SubIndex 012" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0D" name="SubIndex 013" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0E" name="SubIndex 014" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x0F" name="SubIndex 015" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x10" name="SubIndex 016" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x11" name="SubIndex 017" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x12" name="SubIndex 018" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x2009" subindex="0x13" name="SubIndex 019" dataType="DT2009" access="rw" bitlen="320" />
+  <Object index="0x603F" subindex="0x00" name="ErrorCode" dataType="UINT" access="ro" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6040" subindex="0x00" name="Controlword" dataType="UINT" access="rw" bitlen="16" hex="0x0F" value="15" />
+  <Object index="0x6041" subindex="0x00" name="StatusWord" dataType="UINT" access="ro" bitlen="16" hex="0x1637" value="5687" />
+  <Object index="0x605A" subindex="0x00" name="Quick Stop Option Code" dataType="INT" access="rw" bitlen="16" hex="0x01" value="1" />
+  <Object index="0x605B" subindex="0x00" name="Shutdown Option Code" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x605C" subindex="0x00" name="Disable Operation Option Code" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x605D" subindex="0x00" name="Halt option Code" dataType="INT" access="rw" bitlen="16" hex="0x01" value="1" />
+  <Object index="0x605E" subindex="0x00" name="Fault Reaction Code" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6060" subindex="0x00" name="Modes of operation" dataType="SINT" access="rw" bitlen="8" hex="0x06" value="6" />
+  <Object index="0x6061" subindex="0x00" name="Modes of operation display" dataType="SINT" access="ro" bitlen="8" hex="0x06" value="6" />
+  <Object index="0x6062" subindex="0x00" name="Position demand value" dataType="DINT" access="ro" bitlen="32" hex="0xFFFFFF48" value="-184" />
+  <Object index="0x6063" subindex="0x00" name="Position actual value*" dataType="DINT" access="ro" bitlen="32" hex="0xFFD38E3A" value="-2912710" />
+  <Object index="0x6064" subindex="0x00" name="Position actual value" dataType="DINT" access="ro" bitlen="32" hex="0xFFD38E39" value="-2912711" />
+  <Object index="0x6065" subindex="0x00" name="Following error window" dataType="DWORD" access="rw" bitlen="32" hex="0x0BB8" value="3000" />
+  <Object index="0x6067" subindex="0x00" name="Position window" dataType="DWORD" access="rw" bitlen="32" hex="0x82" value="130" />
+  <Object index="0x6068" subindex="0x00" name="Position window time" dataType="UINT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x606C" subindex="0x00" name="Velocity actual value" dataType="DINT" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x606D" subindex="0x00" name="Velocity window" dataType="UINT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x606E" subindex="0x00" name="Velocity window time" dataType="UINT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6071" subindex="0x00" name="Target torque" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6072" subindex="0x00" name="Max Torque" dataType="UINT" access="rw" bitlen="16" hex="0x0BB8" value="3000" />
+  <Object index="0x6074" subindex="0x00" name="Torque demand" dataType="INT" access="ro" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6076" subindex="0x00" name="Motor rated torque" dataType="DWORD" access="ro" bitlen="32" hex="0x012C" value="300" />
+  <Object index="0x6077" subindex="0x00" name="Torque Actual Value" dataType="INT" access="ro" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x607A" subindex="0x00" name="Target Position" dataType="DINT" access="rw" bitlen="32" hex="0xFFD38E39" value="-2912711" />
+  <Object index="0x607C" subindex="0x00" name="Home offset" dataType="DINT" access="rw" bitlen="32" hex="0xFFD38E39" value="-2912711" />
+  <Object index="0x607D" subindex="0x00" name="Software Position Limit" dataType="DT607D" access="ro" bitlen="80" hex="0x02" value="2" />
+  <Object index="0x607D" subindex="0x01" name="Min position limit" dataType="DT607D" access="ro" bitlen="80" hex="0x88CA6C00" value="2294967296" />
+  <Object index="0x607D" subindex="0x02" name="Max position limit" dataType="DT607D" access="ro" bitlen="80" hex="0x77359400" value="2000000000" />
+  <Object index="0x607E" subindex="0x00" name="Polarity" dataType="BYTE" access="rw" bitlen="8" hex="0x00" value="0" />
+  <Object index="0x607F" subindex="0x00" name="Max profile velocity" dataType="DWORD" access="rw" bitlen="32" hex="0x780000" value="7864320" />
+  <Object index="0x6081" subindex="0x00" name="Profile velocity" dataType="DWORD" access="rw" bitlen="32" hex="0x320000" value="3276800" />
+  <Object index="0x6083" subindex="0x00" name="Profile acceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x320000" value="3276800" />
+  <Object index="0x6084" subindex="0x00" name="Profile deceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x320000" value="3276800" />
+  <Object index="0x6085" subindex="0x00" name="Quick Stop Deceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x3C0000" value="3932160" />
+  <Object index="0x6086" subindex="0x00" name="Motion profile type" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x6087" subindex="0x00" name="Torque slope" dataType="DWORD" access="rw" bitlen="32" hex="0x01" value="1" />
+  <Object index="0x6091" subindex="0x00" name="Gear ratio" dataType="DT6091" access="ro" bitlen="80" hex="0x02" value="2" />
+  <Object index="0x6091" subindex="0x01" name="Motor revolutions" dataType="DT6091" access="ro" bitlen="80" hex="0x020000" value="131072" />
+  <Object index="0x6091" subindex="0x02" name="Shaft revolutions" dataType="DT6091" access="ro" bitlen="80" hex="0x020000" value="131072" />
+  <Object index="0x6098" subindex="0x00" name="Homing method" dataType="SINT" access="rw" bitlen="8" hex="0x23" value="35" />
+  <Object index="0x6099" subindex="0x00" name="Homing speeds" dataType="DT6099" access="ro" bitlen="80" hex="0x02" value="2" />
+  <Object index="0x6099" subindex="0x01" name="Speed during search for switch" dataType="DT6099" access="ro" bitlen="80" hex="0x020000" value="131072" />
+  <Object index="0x6099" subindex="0x02" name="Speed during search for zero" dataType="DT6099" access="ro" bitlen="80" hex="0x7960" value="31072" />
+  <Object index="0x609A" subindex="0x00" name="Homing acceleration" dataType="DWORD" access="rw" bitlen="32" hex="0x280000" value="2621440" />
+  <Object index="0x60B0" subindex="0x00" name="Position offset" dataType="DINT" access="rw" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60B1" subindex="0x00" name="Velocity offset" dataType="DINT" access="rw" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60B2" subindex="0x00" name="Torque offset" dataType="INT" access="rw" bitlen="16" hex="0x00" value="0" />
+  <Object index="0x60B8" subindex="0x00" name="Touch probe function" dataType="UINT" access="rw" bitlen="16" hex="0x3131" value="12593" />
+  <Object index="0x60B9" subindex="0x00" name="Touch Probe Status" dataType="UINT" access="ro" bitlen="16" hex="0x0101" value="257" />
+  <Object index="0x60BA" subindex="0x00" name="Touch Probe pos 1 pos value" dataType="DINT" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60BB" subindex="0x00" name="Touch Probe pos 1 neg value" dataType="DINT" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60BC" subindex="0x00" name="Touch Probe pos 2 pos value" dataType="DINT" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60BD" subindex="0x00" name="Touch Probe pos 2 neg value" dataType="DINT" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60E0" subindex="0x00" name="Positive torque limit value" dataType="UINT" access="rw" bitlen="16" hex="0x03E8" value="1000" />
+  <Object index="0x60C2" subindex="0x00" name="Interpolation time period" dataType="DT60C2" access="ro" bitlen="48" hex="0x02" value="2" />
+  <Object index="0x60C2" subindex="0x01" name="Interpolation time units" dataType="DT60C2" access="ro" bitlen="48" hex="0x32" value="50" />
+  <Object index="0x60C2" subindex="0x02" name="Interpolation time index" dataType="DT60C2" access="ro" bitlen="48" hex="0x32" value="50" />
+  <Object index="0x60E1" subindex="0x00" name="Negative torque limit value" dataType="UINT" access="rw" bitlen="16" hex="0x012C" value="300" />
+  <Object index="0x60E3" subindex="0x00" name="Support homing method" dataType="DT60E3" access="ro" hex="0x1F" value="31" />
+  <Object index="0x60E3" subindex="0x01" name="Support homing method 1" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x02" name="Support homing method 2" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x03" name="Support homing method 3" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x04" name="Support homing method 4" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x05" name="Support homing method 5" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x06" name="Support homing method 6" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x07" name="Support homing method 7" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x08" name="Support homing method 8" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x09" name="Support homing method 9" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0A" name="Support homing method 10" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0B" name="Support homing method 11" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0C" name="Support homing method 12" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0D" name="Support homing method 13" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0E" name="Support homing method 14" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x0F" name="Support homing method 15" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x10" name="Support homing method 16" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x11" name="Support homing method 17" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x12" name="Support homing method 18" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x13" name="Support homing method 19" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x14" name="Support homing method 20" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x15" name="Support homing method 21" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x16" name="Support homing method 22" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x17" name="Support homing method 23" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x18" name="Support homing method 24" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x19" name="Support homing method 25" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1A" name="Support homing method 26" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1B" name="Support homing method 27" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1C" name="Support homing method 28" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1D" name="Support homing method 29" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1E" name="Support homing method 30" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E3" subindex="0x1F" name="Support homing method 31" dataType="DT60E3" access="ro" hex="0x00" value="0" />
+  <Object index="0x60E6" subindex="0x00" name="Actual Position Calucation Method" dataType="BYTE" access="rw" bitlen="8" hex="0x00" value="0" />
+  <Object index="0x60F4" subindex="0x00" name="Following error actual value" dataType="DINT" access="ro" bitlen="32" hex="0x01" value="1" />
+  <Object index="0x60FC" subindex="0x00" name="Position demand value*" dataType="DINT" access="ro" bitlen="32" hex="0xFFFFFF48" value="-184" />
+  <Object index="0x60FD" subindex="0x00" name="Digital inputs" dataType="DWORD" access="ro" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x60FE" subindex="0x00" name="Digital outputs" dataType="DT60FE" access="ro" bitlen="80" hex="0x02" value="2" />
+  <Object index="0x60FE" subindex="0x01" name="Physical outputs" dataType="DT60FE" access="ro" bitlen="80" hex="0x05" value="5" />
+  <Object index="0x60FE" subindex="0x02" name="Bit mask" dataType="DT60FE" access="ro" bitlen="80" hex="0x00" value="0" />
+  <Object index="0x60FF" subindex="0x00" name="Target velocity" dataType="DINT" access="rw" bitlen="32" hex="0x00" value="0" />
+  <Object index="0x6502" subindex="0x00" name="Supported Drive Modes" dataType="DWORD" access="ro" bitlen="32" hex="0x03AD" value="941" />
 </Device>

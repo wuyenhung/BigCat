@@ -1,0 +1,2260 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>示波器</title>
+        <link rel="icon" href="ka52.ico" type="image/x-icon">
+        <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+        <!-- Stylesheet load order (do not change):
+            1) shared-variables.css (global CSS variables - MUST be first)
+            2) sidebar-menu.css (shared layout/components that depend on variables)
+            3) page-specific styles (stay after shared files)
+        -->
+        <link rel="stylesheet" href="shared-variables.css">
+        <link rel="stylesheet" href="sidebar-menu.css">
+        <link rel="stylesheet" href="rt-scope.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a1a;
+            height: 100vh;
+            padding: 5px;
+            color: #e0e0e0;
+            overflow: auto;
+        }
+
+        .container {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            background: rgba(20, 20, 35, 0.98);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            /* leave room for the global sidebar menu toggle — now handled by shared CSS variables */
+            /* padding-left removed (controlled by sidebar-menu.css via --sidebar-header-padding-left-desktop/mobile) */
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid #333;
+            flex-shrink: 0;
+            gap: 10px;
+        }
+
+        /* Left-aligned title (no absolute centering) */
+        h1 {
+            color: #00d4ff;
+            font-size: 1.3em;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            position: static;
+            transform: none;
+            text-align: left;
+            white-space: nowrap;
+            max-width: 60%;
+            justify-content: flex-start;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            order: 3;
+            margin-left: auto; /* push to right */
+        }
+
+        .mmf-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            padding: 8px 12px;
+            background: rgba(50, 50, 80, 0.3);
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+
+        .header-left {
+            order: 1;
+            flex: 0 0 auto;
+        }
+
+        .mmf-controls label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.85em;
+            color: #ccc;
+            cursor: pointer;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        .mmf-controls input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .mmf-controls label:hover {
+            color: #00d4ff;
+        }
+
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            background: rgba(50, 50, 80, 0.4);
+            border-radius: 6px;
+            flex-shrink: 0;
+            align-items: flex-end;
+        }
+
+        .controls-row {
+            display: flex;
+            gap: 15px;
+            align-items: flex-end;
+            /* prefer single row when space allows */
+            flex-wrap: nowrap;
+        }
+
+        /* Ensure the two selects stay side-by-side under normal widths */
+        .controls-row > .control-group {
+            min-width: 180px;
+            flex: 0 1 auto;
+        }
+
+        .controls-row > .control-group select,
+        .controls-row > .control-group input {
+            min-width: 160px;
+            max-width: 100%;
+        }
+
+        /* Responsive: on narrow screens stack header and center elements to avoid overlap.
+           On mobile (<=600px) keep the SSE status pinned to the header's top-right. */
+        @media (max-width: 600px) {
+            /* make header pinned to top on mobile so the title appears at the very top */
+            header { position: sticky; top: 0; z-index: 40; width: 100%; flex-direction: column; align-items: center; gap: 8px; padding: 8px 10px; background: rgba(20, 20, 35, 0.98); }
+                h1 { position: static; transform: none; max-width: 100%; white-space: normal; }
+                /* Nudge title slightly right on mobile so it does not feel flush with the
+                    menu toggle and maintains visual separation */
+                h1 { margin-left: 36px; }
+            .header-left { width: 100%; }
+            /* Make header-right take full width on narrow screens so controls/ status stack under title */
+            .header-right { width: 100%; display:flex; justify-content:center; gap:8px; order:unset; }
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .control-group label {
+            font-size: 0.85em;
+            color: #aaa;
+            font-weight: 600;
+        }
+
+        select,
+        input[type="number"] {
+            padding: 8px 12px;
+            border: 1px solid #555;
+            border-radius: 6px;
+            background: #2a2a4a;
+            color: #fff;
+            font-size: 0.95em;
+            min-width: 120px;
+        }
+
+        select:hover,
+        input:hover {
+            border-color: #00d4ff;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+
+        /* page-level buttons only; keep sidebar buttons using shared sidebar-menu.css */
+        button:not(.menu-toggle):not(.sidebar-buttons *) {
+            padding: var(--btn-padding);
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.9em;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4ff, #0099cc);
+            color: #000;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 212, 255, 0.4);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #ff4444, #cc0000);
+            color: #fff;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(255, 68, 68, 0.4);
+        }
+
+        .btn-secondary {
+            background: #444;
+            color: #fff;
+        }
+
+        .btn-secondary:hover {
+            background: #555;
+        }
+
+        button.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 5px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .checkbox-item:hover {
+            background: rgba(0, 212, 255, 0.2);
+        }
+
+        .checkbox-item input {
+            accent-color: #00d4ff;
+        }
+
+        .axis-toggle-group,
+        .mmf-axis-group {
+            gap: 6px;
+        }
+
+        .axis-toggle-item,
+        .mmf-axis-item {
+            min-width: 42px;
+            justify-content: center;
+            padding: 5px 8px;
+        }
+
+        .color-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .chart-container {
+            position: relative;
+            flex: 1;
+            min-height: 300px;
+            background: #050510;
+            border-radius: 6px;
+            padding: 5px;
+            margin-bottom: 8px;
+            overflow: hidden;
+            touch-action: pan-y;
+            cursor: crosshair;
+        }
+
+        .chart-container.is-panning {
+            cursor: grabbing;
+        }
+
+        #realtimeChart,
+        #chartOverlay {
+            position: absolute;
+            inset: 0;
+            width: 100% !important;
+            height: 100% !important;
+            display: block;
+        }
+
+        #realtimeChart {
+            transform: translateZ(0);
+            backface-visibility: hidden;
+        }
+
+        #chartOverlay {
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .chart-legend {
+            position: absolute;
+            top: 8px;
+            left: 72px;
+            right: 18px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 10px;
+            max-height: 32px;
+            overflow: hidden;
+            pointer-events: none;
+            z-index: 2;
+            font-size: 11px;
+            line-height: 1.2;
+        }
+
+        .chart-legend-item {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 2px 7px;
+            border-radius: 999px;
+            background: rgba(4, 8, 20, 0.58);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            color: #d7dde7;
+            backdrop-filter: blur(2px);
+        }
+
+        .chart-legend-line {
+            width: 12px;
+            height: 2px;
+            border-radius: 1px;
+            flex: 0 0 auto;
+        }
+
+        .stats-bar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            padding: 8px 12px;
+            flex-shrink: 0;
+            background: rgba(50, 50, 80, 0.4);
+            border-radius: 6px;
+        }
+
+        .stat-item {
+            display: flex;
+            flex-direction: column;
+            padding: 5px 10px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 5px;
+            min-width: 100px;
+        }
+
+        .stat-label {
+            font-size: 0.7em;
+            color: #888;
+            margin-bottom: 2px;
+        }
+
+        .stat-value {
+            font-size: 1em;
+            font-weight: bold;
+            font-family: 'Consolas', monospace;
+        }
+
+        .stat-value.pos {
+            color: #36A2EB;
+        }
+
+        .stat-value.vel {
+            color: #FF6384;
+        }
+
+        .stat-value.ok {
+            color: #44ff44;
+        }
+
+        .stat-value.err {
+            color: #ff4444;
+        }
+
+        .info-bar {
+            display: none;
+            /* 隱藏以最大化圖表空間 */
+        }
+
+        /* Mobile Responsive Styles */
+        @media (max-width: 768px) {
+            .container {
+                padding: 4px;
+            }
+
+            header {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 10px;
+                padding-bottom: 10px;
+            }
+
+            .header-left {
+                width: 100%;
+            }
+
+            .header-right {
+                width: 100%;
+                flex-direction: column;
+                gap: 10px;
+                align-items: stretch;
+            }
+
+            .mmf-controls {
+                width: 100%;
+            }
+
+            #mmfInfo {
+                margin-left: 0 !important;
+                margin-top: 5px;
+                display: block;
+                line-height: 1.4;
+            }
+
+            .controls {
+                flex-direction: column;
+                align-items: stretch;
+                gap: 12px;
+            }
+
+            .controls-row {
+                flex-direction: column;
+                gap: 12px;
+                align-items: stretch;
+            }
+
+            .control-group {
+                width: 100%;
+            }
+
+            select,
+            input[type="number"] {
+                width: 100%;
+                font-size: 16px;
+                /* Avoid iOS zoom */
+                height: 40px;
+            }
+
+            .checkbox-group {
+                display: grid;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
+            }
+
+            .checkbox-item {
+                width: 100%;
+                padding: 8px;
+                justify-content: flex-start;
+            }
+
+            .btn-group {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                width: 100%;
+                gap: 8px;
+                margin-top: 5px;
+            }
+
+            button:not(.menu-toggle):not(.sidebar-buttons *) {
+                padding: 10px 0;
+                font-size: 14px;
+                width: 100%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .chart-container {
+                min-height: 250px;
+                height: 40vh;
+            }
+
+            .stats-bar {
+                display: grid;
+                grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+                padding: 8px;
+            }
+
+            .stat-item {
+                min-width: auto;
+                width: 100%;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .checkbox-group {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-bar {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            h1 {
+                font-size: 1.2em;
+            }
+        }
+
+        /* Desktop: nudge top-left select/MMF controls slightly right so they are not flush with window edge */
+        @media (min-width: 769px) {
+            .header-left { margin-left: 18px; }
+            /* make mmf-info align a bit when space allows */
+            #mmfInfo { margin-left: 28px !important; }
+        }
+    </style>
+    <!-- Load auth.js early so initAuthCheck is available -->
+    <script src="auth.js"></script>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>示波器</h1>
+
+            <!-- Right-aligned header group: PDO/MMF controls and connection status -->
+            <div class="header-right">
+                <div class="mmf-controls">
+                    <label>
+                        <input type="checkbox" id="chkMMFOutput" title="PDO即時記錄與MMF輸出">
+                        PDO即時記錄與MMF輸出
+                    </label>
+                    <div id="mmfInfo">
+                        MMF: disabled 資料存檔在\logs\PDO.log
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <div class="controls">
+            <div class="controls-row">
+                <div class="control-group">
+                    <label>從軸選擇</label>
+                    <select id="slaveSelect" title="從軸選擇">
+                        <option value="0">從軸 1</option>
+                        <option value="1">從軸 2</option>
+                        <option value="2">從軸 3</option>
+                        <option value="3">從軸 4</option>
+                        <option value="4">從軸 5</option>
+                        <option value="5">從軸 6</option>
+                        <option value="all">所有從軸</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>顯示點數</label>
+                    <select id="maxPointsSelect" title="顯示點數">
+                        <option value="200">200 點 (0.4秒)</option>
+                        <option value="500">500 點 (1秒)</option>
+                        <option value="1000">1000 點 (2秒)</option>
+                        <option value="2500">2500 點 (5秒)</option>
+                        <option value="5000" selected>5000 點 (10秒)</option>
+                        <option value="10000">10000 點 (20秒)</option>
+                        <option value="20000">20000 點 (40秒)</option>
+                        <option value="50000">50000 點 (100秒)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>數據類型</label>
+                <div class="checkbox-group">
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="aPos" checked title="實際位置 (0x6064)">
+                        <span class="color-dot color-dot-actual-pos"></span>
+                        <span>實際位置 (0x6064)</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="tPos" title="邏輯目標位置 (0x607A)">
+                        <span class="color-dot color-dot-target-pos"></span>
+                        <span>邏輯目標位置 (0x607A)</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="aVel" title="實際速度 (0x606C)">
+                        <span class="color-dot color-dot-actual-vel"></span>
+                        <span>實際速度 (0x606C)</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="tVel" title="CSV 命令速度 (0x60FF)">
+                        <span class="color-dot color-dot-target-vel"></span>
+                        <span>CSV 命令速度 (0x60FF)</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="mmfIn" title="MMF 輸入">
+                        <span class="color-dot color-dot-mmf-in"></span>
+                        <span>MMF 輸入</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="mmfInVel" title="MMF 輸入速度 (EtherCAT 同步)">
+                        <span class="color-dot color-dot-mmf-in-vel"></span>
+                        <span>MMF 輸入速度</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filterInput" title="Filter 角度輸入">
+                        <span class="color-dot" style="background:#C6FF00"></span>
+                        <span>Filter 角度輸入</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filter" title="Filter 輸出">
+                        <span class="color-dot color-dot-filter"></span>
+                        <span>Filter 輸出</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filterVel" title="Filter 速度">
+                        <span class="color-dot color-dot-filter-vel"></span>
+                        <span>Filter 速度</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filterAcc" title="Filter 加速度">
+                        <span class="color-dot color-dot-filter-acc"></span>
+                        <span>Filter 加速度</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="ecatCycle" title="EtherCAT 通訊週期">
+                        <span class="color-dot" style="background:#7CFC00"></span>
+                        <span>EtherCAT 通訊週期</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>MMF 輸入軸</label>
+                <div class="checkbox-group mmf-axis-group">
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="0" checked title="MMF 輸入 1">
+                        <span>1</span>
+                    </label>
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="1" checked title="MMF 輸入 2">
+                        <span>2</span>
+                    </label>
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="2" checked title="MMF 輸入 3">
+                        <span>3</span>
+                    </label>
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="3" checked title="MMF 輸入 4">
+                        <span>4</span>
+                    </label>
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="4" checked title="MMF 輸入 5">
+                        <span>5</span>
+                    </label>
+                    <label class="checkbox-item mmf-axis-item">
+                        <input type="checkbox" class="mmfAxisCheckbox" value="5" checked title="MMF 輸入 6">
+                        <span>6</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="control-group">
+                <label>Filter 輸入軸</label>
+                <div class="checkbox-group axis-toggle-group">
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="0" checked title="Filter 角度輸入 1">
+                        <span>1</span>
+                    </label>
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="1" checked title="Filter 角度輸入 2">
+                        <span>2</span>
+                    </label>
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="2" checked title="Filter 角度輸入 3">
+                        <span>3</span>
+                    </label>
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="3" checked title="Filter 角度輸入 4">
+                        <span>4</span>
+                    </label>
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="4" checked title="Filter 角度輸入 5">
+                        <span>5</span>
+                    </label>
+                    <label class="checkbox-item axis-toggle-item">
+                        <input type="checkbox" class="filterInputAxisCheckbox" value="5" checked title="Filter 角度輸入 6">
+                        <span>6</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="btn-group">
+                <button class="btn-primary" id="btnPause">⏸ 暫停</button>
+                <button class="btn-secondary" id="btnClear">🗑 清除</button>
+                <button class="btn-secondary" id="btnResetZoom">🔄 重置縮放</button>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <canvas id="realtimeChart"></canvas>
+            <canvas id="chartOverlay"></canvas>
+            <div class="chart-legend" id="chartLegend" aria-hidden="true"></div>
+        </div>
+
+        <div class="stats-bar" id="statsBar">
+            <div class="stat-item">
+                <span class="stat-label">序號</span>
+                <span class="stat-value" id="statSeq">-</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">更新率</span>
+                <span class="stat-value ok" id="statRate">- Hz</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">實際位置</span>
+                <span class="stat-value pos" id="statAPos">- deg</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">實際速度</span>
+                <span class="stat-value vel" id="statAVel">- deg/s</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">狀態字</span>
+                <span class="stat-value" id="statSW">0x----</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label">控制字</span>
+                <span class="stat-value" id="statCW">0x----</span>
+            </div>
+        </div>
+
+        <div class="info-bar">
+            <strong>操作說明：</strong>
+            滑鼠滾輪縮放（以游標為中心） | 拖曳平移 | <kbd>Shift</kbd>+拖曳框選局部放大 | 雙擊或按鈕重置縮放 |
+            放大時所有原始樣本不抽樣繪製，避免波形失真 |
+            MMF 輸入 1~6 可分別開關 | 預設即時跟隨最新資料；移動時間軸後保留歷史視圖 |
+            Filter 角度輸入與 MMF 輸入 1~6 可分別開關 | MMF 輸入源為 500Hz，MMF 輸入速度優先使用 EtherCAT 週期同步取樣
+        </div>
+    </div>
+
+    <script>
+        // ===== 配置 =====
+        let MAX_POINTS = 5000;
+        const COLORS = {
+            aPos: '#36A2EB',
+            tPos: '#4BC0C0',
+            aVel: '#FF6384',
+            tVel: '#FF9F40',
+            filterInput: '#C6FF00',
+            mmfIn: '#9966FF',
+            mmfInVel: '#B39DDB',
+            filter: '#FFCD56',
+            filterVel: '#E91E63',
+            filterAcc: '#00BCD4',
+            ecatCycle: '#7CFC00'
+        };
+        const LABELS = {
+            aPos: '實際位置(0x6064)',
+            tPos: '邏輯目標位置(0x607A)',
+            aVel: '實際速度(0x606C)',
+            tVel: 'CSV命令速度(0x60FF)',
+            filterInput: 'Filter角度輸入',
+            mmfIn: 'MMF輸入',
+            mmfInVel: 'MMF輸入速度',
+            filter: 'Filter輸出',
+            filterVel: 'Filter速度',
+            filterAcc: 'Filter加速度',
+            ecatCycle: 'EtherCAT通訊週期'
+        };
+        const AXIS_CONFIG = {
+            position: { title: '位置 (deg)', color: '#36A2EB' },
+            velocity: { title: '速度 (deg/s)', color: '#FF6384' },
+            acceleration: { title: '加速度 (deg/s^2)', color: '#00BCD4' },
+            timing: { title: '週期 (ms)', color: '#7CFC00' }
+        };
+        const NOMINAL_MMF_INPUT_INTERVAL_MS = 2.0;
+        const MAX_MMF_VELOCITY_DT_SEC = 0.5;
+        const VELOCITY_TYPES = ['aVel', 'tVel', 'filterVel', 'mmfInVel'];
+        const ACCELERATION_TYPES = ['filterAcc'];
+        const TIMING_TYPES = ['ecatCycle'];
+        const GLOBAL_SIGNAL_TYPES = ['ecatCycle'];
+        const MMF_INPUT_TYPES = ['mmfIn', 'mmfInVel'];
+        const FILTER_INPUT_TYPES = ['filterInput'];
+
+        // ===== 狀態 =====
+        let isPaused = false;
+        let selectedSlave = 0;
+        let dataBuffer = [];
+        let pausedViewBuffer = null;
+        let lastSeq = null;
+        let updateCount = 0;
+        let lastRateTime = Date.now();
+        let currentRate = 0;
+        let eventSourceRT = null;
+        let renderFramePending = false;
+        let cachedSeriesKey = '';
+        let cachedSeriesList = [];
+        let scopeRenderer = null;
+        let previousMmfInSamples = Array.from({ length: 6 }, () => null);
+        const viewState = { autoX: true, xMin: 0, xMax: 1 };
+
+        // ===== DOM 元素 =====
+        const chartContainer = document.querySelector('.chart-container');
+        const chartCanvas = document.getElementById('realtimeChart');
+        const chartOverlay = document.getElementById('chartOverlay');
+        const chartLegend = document.getElementById('chartLegend');
+        const slaveSelect = document.getElementById('slaveSelect');
+        const maxPointsSelect = document.getElementById('maxPointsSelect');
+        const btnPause = document.getElementById('btnPause');
+        const btnClear = document.getElementById('btnClear');
+        const btnResetZoom = document.getElementById('btnResetZoom');
+        const checkboxes = document.querySelectorAll('.dataTypeCheckbox');
+        const mmfAxisCheckboxes = document.querySelectorAll('.mmfAxisCheckbox');
+        const filterInputAxisCheckboxes = document.querySelectorAll('.filterInputAxisCheckbox');
+        const chkMMFOutput = document.getElementById('chkMMFOutput');
+        const mmfInfo = document.getElementById('mmfInfo');
+
+        function clamp(value, min, max) {
+            return Math.min(max, Math.max(min, value));
+        }
+
+        function toFiniteNumber(value) {
+            const number = Number(value);
+            return Number.isFinite(number) ? number : null;
+        }
+
+        function formatStatValue(value, decimals, unit) {
+            if (!Number.isFinite(value)) {
+                return `- ${unit}`;
+            }
+            return `${value.toFixed(decimals)} ${unit}`;
+        }
+
+        function formatHexWord(value) {
+            if (!Number.isFinite(value)) {
+                return '0x----';
+            }
+            return `0x${(value & 0xFFFF).toString(16).toUpperCase().padStart(4, '0')}`;
+        }
+
+        function trimBufferToMaxPoints(buffer) {
+            if (!Array.isArray(buffer)) return;
+            const overflow = buffer.length - MAX_POINTS;
+            if (overflow > 0) {
+                buffer.splice(0, overflow);
+            }
+        }
+
+        function trimDataBufferToMaxPoints() {
+            trimBufferToMaxPoints(dataBuffer);
+            trimBufferToMaxPoints(pausedViewBuffer);
+        }
+
+        function getRenderBuffer() {
+            return isPaused && pausedViewBuffer ? pausedViewBuffer : dataBuffer;
+        }
+
+        function resetView() {
+            viewState.autoX = true;
+            viewState.xMin = 0;
+            viewState.xMax = 1;
+        }
+
+        function getAutoViewSpanMs(totalRange) {
+            if (!Number.isFinite(totalRange) || totalRange <= 0) {
+                return 1;
+            }
+            const configuredSpan = MAX_POINTS * NOMINAL_MMF_INPUT_INTERVAL_MS;
+            return clamp(configuredSpan, 1, totalRange);
+        }
+
+        function resetMmfInputVelocityState() {
+            previousMmfInSamples = Array.from({ length: 6 }, () => null);
+        }
+
+        function computeMmfInputVelocity(slaveIdx, positionValue, epochMs) {
+            if (!Number.isFinite(positionValue) || !Number.isFinite(epochMs)) {
+                return null;
+            }
+
+            const previous = previousMmfInSamples[slaveIdx];
+            let velocity = null;
+            if (previous && Number.isFinite(previous.value) && Number.isFinite(previous.epochMs)) {
+                const dtSec = (epochMs - previous.epochMs) / 1000.0;
+                if (dtSec > 0.0 && dtSec <= MAX_MMF_VELOCITY_DT_SEC) {
+                    velocity = (positionValue - previous.value) / dtSec;
+                }
+            }
+
+            previousMmfInSamples[slaveIdx] = { value: positionValue, epochMs };
+            return Number.isFinite(velocity) ? velocity : null;
+        }
+
+        function getSelectedTypes() {
+            return Array.from(checkboxes)
+                .filter(cb => cb.checked)
+                .map(cb => cb.value);
+        }
+
+        function isMmfInputType(type) {
+            return MMF_INPUT_TYPES.includes(type);
+        }
+
+        function isFilterInputType(type) {
+            return FILTER_INPUT_TYPES.includes(type);
+        }
+
+        function getSelectedAxisIndexes(axisCheckboxes, slaveCount) {
+            return Array.from(axisCheckboxes)
+                .filter(cb => cb.checked)
+                .map(cb => parseInt(cb.value, 10))
+                .filter(slaveIdx => Number.isInteger(slaveIdx) && slaveIdx >= 0 && slaveIdx < slaveCount);
+        }
+
+        function getSelectedMmfSlaveIndexes(slaveCount) {
+            return getSelectedAxisIndexes(mmfAxisCheckboxes, slaveCount);
+        }
+
+        function getSelectedFilterInputSlaveIndexes(slaveCount) {
+            return getSelectedAxisIndexes(filterInputAxisCheckboxes, slaveCount);
+        }
+
+        function getAxisKeyForType(type) {
+            if (TIMING_TYPES.includes(type)) return 'timing';
+            if (ACCELERATION_TYPES.includes(type)) return 'acceleration';
+            if (VELOCITY_TYPES.includes(type)) return 'velocity';
+            return 'position';
+        }
+
+        function getSlaveSeriesValue(slaves, slaveIdx, type) {
+            const slaveData = Array.isArray(slaves) ? slaves[slaveIdx] : null;
+            if (!slaveData || !Object.prototype.hasOwnProperty.call(slaveData, type)) {
+                return null;
+            }
+            return slaveData[type];
+        }
+
+        function getDataSeriesValue(entry, meta) {
+            if (meta.scope === 'global') {
+                return Object.prototype.hasOwnProperty.call(entry, meta.type) ? entry[meta.type] : null;
+            }
+            return getSlaveSeriesValue(entry.slaves, meta.slaveIdx, meta.type);
+        }
+
+        function adjustColor(hex, amount) {
+            const num = parseInt(hex.slice(1), 16);
+            let r = (num >> 16) + amount;
+            let g = ((num >> 8) & 0x00FF) + amount;
+            let b = (num & 0x0000FF) + amount;
+            r = Math.min(255, Math.max(0, r));
+            g = Math.min(255, Math.max(0, g));
+            b = Math.min(255, Math.max(0, b));
+            return `rgb(${r},${g},${b})`;
+        }
+
+        function formatAxisValue(value) {
+            const abs = Math.abs(value);
+            if (abs >= 1000) return value.toFixed(0);
+            if (abs >= 100) return value.toFixed(1);
+            if (abs >= 10) return value.toFixed(2);
+            return value.toFixed(3);
+        }
+
+        function formatClockTimeValue(epochMs) {
+            if (!Number.isFinite(epochMs)) {
+                return '[--:--:--.---]';
+            }
+            const date = new Date(epochMs);
+            const pad2 = value => String(value).padStart(2, '0');
+            const pad3 = value => String(value).padStart(3, '0');
+            return `[${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}.${pad3(date.getMilliseconds())}]`;
+        }
+
+        function colorToVector(color) {
+            if (color.startsWith('#')) {
+                const value = parseInt(color.slice(1), 16);
+                return [
+                    ((value >> 16) & 0xFF) / 255,
+                    ((value >> 8) & 0xFF) / 255,
+                    (value & 0xFF) / 255,
+                    1.0
+                ];
+            }
+            const match = color.match(/rgba?\(([^)]+)\)/i);
+            if (!match) return [1, 1, 1, 1];
+            const parts = match[1].split(',').map(part => Number(part.trim()));
+            return [
+                (parts[0] || 0) / 255,
+                (parts[1] || 0) / 255,
+                (parts[2] || 0) / 255,
+                Number.isFinite(parts[3]) ? parts[3] : 1.0
+            ];
+        }
+
+        function getDatasetKey() {
+            const selectedTypes = getSelectedTypes().sort();
+            const selectedMmfSlaves = Array.from(mmfAxisCheckboxes)
+                .filter(cb => cb.checked)
+                .map(cb => cb.value)
+                .join(',');
+            const selectedFilterInputSlaves = Array.from(filterInputAxisCheckboxes)
+                .filter(cb => cb.checked)
+                .map(cb => cb.value)
+                .join(',');
+            const renderBuffer = getRenderBuffer();
+            const slaveCount = Array.isArray(renderBuffer[0]?.slaves) && renderBuffer[0].slaves.length > 0
+                ? renderBuffer[0].slaves.length
+                : Math.max(0, slaveSelect.options.length - 1);
+            return `${selectedSlave}_${selectedTypes.join(',')}_${selectedMmfSlaves}_${selectedFilterInputSlaves}_${MAX_POINTS}_${slaveCount}`;
+        }
+
+        function buildVisibleSeriesList() {
+            const selectedTypes = getSelectedTypes();
+            const seriesList = [];
+            const renderBuffer = getRenderBuffer();
+            const slaveCount = Array.isArray(renderBuffer[0]?.slaves) && renderBuffer[0].slaves.length > 0
+                ? renderBuffer[0].slaves.length
+                : Math.max(0, slaveSelect.options.length - 1);
+
+            const pushSeries = (type, options = {}) => {
+                const scope = options.scope || 'slave';
+                const slaveIdx = scope === 'slave' ? options.slaveIdx : null;
+                seriesList.push({
+                    key: options.key || `${scope}_${slaveIdx ?? 'global'}_${type}`,
+                    scope,
+                    slaveIdx,
+                    type,
+                    axisKey: getAxisKeyForType(type),
+                    color: options.color || COLORS[type],
+                    label: options.label || LABELS[type]
+                });
+            };
+
+            if (selectedTypes.length === 0) {
+                return seriesList;
+            }
+
+            const pushSlaveSeriesForType = (type, slaveIndexes) => {
+                slaveIndexes.forEach(slaveIdx => {
+                    pushSeries(type, {
+                        scope: 'slave',
+                        slaveIdx,
+                        label: `軸${slaveIdx + 1} ${LABELS[type]}`,
+                        color: adjustColor(COLORS[type], slaveIdx * 26),
+                        key: `${slaveIdx}_${type}`
+                    });
+                });
+            };
+
+            const selectedMmfSlaveIndexes = getSelectedMmfSlaveIndexes(slaveCount);
+            const selectedFilterInputSlaveIndexes = getSelectedFilterInputSlaveIndexes(slaveCount);
+
+            if (selectedSlave === 'all') {
+                selectedTypes
+                    .filter(type => GLOBAL_SIGNAL_TYPES.includes(type))
+                    .forEach(type => {
+                        pushSeries(type, {
+                            scope: 'global',
+                            label: LABELS[type],
+                            key: `global_${type}`
+                        });
+                    });
+
+                for (let slaveIdx = 0; slaveIdx < slaveCount; slaveIdx++) {
+                    selectedTypes
+                        .filter(type => !GLOBAL_SIGNAL_TYPES.includes(type) && !isMmfInputType(type) && !isFilterInputType(type))
+                        .forEach(type => {
+                            pushSeries(type, {
+                                scope: 'slave',
+                                slaveIdx,
+                                label: `軸${slaveIdx + 1} ${LABELS[type]}`,
+                                color: adjustColor(COLORS[type], slaveIdx * 26),
+                                key: `${slaveIdx}_${type}`
+                            });
+                        });
+                }
+                selectedTypes
+                    .filter(type => isMmfInputType(type))
+                    .forEach(type => pushSlaveSeriesForType(type, selectedMmfSlaveIndexes));
+                selectedTypes
+                    .filter(type => isFilterInputType(type))
+                    .forEach(type => pushSlaveSeriesForType(type, selectedFilterInputSlaveIndexes));
+                return seriesList;
+            }
+
+            const slaveIdx = parseInt(selectedSlave, 10) || 0;
+            selectedTypes.forEach(type => {
+                if (GLOBAL_SIGNAL_TYPES.includes(type)) {
+                    pushSeries(type, {
+                        scope: 'global',
+                        label: LABELS[type],
+                        key: `global_${type}`
+                    });
+                } else if (isMmfInputType(type)) {
+                    pushSlaveSeriesForType(type, selectedMmfSlaveIndexes);
+                } else if (isFilterInputType(type)) {
+                    pushSlaveSeriesForType(type, selectedFilterInputSlaveIndexes);
+                } else {
+                    pushSeries(type, {
+                        scope: 'slave',
+                        slaveIdx,
+                        label: LABELS[type],
+                        key: `${slaveIdx}_${type}`
+                    });
+                }
+            });
+            return seriesList;
+        }
+
+        function getVisibleSeriesList() {
+            const key = getDatasetKey();
+            if (key !== cachedSeriesKey) {
+                cachedSeriesKey = key;
+                cachedSeriesList = buildVisibleSeriesList();
+                updateLegend(cachedSeriesList);
+            }
+            return cachedSeriesList;
+        }
+
+        function updateLegend(seriesList) {
+            if (!chartLegend) return;
+            if (!seriesList.length) {
+                chartLegend.innerHTML = '';
+                return;
+            }
+
+            const maxItems = 12;
+            const items = seriesList.slice(0, maxItems).map(series => {
+                return `<span class="chart-legend-item"><span class="chart-legend-line" style="background:${series.color}"></span><span>${series.label}</span></span>`;
+            });
+
+            if (seriesList.length > maxItems) {
+                items.push(`<span class="chart-legend-item">+${seriesList.length - maxItems} 條</span>`);
+            }
+            chartLegend.innerHTML = items.join('');
+        }
+
+        class GpuScopeRenderer {
+            constructor(glCanvas, overlayCanvas, container) {
+                this.glCanvas = glCanvas;
+                this.overlayCanvas = overlayCanvas;
+                this.container = container;
+                this.overlayCtx = overlayCanvas.getContext('2d', { alpha: true, desynchronized: true });
+                this.gl = this.initWebGL(glCanvas);
+                this.cssWidth = 0;
+                this.cssHeight = 0;
+                this.dpr = 1;
+                this.plotRect = { left: 60, top: 40, width: 100, height: 100, right: 160, bottom: 140 };
+                this.dragState = null;
+
+                const vertexShaderSource = `
+                    attribute vec2 a_position;
+                    uniform vec4 u_plotRect;
+                    void main() {
+                        vec2 clip = vec2(
+                            u_plotRect.x + a_position.x * u_plotRect.z,
+                            u_plotRect.y + a_position.y * u_plotRect.w
+                        );
+                        gl_Position = vec4(clip, 0.0, 1.0);
+                    }
+                `;
+
+                const fragmentShaderSource = `
+                    precision mediump float;
+                    uniform vec4 u_color;
+                    void main() {
+                        gl_FragColor = u_color;
+                    }
+                `;
+
+                this.program = this.createProgram(vertexShaderSource, fragmentShaderSource);
+                this.positionLocation = this.gl.getAttribLocation(this.program, 'a_position');
+                this.plotRectLocation = this.gl.getUniformLocation(this.program, 'u_plotRect');
+                this.colorLocation = this.gl.getUniformLocation(this.program, 'u_color');
+                this.vertexBuffer = this.gl.createBuffer();
+
+                this.gl.useProgram(this.program);
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+                this.gl.enableVertexAttribArray(this.positionLocation);
+                this.gl.vertexAttribPointer(this.positionLocation, 2, this.gl.FLOAT, false, 0, 0);
+                this.gl.clearColor(5 / 255, 5 / 255, 16 / 255, 1.0);
+                this.gl.enable(this.gl.BLEND);
+                this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
+
+                this.installInteractions();
+                this.ensureSize();
+            }
+
+            initWebGL(canvas) {
+                const attributes = {
+                    alpha: false,
+                    antialias: true,
+                    depth: false,
+                    stencil: false,
+                    preserveDrawingBuffer: false,
+                    desynchronized: true,
+                    powerPreference: 'high-performance'
+                };
+                const gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
+                if (!gl) {
+                    throw new Error('WebGL unavailable');
+                }
+                return gl;
+            }
+
+            createShader(type, source) {
+                const shader = this.gl.createShader(type);
+                this.gl.shaderSource(shader, source);
+                this.gl.compileShader(shader);
+                if (!this.gl.getShaderParameter(shader, this.gl.COMPILE_STATUS)) {
+                    const error = this.gl.getShaderInfoLog(shader);
+                    this.gl.deleteShader(shader);
+                    throw new Error(error || 'Shader compile failed');
+                }
+                return shader;
+            }
+
+            createProgram(vertexSource, fragmentSource) {
+                const vertexShader = this.createShader(this.gl.VERTEX_SHADER, vertexSource);
+                const fragmentShader = this.createShader(this.gl.FRAGMENT_SHADER, fragmentSource);
+                const program = this.gl.createProgram();
+                this.gl.attachShader(program, vertexShader);
+                this.gl.attachShader(program, fragmentShader);
+                this.gl.linkProgram(program);
+                this.gl.deleteShader(vertexShader);
+                this.gl.deleteShader(fragmentShader);
+                if (!this.gl.getProgramParameter(program, this.gl.LINK_STATUS)) {
+                    const error = this.gl.getProgramInfoLog(program);
+                    this.gl.deleteProgram(program);
+                    throw new Error(error || 'Program link failed');
+                }
+                return program;
+            }
+
+            ensureSize() {
+                const width = Math.max(1, this.container.clientWidth);
+                const height = Math.max(1, this.container.clientHeight);
+                const dpr = Math.max(1, window.devicePixelRatio || 1);
+                if (width === this.cssWidth && height === this.cssHeight && dpr === this.dpr) {
+                    return false;
+                }
+
+                this.cssWidth = width;
+                this.cssHeight = height;
+                this.dpr = dpr;
+
+                this.glCanvas.width = Math.round(width * dpr);
+                this.glCanvas.height = Math.round(height * dpr);
+                this.overlayCanvas.width = Math.round(width * dpr);
+                this.overlayCanvas.height = Math.round(height * dpr);
+                this.gl.viewport(0, 0, this.glCanvas.width, this.glCanvas.height);
+                return true;
+            }
+
+            computePlotRect(seriesList) {
+                const hasVelocity = seriesList.some(series => series.axisKey === 'velocity');
+                const hasAcceleration = seriesList.some(series => series.axisKey === 'acceleration');
+                const hasTiming = seriesList.some(series => series.axisKey === 'timing');
+                const left = this.cssWidth < 640 ? 60 : 74;
+                const rightAxisCount = (hasVelocity ? 1 : 0) + (hasAcceleration ? 1 : 0) + (hasTiming ? 1 : 0);
+                const right = rightAxisCount > 0
+                    ? (this.cssWidth < 640 ? 76 : 90) + Math.max(0, rightAxisCount - 1) * (this.cssWidth < 640 ? 42 : 44)
+                    : 18;
+                const top = seriesList.length > 0 ? 42 : 20;
+                const bottom = 34;
+                return {
+                    left,
+                    top,
+                    width: Math.max(48, this.cssWidth - left - right),
+                    height: Math.max(48, this.cssHeight - top - bottom),
+                    right: this.cssWidth - right,
+                    bottom: this.cssHeight - bottom,
+                    hasVelocity,
+                    hasAcceleration,
+                    hasTiming
+                };
+            }
+
+            resolveViewRange(totalRange) {
+                if (totalRange <= 0) {
+                    return { xMin: 0, xMax: 1, span: 1, totalRange: 1 };
+                }
+
+                if (viewState.autoX) {
+                    const span = getAutoViewSpanMs(totalRange);
+                    const xMin = Math.max(0, totalRange - span);
+                    viewState.xMin = xMin;
+                    viewState.xMax = totalRange;
+                    return { xMin, xMax: totalRange, span, totalRange };
+                }
+
+                let span = Math.max(4, viewState.xMax - viewState.xMin);
+                if (span >= totalRange * 0.995) {
+                    resetView();
+                    return { xMin: 0, xMax: totalRange, span: totalRange, totalRange };
+                }
+
+                span = Math.min(span, totalRange);
+                let xMin = clamp(viewState.xMin, 0, Math.max(0, totalRange - span));
+                let xMax = xMin + span;
+                if (xMax > totalRange) {
+                    xMax = totalRange;
+                    xMin = Math.max(0, xMax - span);
+                }
+
+                viewState.xMin = xMin;
+                viewState.xMax = xMax;
+                return { xMin, xMax, span, totalRange };
+            }
+
+            lowerBound(buffer, baseTime, target) {
+                let lo = 0;
+                let hi = buffer.length;
+                while (lo < hi) {
+                    const mid = (lo + hi) >> 1;
+                    const value = Number(buffer[mid].epoch || baseTime) - baseTime;
+                    if (value < target) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                return lo;
+            }
+
+            upperBound(buffer, baseTime, target) {
+                let lo = 0;
+                let hi = buffer.length;
+                while (lo < hi) {
+                    const mid = (lo + hi) >> 1;
+                    const value = Number(buffer[mid].epoch || baseTime) - baseTime;
+                    if (value <= target) {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                return lo;
+            }
+
+            computeAxisDomains(buffer, seriesList, baseTime, startIndex, endIndex) {
+                const domains = {
+                    position: { min: Infinity, max: -Infinity, visible: false },
+                    velocity: { min: Infinity, max: -Infinity, visible: false },
+                    acceleration: { min: Infinity, max: -Infinity, visible: false },
+                    timing: { min: Infinity, max: -Infinity, visible: false }
+                };
+
+                seriesList.forEach(series => {
+                    const domain = domains[series.axisKey];
+                    domain.visible = true;
+                    for (let i = startIndex; i < endIndex; i++) {
+                        const y = getDataSeriesValue(buffer[i], series);
+                        if (!Number.isFinite(y)) continue;
+                        if (y < domain.min) domain.min = y;
+                        if (y > domain.max) domain.max = y;
+                    }
+                });
+
+                Object.values(domains).forEach(domain => {
+                    if (!domain.visible || !Number.isFinite(domain.min) || !Number.isFinite(domain.max)) {
+                        domain.min = -1;
+                        domain.max = 1;
+                    } else if (domain.min === domain.max) {
+                        const pad = Math.max(Math.abs(domain.min) * 0.05, 1);
+                        domain.min -= pad;
+                        domain.max += pad;
+                    } else {
+                        const pad = (domain.max - domain.min) * 0.08;
+                        domain.min -= pad;
+                        domain.max += pad;
+                    }
+                    domain.span = Math.max(1e-9, domain.max - domain.min);
+                });
+
+                return domains;
+            }
+
+            buildSeriesGeometry(buffer, series, baseTime, startIndex, endIndex, viewRange, domains) {
+                const vertices = [];
+                const segments = [];
+                let runStart = 0;
+                let runCount = 0;
+
+                const closeRun = () => {
+                    if (runCount >= 2) {
+                        segments.push({ offset: runStart, count: runCount });
+                    } else if (runCount === 1) {
+                        vertices.length -= 2;
+                    }
+                    runCount = 0;
+                };
+
+                const axis = domains[series.axisKey];
+                for (let i = startIndex; i < endIndex; i++) {
+                    const entry = buffer[i];
+                    const xMs = Number(entry.epoch || baseTime) - baseTime;
+                    const y = getDataSeriesValue(entry, series);
+                    if (!Number.isFinite(y)) {
+                        closeRun();
+                        continue;
+                    }
+
+                    const xNorm = viewRange.span > 0 ? (xMs - viewRange.xMin) / viewRange.span : 0;
+                    const yNorm = (y - axis.min) / axis.span;
+                    if (!Number.isFinite(xNorm) || !Number.isFinite(yNorm)) {
+                        closeRun();
+                        continue;
+                    }
+
+                    if (runCount === 0) {
+                        runStart = vertices.length / 2;
+                    }
+                    vertices.push(clamp(xNorm, 0, 1), clamp(yNorm, 0, 1));
+                    runCount++;
+                }
+
+                closeRun();
+                return {
+                    series,
+                    vertices: new Float32Array(vertices),
+                    segments
+                };
+            }
+
+            getClipPlotRect(plotRect) {
+                return {
+                    x: (plotRect.left / this.cssWidth) * 2 - 1,
+                    y: ((this.cssHeight - (plotRect.top + plotRect.height)) / this.cssHeight) * 2 - 1,
+                    width: (plotRect.width / this.cssWidth) * 2,
+                    height: (plotRect.height / this.cssHeight) * 2
+                };
+            }
+
+            drawYAxis(ctx, plotRect, domain, axisConfig, side, tickOffset) {
+                if (!domain.visible) return;
+
+                const tickCount = 4;
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.fillStyle = axisConfig.color;
+                ctx.font = '11px Segoe UI';
+                ctx.textAlign = side === 'left' ? 'right' : 'left';
+                ctx.textBaseline = 'middle';
+
+                for (let i = 0; i <= tickCount; i++) {
+                    const ratio = i / tickCount;
+                    const y = plotRect.top + plotRect.height - plotRect.height * ratio;
+                    const value = domain.min + domain.span * ratio;
+                    const labelX = side === 'left'
+                        ? plotRect.left - 8
+                        : plotRect.left + plotRect.width + 8 + tickOffset;
+                    ctx.fillText(formatAxisValue(value), labelX, y);
+                }
+
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillText(
+                    axisConfig.title,
+                    side === 'left' ? plotRect.left : plotRect.left + plotRect.width + 8 + tickOffset,
+                    plotRect.top - 8
+                );
+            }
+
+            drawOverlay(seriesList, domains, plotRect, viewRange, emptyMessage, baseTime = Date.now()) {
+                const ctx = this.overlayCtx;
+                if (!ctx) return;
+
+                ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+                ctx.clearRect(0, 0, this.cssWidth, this.cssHeight);
+
+                ctx.fillStyle = 'rgba(255,255,255,0.02)';
+                ctx.fillRect(plotRect.left, plotRect.top, plotRect.width, plotRect.height);
+
+                const xTicks = Math.min(8, Math.max(3, Math.floor(plotRect.width / 150)));
+                ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+                ctx.lineWidth = 1;
+                for (let i = 0; i <= xTicks; i++) {
+                    const x = plotRect.left + plotRect.width * (i / xTicks);
+                    ctx.beginPath();
+                    ctx.moveTo(x, plotRect.top);
+                    ctx.lineTo(x, plotRect.top + plotRect.height);
+                    ctx.stroke();
+                }
+
+                const yTicks = 4;
+                for (let i = 0; i <= yTicks; i++) {
+                    const y = plotRect.top + plotRect.height * (i / yTicks);
+                    ctx.beginPath();
+                    ctx.moveTo(plotRect.left, y);
+                    ctx.lineTo(plotRect.left + plotRect.width, y);
+                    ctx.stroke();
+                }
+
+                ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+                ctx.strokeRect(plotRect.left, plotRect.top, plotRect.width, plotRect.height);
+
+                ctx.fillStyle = '#8892a6';
+                ctx.font = '11px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'top';
+                for (let i = 0; i <= xTicks; i++) {
+                    const ratio = i / xTicks;
+                    const x = plotRect.left + plotRect.width * ratio;
+                    const value = viewRange.xMin + viewRange.span * ratio;
+                    ctx.fillText(formatClockTimeValue(baseTime + value), x, plotRect.top + plotRect.height + 8);
+                }
+                ctx.fillText('實際時間', plotRect.left + plotRect.width / 2, this.cssHeight - 16);
+
+                this.drawYAxis(ctx, plotRect, domains.position, AXIS_CONFIG.position, 'left', 0);
+                let rightTickOffset = 0;
+                if (domains.velocity.visible) {
+                    this.drawYAxis(ctx, plotRect, domains.velocity, AXIS_CONFIG.velocity, 'right', rightTickOffset);
+                    rightTickOffset += 52;
+                }
+                if (domains.acceleration.visible) {
+                    this.drawYAxis(ctx, plotRect, domains.acceleration, AXIS_CONFIG.acceleration, 'right', rightTickOffset);
+                    rightTickOffset += 58;
+                }
+                if (domains.timing.visible) {
+                    this.drawYAxis(ctx, plotRect, domains.timing, AXIS_CONFIG.timing, 'right', rightTickOffset);
+                }
+
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'alphabetic';
+                ctx.fillStyle = 'rgba(255,255,255,0.78)';
+                ctx.fillText(viewState.autoX ? 'AUTO VIEW' : 'ZOOM VIEW', plotRect.left, 18);
+
+                if (emptyMessage) {
+                    ctx.fillStyle = 'rgba(255,255,255,0.82)';
+                    ctx.font = '15px Segoe UI';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText(emptyMessage, plotRect.left + plotRect.width / 2, plotRect.top + plotRect.height / 2);
+                }
+
+                if (this.boxZoomRect) {
+                    const x1 = clamp(this.boxZoomRect.x1, plotRect.left, plotRect.left + plotRect.width);
+                    const x2 = clamp(this.boxZoomRect.x2, plotRect.left, plotRect.left + plotRect.width);
+                    const left = Math.min(x1, x2);
+                    const width = Math.max(1, Math.abs(x2 - x1));
+                    ctx.save();
+                    ctx.fillStyle = 'rgba(255, 215, 64, 0.15)';
+                    ctx.strokeStyle = 'rgba(255, 215, 64, 0.85)';
+                    ctx.lineWidth = 1;
+                    ctx.fillRect(left, plotRect.top, width, plotRect.height);
+                    ctx.strokeRect(left + 0.5, plotRect.top + 0.5, width - 1, plotRect.height - 1);
+                    ctx.fillStyle = 'rgba(255, 215, 64, 0.95)';
+                    ctx.font = '11px Segoe UI';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'top';
+                    ctx.fillText('Shift+\u62d6\u66f3\uff1a\u91cb\u653e\u5f8c\u653e\u5927\u9078\u53d6\u5340\u9593',
+                        left + width / 2, plotRect.top + 4);
+                    ctx.restore();
+                }
+            }
+
+            drawGeometries(geometries, plotRect) {
+                const clipRect = this.getClipPlotRect(plotRect);
+                this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+                this.gl.useProgram(this.program);
+                this.gl.uniform4f(this.plotRectLocation, clipRect.x, clipRect.y, clipRect.width, clipRect.height);
+                this.gl.bindBuffer(this.gl.ARRAY_BUFFER, this.vertexBuffer);
+                this.gl.enableVertexAttribArray(this.positionLocation);
+                this.gl.vertexAttribPointer(this.positionLocation, 2, this.gl.FLOAT, false, 0, 0);
+
+                const scissorX = Math.round(plotRect.left * this.dpr);
+                const scissorY = this.glCanvas.height - Math.round((plotRect.top + plotRect.height) * this.dpr);
+                const scissorW = Math.max(1, Math.round(plotRect.width * this.dpr));
+                const scissorH = Math.max(1, Math.round(plotRect.height * this.dpr));
+                this.gl.enable(this.gl.SCISSOR_TEST);
+                this.gl.scissor(scissorX, scissorY, scissorW, scissorH);
+
+                geometries.forEach(geometry => {
+                    if (!geometry.vertices.length || geometry.segments.length === 0) {
+                        return;
+                    }
+
+                    const color = colorToVector(geometry.series.color);
+                    this.gl.uniform4f(this.colorLocation, color[0], color[1], color[2], color[3]);
+                    this.gl.bufferData(this.gl.ARRAY_BUFFER, geometry.vertices, this.gl.DYNAMIC_DRAW);
+                    geometry.segments.forEach(segment => {
+                        this.gl.drawArrays(this.gl.LINE_STRIP, segment.offset, segment.count);
+                    });
+                });
+
+                this.gl.disable(this.gl.SCISSOR_TEST);
+            }
+
+            render(buffer, seriesList) {
+                this.ensureSize();
+                this.plotRect = this.computePlotRect(seriesList);
+
+                if (buffer.length < 2) {
+                    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+                    this.drawOverlay(
+                        seriesList,
+                        {
+                            position: { ...AXIS_CONFIG.position, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'position') },
+                            velocity: { ...AXIS_CONFIG.velocity, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'velocity') },
+                            acceleration: { ...AXIS_CONFIG.acceleration, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'acceleration') },
+                            timing: { ...AXIS_CONFIG.timing, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'timing') }
+                        },
+                        this.plotRect,
+                        { xMin: 0, xMax: 1, span: 1 },
+                        seriesList.length ? '等待 PDO 即時資料...' : '請至少選擇一種數據類型',
+                        Date.now()
+                    );
+                    return;
+                }
+
+                const baseTime = Number(buffer[0].epoch) || Date.now();
+                const totalRange = Math.max(1, (Number(buffer[buffer.length - 1].epoch) || baseTime) - baseTime);
+                const viewRange = this.resolveViewRange(totalRange);
+                const startIndex = this.lowerBound(buffer, baseTime, viewRange.xMin);
+                const endIndex = this.upperBound(buffer, baseTime, viewRange.xMax);
+                const domains = this.computeAxisDomains(buffer, seriesList, baseTime, startIndex, endIndex);
+                const geometries = seriesList.map(series => {
+                    return this.buildSeriesGeometry(buffer, series, baseTime, startIndex, endIndex, viewRange, domains);
+                });
+
+                this.drawGeometries(geometries, this.plotRect);
+                this.drawOverlay(seriesList, domains, this.plotRect, viewRange, '', baseTime);
+            }
+
+            installInteractions() {
+                const getLocalPoint = (event) => {
+                    const rect = this.container.getBoundingClientRect();
+                    return {
+                        x: event.clientX - rect.left,
+                        y: event.clientY - rect.top
+                    };
+                };
+
+                const isInsidePlot = (point) => {
+                    return point.x >= this.plotRect.left &&
+                        point.x <= this.plotRect.left + this.plotRect.width &&
+                        point.y >= this.plotRect.top &&
+                        point.y <= this.plotRect.top + this.plotRect.height;
+                };
+
+                this.container.addEventListener('wheel', (event) => {
+                    if (dataBuffer.length < 2) return;
+                    const point = getLocalPoint(event);
+                    if (!isInsidePlot(point)) return;
+
+                    event.preventDefault();
+                    const baseTime = Number(dataBuffer[0]?.epoch) || 0;
+                    const totalRange = Math.max(1, (Number(dataBuffer[dataBuffer.length - 1]?.epoch) || baseTime) - baseTime);
+                    const currentRange = this.resolveViewRange(totalRange);
+                    const ratio = clamp((point.x - this.plotRect.left) / Math.max(1, this.plotRect.width), 0, 1);
+                    const zoomFactor = event.deltaY < 0 ? 0.84 : 1.18;
+                    let newSpan = clamp(currentRange.span * zoomFactor, 4, totalRange);
+
+                    if (newSpan >= totalRange * 0.995) {
+                        resetView();
+                        scheduleChartUpdate(true);
+                        return;
+                    }
+
+                    const focus = currentRange.xMin + currentRange.span * ratio;
+                    let xMin = focus - newSpan * ratio;
+                    xMin = clamp(xMin, 0, Math.max(0, totalRange - newSpan));
+
+                    viewState.autoX = false;
+                    viewState.xMin = xMin;
+                    viewState.xMax = xMin + newSpan;
+                    scheduleChartUpdate();
+                }, { passive: false });
+
+                this.container.addEventListener('pointerdown', (event) => {
+                    if (event.button !== 0 || dataBuffer.length < 2) return;
+                    const point = getLocalPoint(event);
+                    if (!isInsidePlot(point)) return;
+
+                    const baseTime = Number(dataBuffer[0]?.epoch) || 0;
+                    const totalRange = Math.max(1, (Number(dataBuffer[dataBuffer.length - 1]?.epoch) || baseTime) - baseTime);
+                    const currentRange = this.resolveViewRange(totalRange);
+
+                    if (event.shiftKey) {
+                        // Shift+drag: box-zoom for inspecting a localized region
+                        this.boxZoomState = {
+                            pointerId: event.pointerId,
+                            startX: point.x,
+                            currentX: point.x,
+                            baseTime,
+                            totalRange,
+                            currentRange
+                        };
+                        this.boxZoomRect = { x1: point.x, x2: point.x };
+                        this.container.classList.add('is-panning');
+                        this.container.setPointerCapture(event.pointerId);
+                        event.preventDefault();
+                        scheduleChartUpdate();
+                        return;
+                    }
+
+                    this.dragState = {
+                        pointerId: event.pointerId,
+                        startX: point.x,
+                        startMin: currentRange.xMin,
+                        span: currentRange.span,
+                        totalRange
+                    };
+                    this.container.classList.add('is-panning');
+                    this.container.setPointerCapture(event.pointerId);
+                    event.preventDefault();
+                });
+
+                this.container.addEventListener('pointermove', (event) => {
+                    if (this.boxZoomState && event.pointerId === this.boxZoomState.pointerId) {
+                        const point = getLocalPoint(event);
+                        this.boxZoomState.currentX = point.x;
+                        this.boxZoomRect = { x1: this.boxZoomState.startX, x2: point.x };
+                        scheduleChartUpdate();
+                        return;
+                    }
+                    if (!this.dragState || event.pointerId !== this.dragState.pointerId) return;
+                    const point = getLocalPoint(event);
+                    const deltaPx = point.x - this.dragState.startX;
+                    const msPerPx = this.dragState.span / Math.max(1, this.plotRect.width);
+                    let xMin = this.dragState.startMin - deltaPx * msPerPx;
+                    xMin = clamp(xMin, 0, Math.max(0, this.dragState.totalRange - this.dragState.span));
+
+                    viewState.autoX = false;
+                    viewState.xMin = xMin;
+                    viewState.xMax = xMin + this.dragState.span;
+                    scheduleChartUpdate();
+                });
+
+                const clearDrag = (event) => {
+                    if (this.boxZoomState && (!event || event.pointerId === undefined || event.pointerId === this.boxZoomState.pointerId)) {
+                        const state = this.boxZoomState;
+                        this.boxZoomState = null;
+                        const rect = this.boxZoomRect;
+                        this.boxZoomRect = null;
+                        try {
+                            this.container.releasePointerCapture(state.pointerId);
+                        } catch (_) {
+                        }
+                        this.container.classList.remove('is-panning');
+
+                        if (rect) {
+                            const plotLeft = this.plotRect.left;
+                            const plotWidth = Math.max(1, this.plotRect.width);
+                            const x1 = clamp(rect.x1, plotLeft, plotLeft + plotWidth);
+                            const x2 = clamp(rect.x2, plotLeft, plotLeft + plotWidth);
+                            const pxLeft = Math.min(x1, x2);
+                            const pxRight = Math.max(x1, x2);
+                            // Require a minimum drag distance to avoid accidental selection on click
+                            if (pxRight - pxLeft >= 6) {
+                                const msPerPx = state.currentRange.span / plotWidth;
+                                const newMin = state.currentRange.xMin + (pxLeft - plotLeft) * msPerPx;
+                                const newMax = state.currentRange.xMin + (pxRight - plotLeft) * msPerPx;
+                                let newSpan = Math.max(4, newMax - newMin);
+                                let xMin = clamp(newMin, 0, Math.max(0, state.totalRange - newSpan));
+                                viewState.autoX = false;
+                                viewState.xMin = xMin;
+                                viewState.xMax = xMin + newSpan;
+                            }
+                        }
+                        scheduleChartUpdate();
+                        return;
+                    }
+                    if (!this.dragState) return;
+                    if (event && event.pointerId !== undefined && event.pointerId !== this.dragState.pointerId) return;
+                    try {
+                        this.container.releasePointerCapture(this.dragState.pointerId);
+                    } catch (_) {
+                    }
+                    this.dragState = null;
+                    this.container.classList.remove('is-panning');
+                };
+
+                this.container.addEventListener('pointerup', clearDrag);
+                this.container.addEventListener('pointercancel', clearDrag);
+                this.container.addEventListener('pointerleave', (event) => {
+                    if (this.dragState && event.buttons === 0) {
+                        clearDrag(event);
+                    }
+                });
+
+                this.container.addEventListener('dblclick', (event) => {
+                    const point = getLocalPoint(event);
+                    if (!isInsidePlot(point)) return;
+                    resetView();
+                    scheduleChartUpdate(true);
+                });
+            }
+        }
+
+        function initChart() {
+            try {
+                scopeRenderer = new GpuScopeRenderer(chartCanvas, chartOverlay, chartContainer);
+            } catch (error) {
+                console.error('WebGL init error:', error);
+                const ctx = chartOverlay.getContext('2d');
+                if (ctx) {
+                    ctx.clearRect(0, 0, chartOverlay.width, chartOverlay.height);
+                    ctx.fillStyle = '#ff8888';
+                    ctx.font = '14px Segoe UI';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
+                    ctx.fillText('WebGL 初始化失敗', chartOverlay.width / 2, chartOverlay.height / 2);
+                }
+            }
+            updateLegend(getVisibleSeriesList());
+            scheduleChartUpdate(true);
+        }
+
+        function scheduleChartUpdate(fullRebuild = false) {
+            if (fullRebuild) {
+                cachedSeriesKey = '';
+            }
+            if (renderFramePending) {
+                return;
+            }
+            renderFramePending = true;
+            window.requestAnimationFrame(() => {
+                renderFramePending = false;
+                updateChart();
+            });
+        }
+
+        function updateChart() {
+            if (!scopeRenderer) return;
+            scopeRenderer.render(getRenderBuffer(), getVisibleSeriesList());
+        }
+
+        function resetStatsDisplay() {
+            updateCount = 0;
+            currentRate = 0;
+            lastRateTime = Date.now();
+            document.getElementById('statSeq').textContent = '-';
+            document.getElementById('statRate').textContent = '- Hz';
+            document.getElementById('statAPos').textContent = '- deg';
+            document.getElementById('statAVel').textContent = '- deg/s';
+            document.getElementById('statSW').textContent = '0x----';
+            document.getElementById('statCW').textContent = '0x----';
+        }
+
+        function setPaused(paused) {
+            isPaused = paused;
+            pausedViewBuffer = paused ? dataBuffer.slice() : null;
+            btnPause.textContent = isPaused ? '▶ 繼續' : '⏸ 暫停';
+            btnPause.classList.toggle('btn-danger', isPaused);
+            btnPause.classList.toggle('btn-primary', !isPaused);
+            btnPause.setAttribute('aria-pressed', isPaused ? 'true' : 'false');
+            if (!isPaused && dataBuffer.length > 0) {
+                updateStats(dataBuffer[dataBuffer.length - 1]);
+            }
+            scheduleChartUpdate(true);
+        }
+
+        function normalizeScopeSample(json) {
+            const reportedSlaveCount = Number.isFinite(Number(json.count))
+                ? clamp(Math.trunc(Number(json.count)), 0, 6)
+                : 6;
+            const pdoSamplesReady = json.mmfReady === true;
+            const mmfInputReady = json.mmfInRunning === true;
+            const ecatCycle = (json.ecatCycleUs !== undefined && Number(json.ecatCycleUs) > 0)
+                ? Number(json.ecatCycleUs) / 1000.0
+                : null;
+            const sampleEpoch = Number(json.epoch || json.ts || Date.now());
+
+            if (!pdoSamplesReady && !mmfInputReady && ecatCycle === null) {
+                resetMmfInputVelocityState();
+                return null;
+            }
+
+            if (!mmfInputReady) {
+                resetMmfInputVelocityState();
+            }
+
+            const slaves = [];
+            for (let slaveIdx = 0; slaveIdx < 6; slaveIdx++) {
+                const source = Array.isArray(json.slaves) ? json.slaves[slaveIdx] : null;
+                const hasPdoSample = pdoSamplesReady && slaveIdx < reportedSlaveCount && source;
+                const hasMmfInput = mmfInputReady && source;
+                const mmfIn = hasMmfInput ? toFiniteNumber(source.mmfIn) : null;
+                const backendMmfInVel = hasMmfInput ? toFiniteNumber(source.mmfInVel) : null;
+                const fallbackMmfInVel = computeMmfInputVelocity(slaveIdx, mmfIn, sampleEpoch);
+                slaves.push({
+                    aPos: hasPdoSample ? toFiniteNumber(source.aPos) : null,
+                    tPos: hasPdoSample ? toFiniteNumber(source.tPos) : null,
+                    aVel: hasPdoSample ? toFiniteNumber(source.aVel) : null,
+                    tVel: hasPdoSample ? toFiniteNumber(source.tVel) : null,
+                    mmfIn,
+                    mmfInVel: backendMmfInVel !== null ? backendMmfInVel : fallbackMmfInVel,
+                    filterInput: hasPdoSample ? toFiniteNumber(source.filterInput) : null,
+                    filter: hasPdoSample ? toFiniteNumber(source.filter) : null,
+                    filterVel: hasPdoSample ? toFiniteNumber(source.filterVel) : null,
+                    filterAcc: hasPdoSample ? toFiniteNumber(source.filterAcc) : null,
+                    sw: hasPdoSample ? toFiniteNumber(source.sw) : null,
+                    cw: hasPdoSample ? toFiniteNumber(source.cw) : null
+                });
+            }
+
+            return {
+                time: Date.now(),
+                epoch: sampleEpoch,
+                seq: json.seq,
+                ecatCycle,
+                slaves
+            };
+        }
+
+        // ===== 更新統計 =====
+        function updateStats(data) {
+            document.getElementById('statSeq').textContent = data.seq || '-';
+
+            updateCount++;
+            const now = Date.now();
+            if (now - lastRateTime >= 1000) {
+                currentRate = updateCount;
+                updateCount = 0;
+                lastRateTime = now;
+            }
+            document.getElementById('statRate').textContent = `${currentRate} Hz`;
+
+            const slaveIdx = selectedSlave === 'all' ? 0 : parseInt(selectedSlave, 10);
+            if (data.slaves && data.slaves[slaveIdx]) {
+                const s = data.slaves[slaveIdx];
+                document.getElementById('statAPos').textContent = formatStatValue(s.aPos, 3, 'deg');
+                document.getElementById('statAVel').textContent = formatStatValue(s.aVel, 1, 'deg/s');
+                document.getElementById('statSW').textContent = formatHexWord(s.sw);
+                document.getElementById('statCW').textContent = formatHexWord(s.cw);
+            }
+        }
+
+        // ===== SSE 連線 =====
+        function setupSSE() {
+            try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {}
+
+            try {
+                eventSourceRT = new EventSource('/pdo_sse');
+
+                eventSourceRT.onopen = () => {
+                    try { if (window.StatusUI && typeof window.StatusUI.setConnected === 'function') window.StatusUI.setConnected(); } catch(_) {}
+                };
+
+                eventSourceRT.onmessage = (event) => {
+                    try {
+                        const json = JSON.parse(event.data);
+
+                        if (typeof json.connect !== 'undefined' || typeof json.fault_reset !== 'undefined' || typeof json.down_to_origin !== 'undefined') {
+                            try {
+                                const btnConnect = document.getElementById('btnConnect');
+                                const btnDisconnect = document.getElementById('btnDisconnect');
+                                if (btnConnect) btnConnect.disabled = !!json.connect;
+                                if (btnDisconnect) btnDisconnect.disabled = !!json.disconnect;
+                                const resetBtn = document.getElementById('btnReset');
+                                if (resetBtn) resetBtn.disabled = !!json.fault_reset;
+                            } catch(_) {}
+                        }
+
+                        if (json.mmfOutput !== undefined) {
+                            chkMMFOutput.checked = json.mmfOutput;
+                            if (json.mmfOutput) {
+                                mmfInfo.textContent = 'Mapping: Local\\WuEtherCAT_PDO  Magic:WUMF v2  資料存檔在\\logs\\PDO.log';
+                                mmfInfo.style.color = '#4BC0C0';
+                            } else {
+                                mmfInfo.textContent = 'MMF: disabled  資料存檔在\\logs\\PDO.log';
+                                mmfInfo.style.color = '#888';
+                            }
+                            return;
+                        }
+
+                        if (!Array.isArray(json.slaves) || json.slaves.length === 0) {
+                            return;
+                        }
+
+                        if (json.seq !== undefined && json.seq === lastSeq) return;
+                        lastSeq = json.seq;
+
+                        const sample = normalizeScopeSample(json);
+                        if (!sample) return;
+
+                        dataBuffer.push(sample);
+                        trimDataBufferToMaxPoints();
+
+                        if (!isPaused) {
+                            scheduleChartUpdate();
+                            updateStats(sample);
+                        }
+
+                    } catch (e) {
+                        console.error('SSE parse error:', e);
+                    }
+                };
+
+                eventSourceRT.onerror = () => {
+                    try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {}
+                };
+
+            } catch (e) {
+                console.error('SSE error:', e);
+            }
+        }
+
+        // ===== 事件綁定 =====
+        slaveSelect.addEventListener('change', (e) => {
+            selectedSlave = e.target.value;
+            scheduleChartUpdate(true);
+        });
+
+        maxPointsSelect.addEventListener('change', (e) => {
+            MAX_POINTS = parseInt(e.target.value, 10);
+            trimDataBufferToMaxPoints();
+            scheduleChartUpdate(true);
+        });
+
+        checkboxes.forEach(cb => {
+            cb.addEventListener('change', () => scheduleChartUpdate(true));
+        });
+
+        mmfAxisCheckboxes.forEach(cb => {
+            cb.addEventListener('change', () => scheduleChartUpdate(true));
+        });
+
+        filterInputAxisCheckboxes.forEach(cb => {
+            cb.addEventListener('change', () => scheduleChartUpdate(true));
+        });
+
+        btnPause.addEventListener('click', () => {
+            if (!window._loggedIn) {
+                alert('請先登入');
+                return;
+            }
+            setPaused(!isPaused);
+        });
+
+        btnClear.addEventListener('click', () => {
+            if (!window._loggedIn) {
+                alert('請先登入');
+                return;
+            }
+            dataBuffer = [];
+            pausedViewBuffer = isPaused ? [] : null;
+            lastSeq = null;
+            resetMmfInputVelocityState();
+            resetView();
+            resetStatsDisplay();
+            scheduleChartUpdate(true);
+        });
+
+        btnResetZoom.addEventListener('click', () => {
+            if (!window._loggedIn) {
+                alert('請先登入');
+                return;
+            }
+            resetView();
+            scheduleChartUpdate(true);
+        });
+
+        function disableAllButtons() {
+            const buttonIds = ['btnPause', 'btnClear', 'btnResetZoom'];
+            buttonIds.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.classList.add('disabled');
+                    btn.disabled = true;
+                    btn.setAttribute('aria-disabled', 'true');
+                }
+            });
+            chkMMFOutput.disabled = true;
+        }
+
+        function updateAllButtonStates() {
+            const buttonIds = ['btnPause', 'btnClear', 'btnResetZoom'];
+            buttonIds.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) {
+                    btn.classList.remove('disabled');
+                    btn.disabled = false;
+                    btn.setAttribute('aria-disabled', 'false');
+                }
+            });
+            chkMMFOutput.disabled = false;
+        }
+
+        let globalApiKey = '';
+
+        async function loadApiKey() {
+            try {
+                const response = await fetch('/api/get-key', { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    globalApiKey = data.api_key || '';
+                    console.log('API key loaded from server');
+                } else {
+                    console.error('Failed to load API key from server');
+                }
+            } catch (error) {
+                console.error('Error loading API key:', error);
+            }
+        }
+
+        async function loadMMFStatus() {
+            try {
+                const response = await fetch('/api/mmf/status', { cache: 'no-store' });
+                if (response.ok) {
+                    const data = await response.json();
+                    chkMMFOutput.checked = data.enabled || false;
+                    if (data.enabled) {
+                        mmfInfo.textContent = 'MMF: enabled  資料存檔在\\logs\\PDO.log';
+                        mmfInfo.style.color = '#4BC0C0';
+                    } else {
+                        mmfInfo.textContent = 'MMF: disabled  資料存檔在\\logs\\PDO.log';
+                        mmfInfo.style.color = '#888';
+                    }
+                    console.log('MMF status loaded:', data.enabled);
+                } else {
+                    console.error('Failed to load MMF status');
+                }
+            } catch (error) {
+                console.error('Error loading MMF status:', error);
+            }
+        }
+
+        chkMMFOutput.addEventListener('change', async () => {
+            const enabled = chkMMFOutput.checked;
+            if (!window._loggedIn) {
+                chkMMFOutput.checked = !enabled;
+                alert('請先登入');
+                return;
+            }
+            try {
+                if (enabled) {
+                    const headers = {
+                        'Content-Type': 'application/json; charset=utf-8',
+                        'X-API-Key': globalApiKey
+                    };
+
+                    const response = await fetch('/api/mmf/enable', {
+                        method: 'POST',
+                        headers,
+                        body: JSON.stringify({ mapping: 'Local\\WuEtherCAT_PDO' })
+                    });
+
+                    if (response.ok) {
+                        mmfInfo.textContent = 'Mapping: Local\\WuEtherCAT_PDO  Magic:WUMF v2  資料存檔在\\logs\\PDO.log';
+                        mmfInfo.style.color = '#4BC0C0';
+                        console.log('MMF 輸出已啟用');
+                    } else if (response.status === 401) {
+                        throw new Error('未授權 (401) - 請先登入');
+                    } else {
+                        const text = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${text || '啟用失敗'}`);
+                    }
+                } else {
+                    const headers = {
+                        'X-API-Key': globalApiKey
+                    };
+
+                    const response = await fetch('/api/mmf/disable', {
+                        method: 'POST',
+                        headers
+                    });
+
+                    if (response.ok) {
+                        mmfInfo.textContent = 'MMF: disabled  資料存檔在\\logs\\PDO.log';
+                        mmfInfo.style.color = '#888';
+                        console.log('MMF 輸出已停用，PDO 記錄寫入中');
+                    } else if (response.status === 401) {
+                        throw new Error('未授權 (401) - 請先登入');
+                    } else {
+                        const text = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${text || '停用失敗'}`);
+                    }
+                }
+            } catch (error) {
+                console.error('MMF 控制錯誤:', error);
+                chkMMFOutput.checked = !enabled;
+                alert('MMF 輸出控制失敗: ' + error.message);
+            }
+        });
+
+        // ===== 啟動 =====
+        (async function init() {
+            await window.Auth.ready();
+            initChart();
+
+            if (!window._loggedIn) {
+                disableAllButtons();
+            } else {
+                updateAllButtonStates();
+            }
+
+            if (window._loggedIn) {
+                await loadApiKey();
+                await loadMMFStatus();
+            }
+            setupSSE();
+            window.Auth.createKeepalive();
+
+            window.addEventListener('wusoem-auth-change', (e) => {
+                const loggedIn = !!(e && e.detail && e.detail.loggedIn);
+                if (!loggedIn) {
+                    console.log('Auth change: logging out');
+                    globalApiKey = '';
+                    setPaused(false);
+                    disableAllButtons();
+                    if (eventSourceRT) {
+                        eventSourceRT.close();
+                        eventSourceRT = null;
+                    }
+                    try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {}
+                    dataBuffer = [];
+                    pausedViewBuffer = null;
+                    lastSeq = null;
+                    resetMmfInputVelocityState();
+                    resetStatsDisplay();
+                    resetView();
+                    scheduleChartUpdate(true);
+                } else {
+                    console.log('Auth change: logging in, restoring SSE connection');
+                    loadApiKey().then(() => loadMMFStatus()).then(() => {
+                        updateAllButtonStates();
+                        if (eventSourceRT) {
+                            eventSourceRT.close();
+                            eventSourceRT = null;
+                        }
+                        setupSSE();
+                        try { if (window.StatusUI && typeof window.StatusUI.setHeartbeat === 'function') window.StatusUI.setHeartbeat(true); } catch(_) {}
+                    });
+                }
+            });
+
+            window.Auth.installBfcacheReload();
+
+            try {
+                if (window._loggedIn) {
+                    try { if (window.StatusUI && typeof window.StatusUI.setHeartbeat === 'function') window.StatusUI.setHeartbeat(true); } catch(_) {}
+                }
+            } catch(_) {}
+        })();
+
+    </script>
+    <!-- 侧滑菜单功能 -->
+    <script src="sidebar-menu.js"></script>
+</body>
+
+</html>

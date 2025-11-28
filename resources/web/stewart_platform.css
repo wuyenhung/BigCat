@@ -1,0 +1,45 @@
+/* Page-specific styles for stewart_platform.html */
+
+/* Header */
+.stewart-header { text-align: center; font-size: 16px; }
+
+/* Hidden helper */
+.hidden { display: none !important; }
+
+/* Initial height display */
+.initial-height-display {
+    background-color: transparent;
+    border: none;
+    font-weight: bold;
+    color: #0066cc;
+    font-size: 1.1em;
+    padding-left: 0;
+}
+
+/* Spacing helpers */
+.button-group--mt8 { margin-top: 8px; }
+.input-group--mb12 { margin-bottom: 12px; }
+.button-group--no-margin { margin: 0; }
+
+/* Coordinate selection */
+.coord-label { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
+.flex-gap-12 { display: flex; gap: 12px; }
+.coord-hint { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
+
+/* Value displays */
+.value-bold { font-weight: bold; }
+.text-small { font-size: 11px; }
+.label-inline--small { margin: 0; font-size: 11px; }
+
+/* Canvas view buttons */
+.canvas-view-btns { margin: 0; }
+
+/* Legend color classes */
+.legend-driving { color: #ff4444; }
+.legend-rod { color: #00aa44; }
+.legend-traj { color: #ff6464; }
+.legend-current { color: #ff6600; }
+.legend-direction { color: #ff9999; }
+
+/* Accessibility tweaks for small elements */
+.stewart-small { font-size: 11px; }

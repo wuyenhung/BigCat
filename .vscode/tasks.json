@@ -1,0 +1,201 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "CMake: Configure",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\run_cmake.ps1",
+                "-Action",
+                "configure",
+                "-Preset",
+                "default"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CTEST_OUTPUT_ON_FAILURE": "1",
+                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
+                }
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "CMake: Build Release",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\run_cmake.ps1",
+                "-Action",
+                "build",
+                "-Preset",
+                "default"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
+                }
+            },
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "CTest: Run All",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\run_ctest.ps1",
+                "-BuildDir",
+                "${workspaceFolder}\\build",
+                "-Config",
+                "Release"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "CTest: Run Smoke",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+                "-BuildDir",
+                "${workspaceFolder}\\build",
+                "-Config",
+                "Release"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "test",
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "CMake: Workflow Release",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\run_cmake.ps1",
+                "-Action",
+                "workflow",
+                "-Preset",
+                "default"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "CTEST_OUTPUT_ON_FAILURE": "1",
+                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
+                }
+            },
+            "group": "test",
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "Build: Incremental Crash",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\build_incremental-Crash.ps1",
+                "-NonInteractive"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build",
+            "problemMatcher": [
+                "$msCompile"
+            ],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        },
+        {
+            "label": "Crash: Analyze Latest Dump",
+            "type": "process",
+            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "args": [
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                "${workspaceFolder}\\scripts\\analyze_dump_and_prepare_ai_prompt.ps1",
+                "-WorkspaceRoot",
+                "${workspaceFolder}",
+                "-BuildDir",
+                "${workspaceFolder}\\build"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "showReuseMessage": false
+            }
+        }
+    ]
+}

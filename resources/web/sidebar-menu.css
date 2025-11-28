@@ -1,0 +1,238 @@
+/* ===== 侧滑菜单共享样式 ===== */
+
+/* NOTE: shared variables are now loaded by each page via <link> to avoid duplicate imports.
+  Keep sidebar-menu.css focused on layout and components. */
+
+/* 汉堡菜单按钮 - hamburger icon with 3 horizontal lines
+   Use !important to ensure consistency across all pages */
+.menu-toggle {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-around !important;
+  align-items: center !important;
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  min-height: 36px !important;
+  max-width: 36px !important;
+  max-height: 36px !important;
+  background: rgba(0, 0, 0, 0.5) !important;
+  border-radius: 4px !important;
+  border: none !important;
+  cursor: pointer !important;
+  padding: 6px !important;
+  z-index: 99999 !important;
+  position: fixed !important;
+  left: 10px !important;
+  top: 12px !important;
+  box-sizing: border-box !important;
+  /* Reset any inherited styles */
+  margin: 0 !important;
+  font-size: inherit !important;
+  line-height: normal !important;
+  text-align: center !important;
+  color: #fff !important;
+}
+
+/* Make room for the hamburger/menu toggle in page headers by default.
+   This keeps the menu icon from overlapping the title across pages.
+   Support both <div class="header"> and <header> elements. */
+.header, header {
+  padding-left: var(--sidebar-header-padding-left-desktop);
+}
+
+@media (max-width: 768px) {
+  .header, header { padding-left: var(--sidebar-header-padding-left-mobile); }
+}
+
+/* On desktop / wide screens move the menu toggle a bit right so it doesn't hug the window edge */
+@media (min-width: 769px) {
+  .menu-toggle {
+    left: 24px !important; /* nudge to the right for desktop */
+    top: 14px !important;  /* slightly lower on desktop for visual balance */
+  }
+}
+
+.menu-toggle span {
+  width: 20px !important;
+  height: 3px !important;
+  background: #fff !important;
+  border-radius: 2px !important;
+  transition: all 0.3s ease !important;
+  display: block !important;
+  /* Reset any inherited styles */
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+.menu-toggle:hover span {
+  background: #4CAF50 !important;
+}
+
+/* 侧边栏遮罩层 */
+.sidebar-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 99998;
+  /* 次高层级 */
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.sidebar-overlay.active {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* 侧边栏容器 */
+.sidebar {
+  position: fixed;
+  top: 0;
+  /* make the sidebar a little narrower to reduce visual footprint */
+  left: var(--sidebar-hidden-offset);
+  width: var(--sidebar-width);
+  max-width: 80vw;
+  height: 100%;
+  background: #2a2a2a;
+  box-shadow: 2px 0 10px rgba(0, 0, 0, 0.3);
+  z-index: 99999;
+  /* 最高层级 */
+  transition: left 0.3s ease;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar.active {
+  left: 0;
+}
+
+/* 侧边栏头部 removed */
+
+/* close button removed — toggle button used to open/close the sidebar */
+
+/* 侧边栏内容 */
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  padding-bottom: 80px; /* Extra space at bottom to prevent last item from being cut off */
+}
+
+.sidebar-top-spacer {
+  height: 60px;
+  width: 100%;
+  cursor: pointer;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.sidebar-top-spacer:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.sidebar-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sidebar-sep {
+  height: 1px;
+  background: #555;
+  margin: 2px 0;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.sidebar-buttons button,
+.sidebar-buttons a,
+.wusoem-sidebar-btn {
+  width: 100%;
+  text-align: left;
+  padding: var(--sidebar-btn-padding) !important;
+  font-size: 1rem;
+  height: auto !important;
+  min-height: var(--sidebar-btn-height) !important;
+  border-radius: 6px;
+  justify-content: flex-start !important;
+  display: flex;
+  align-items: center;
+  text-decoration: none;
+  color: #fff;
+  background: #444;
+  border: 2px solid #666 !important;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-sizing: border-box !important;
+}
+
+.sidebar-buttons button:hover,
+.sidebar-buttons a:hover,
+.wusoem-sidebar-btn:hover {
+  background: #555;
+  transform: translateX(5px);
+}
+
+/* Login button styling */
+.sidebar-buttons .login-btn {
+  width: 100%;
+  text-align: center;
+  justify-content: center !important;
+  padding: var(--sidebar-btn-padding) !important;
+  background: linear-gradient(180deg,#3b8bff,#276bd6);
+  color: #fff;
+  border: 2px solid #1a5ab8 !important;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  cursor: pointer;
+}
+
+.sidebar-buttons .login-btn:hover { transform: translateX(4px); }
+
+/* Disabled UI state applied globally by sidebar script */
+.wusoem-ui-disabled {
+  opacity: 0.55 !important;
+  pointer-events: none !important; /* make non-interactive */
+  filter: grayscale(0.3) !important;
+  cursor: default !important;
+}
+
+/* Keep login button fully interactive; it is marked data-login-exempt in the DOM */
+.sidebar-buttons .login-btn[data-login-exempt="true"] { pointer-events: auto !important; opacity: 1 !important; }
+
+/* keep sidebar visible but closed by default; it only opens when .active is added */
+.sidebar,
+.sidebar-overlay {
+  display: block !important;
+}
+
+/* Table column width helpers used by auto.html */
+.col-axis { width: 20%; }
+.col-actual { width: 40%; }
+.col-input { width: 40%; }
+
+/* ===== status.html styles (merged from status.css) ===== */
+.status-header {
+  margin: 0 0 12px 0;
+  font-size: 1.5rem;
+  color: #333;
+  text-align: center;
+}
+
+.controls-label {
+  margin-left: 12px;
+}
+
+.status-message {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 0.9em;
+  display: none; /* JS will toggle display:block when showing messages */
+}

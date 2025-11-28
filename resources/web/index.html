@@ -1,0 +1,1575 @@
+<!doctype html>
+<html lang="zh-Hant">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BigCat_運動控制系統_V1.0_立洋科技</title>
+  <link rel="icon" href="ka52.ico" type="image/x-icon">
+  <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
+    <!-- Stylesheet load order (do not change):
+      1) shared-variables.css (global CSS variables - MUST be first)
+      2) sidebar-menu.css (shared layout/components that depend on variables)
+      3) page-specific styles (stay after shared files)
+    -->
+    <link rel="stylesheet" href="shared-variables.css">
+    <link rel="stylesheet" href="sidebar-menu.css">
+    <link rel="stylesheet" href="index.css">
+  <script src="auth.js"></script>
+</head>
+
+<body>
+  <div class="header">
+    <!-- Hamburger/menu markup is provided by the shared sidebar-menu.js to keep pages consistent -->
+
+    <h1>BigCat_運動控制系統_V1.0_立洋科技</h1>
+
+    <!-- Header connection controls: move [連接] / [斷開] here (homepage only) -->
+    <div id="headerConnectionControls" class="header-connection-controls" aria-label="連接控制">
+      <!-- Buttons will be created by page JS and inserted here -->
+    </div>
+
+    <div class="login-section">
+      <div id="authButtons"></div>
+      <span id="authStatus" class="auth-status"></span>
+    </div>
+  </div>
+  <div class="container">
+    <div class="control-panel">
+      <div class="control-row">
+        <div class="control-group">
+          <label class="control-label">網路介面卡 (Adapter)</label>
+          <select id="adapterSelect" class="control-input" disabled aria-label="網路介面卡">
+            <option>TWINCAT Adapter</option>
+            <option>Ethernet 1</option>
+          </select>
+
+        </div>
+        <div class="control-group">
+          <label class="control-label">設定週期 (ms)</label>
+          <!-- clickable input-like control that opens a decimal numeric keypad -->
+          <div id="configuredPeriod" class="control-input field-input" tabindex="0" role="button"
+            aria-label="設定週期（可編輯），點擊以輸入數字">1.00 ms</div>
+          <!-- hidden input to hold numeric value (ms) for form/JS interaction -->
+          <input id="configuredPeriodInput" type="hidden" value="1.00" />
+        </div>
+        <div class="control-group">
+          <label class="control-label">實際週期 (ms)</label>
+          <input id="actualPeriod" class="control-input field-display" disabled value="0.00 ms" title="實際週期" />
+        </div>
+        <div class="control-group">
+          <label class="control-label">最大週期 (ms)</label>
+          <div id="maxPeriod" class="control-input field-display">0.00 ms</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="slaves-section">
+      <h3>從站列表</h3>
+      <div class="slave-header">
+        <label class="control-label">選定從站</label>
+        <select id="slaveSelect" class="control-input" disabled aria-label="選定從站">
+          <option value="">未選擇</option>
+        </select>
+        <!-- ESI 檔案讀取：隱藏的 file input 與顯示按鈕，放置在從站下拉選單旁 -->
+        <button id="btnBrowseEsi">ESI
+          檔案讀取</button>
+      </div>
+      <div id="slavesContainer">(loading...)</div>
+      <div class="sdo-buttons-row">
+        <button id="btnReadSDO" class="control-input">讀取</button>
+        <button id="btnWriteSDO" class="control-input">寫入</button>
+        <button id="btnReadAllSDO" class="control-input">全部讀取</button>
+        <button id="btnWriteAllSDO" class="control-input">全部寫入</button>
+      </div>
+      <div id="sdoArea" class="sdo-display">
+        <table id="sdoTable">
+          <tr>
+            <th>Index</th>
+            <th>Sub</th>
+            <th>Name</th>
+            <th>Type</th>
+            <th>Access</th>
+            <th>Value</th>
+            <th>Hex</th>
+          </tr>
+          <!-- 5 default empty rows -->
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+          <tr>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td></td>
+          </tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Responsive behavior: adjust CSS variables and SDO height based on window size
+    (function () {
+      const root = document.documentElement;
+      const sdoArea = document.getElementById('sdoArea');
+      let resizeTimer = null;
+      function applyResponsive() {
+        const w = window.innerWidth;
+        const h = window.innerHeight;
+        // scale base font a bit depending on width
+        let baseFont = 16;
+        if (w < 480) baseFont = 13;
+        else if (w < 768) baseFont = 14;
+        else if (w < 1024) baseFont = 15;
+        root.style.setProperty('--base-font-size', baseFont + 'px');
+        document.documentElement.style.fontSize = baseFont + 'px';
+
+        // field width: proportional but clamped
+        let fw = Math.max(120, Math.min(320, Math.floor(w * 0.18)));
+        root.style.setProperty('--field-width', fw + 'px');
+
+        // field height scales slightly with font
+        let fh = Math.max(32, Math.min(56, Math.floor(baseFont * 2.5)));
+        root.style.setProperty('--field-height', fh + 'px');
+
+        // sdo area height: keep a fraction of viewport but at least 120px
+        let sdoH = Math.max(120, Math.floor(h * 0.28));
+        root.style.setProperty('--sdo-max-height', sdoH + 'px');
+        if (sdoArea) sdoArea.style.maxHeight = sdoH + 'px';
+      }
+      window.addEventListener('resize', () => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(() => { applyResponsive(); resizeTimer = null; }, 120);
+      });
+      // initial
+      applyResponsive();
+    })();
+
+    // local log updater: forward to console.debug so calls remain safe but visible during development
+    function updateLocalStatus(msg) { try { console.debug('[localStatus]', msg); } catch (e) { /* ignore */ } }
+    const authStatus = document.getElementById('authStatus');
+
+    // Single-window navigation: we will navigate inside the same tab
+
+    /**
+     * Detects if the current device is a mobile device
+     * @returns {boolean} true if mobile device
+     */
+    function isMobileDevice() {
+      return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)
+        || (navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+    }
+
+    /**
+     * Opens a window with the given URL and name, or focuses it if already open.
+     * Mobile devices: Always opens in new tab due to focus() limitations
+     * Desktop: Reuses existing window when possible
+     * @param {string} url - The URL to open
+     * @param {string} windowName - Unique name for the window (used for reuse)
+     */
+    function openOrFocusWindow(url, windowName) {
+      // Navigate within the same tab/window, do not open new windows or tabs.
+      try {
+        if (window.location.href !== url) {
+          window.location.assign(url);
+        }
+      } catch (e) {
+        console.error('[openOrFocusWindow] Failed to navigate to', url, e);
+        try { window.location.href = url; } catch (e2) { updateLocalStatus('無法導向頁面 - ' + e2.toString()); }
+      }
+      return;
+    }
+
+    /* Sidebar controls are handled by the shared sidebar-menu.js
+       to avoid duplicated logic on each page. */
+
+    // login state (cookie-based session). We don't store API key in front-end.
+    // Do NOT default to a logged-in state from localStorage on page open.
+    // We prefer the server / explicit session checks to establish login state.
+    if (typeof window._loggedIn === 'undefined') {
+      window._loggedIn = false; // will be updated after server-side check (checkForceLogout)
+    }
+
+    // Initialize auth UI on page load
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => { updateAuthUI(); });
+    } else {
+      // DOM already loaded, call immediately
+      updateAuthUI();
+    }
+
+    function updateAuthUI() {
+      const authButtons = document.getElementById('authButtons');
+      const authStatus = document.getElementById('authStatus');
+      // clear existing buttons
+      while (authButtons && authButtons.firstChild) authButtons.removeChild(authButtons.firstChild);
+      // Create header / auth buttons regardless of login state; disable them if not logged in
+
+      // connection control container (may be present on homepage)
+      const connControls = document.getElementById('headerConnectionControls');
+
+        // create "示波器" button (open RT_scope.html)
+        const btnOsc = document.createElement('button');
+        btnOsc.id = 'btnOscilloscope';
+        btnOsc.textContent = '示波器';
+        btnOsc.addEventListener('click', () => {
+          openOrFocusWindow('/RT_scope.html', 'wusoem_oscilloscope');
+        });
+        btnOsc.disabled = !window._loggedIn;
+        authButtons.appendChild(btnOsc);
+
+        // create "姿態顯示" button (open viewer_6dof.html)
+        const btnAtt = document.createElement('button');
+        btnAtt.id = 'btnAttitude';
+        btnAtt.textContent = '姿態顯示';
+        // Use the current origin so the viewer opens correctly whether server binds localhost or a LAN IP
+        btnAtt.addEventListener('click', () => {
+          openOrFocusWindow(window.location.origin + '/viewer_6dof.html', 'wusoem_attitude');
+        });
+        btnAtt.disabled = !window._loggedIn;
+        authButtons.appendChild(btnAtt);
+
+        // create "機構設定" button (to open stewart_platform.html)
+        const btnMechanism = document.createElement('button');
+        btnMechanism.id = 'btnMechanism';
+        btnMechanism.textContent = '機構設定';
+        btnMechanism.addEventListener('click', () => {
+          openOrFocusWindow('/stewart_platform.html', 'wusoem_mechanism');
+        });
+        btnMechanism.disabled = !window._loggedIn;
+        authButtons.appendChild(btnMechanism);
+
+        // create "狀態訊息" button
+        const btnToggleStatusHeader = document.createElement('button');
+        btnToggleStatusHeader.id = 'btnToggleStatusHeader';
+        btnToggleStatusHeader.textContent = '狀態訊息';
+        btnToggleStatusHeader.addEventListener('click', () => {
+          openOrFocusWindow('/status.html', 'wusoem_status');
+        });
+        btnToggleStatusHeader.disabled = !window._loggedIn;
+        authButtons.appendChild(btnToggleStatusHeader);
+
+        // '清除狀態' button moved to status.html (top-right) per UI change
+
+        // create "連接" button
+        // create or reuse connect button (avoid duplicates on re-runs)
+        let btnConnectHeader = document.getElementById('btnConnectHeader');
+        if (!btnConnectHeader) {
+          btnConnectHeader = document.createElement('button');
+          btnConnectHeader.id = 'btnConnectHeader';
+        }
+        btnConnectHeader.textContent = '連接';
+        btnConnectHeader.addEventListener('click', async () => {
+          try {
+            const r = await guardedPost('btnConnectHeader', '/connect');
+            if (!r.ok) {
+              if (r.text === 'not_logged_in') {
+                try { showPinModal(); } catch (_) {}
+              } else {
+                // Try to parse server JSON response (e.g. {error,active,max}) and show a user-friendly message
+                try {
+                  const parsed = JSON.parse(r.text);
+                  if (parsed && parsed.error) {
+                    let msg = parsed.error;
+                    if (parsed.active !== undefined && parsed.max !== undefined) msg += ` (目前連線 ${parsed.active}/${parsed.max})`;
+                    updateLocalStatus && updateLocalStatus('連接失敗 - ' + msg);
+                  } else {
+                    updateLocalStatus && updateLocalStatus('連接失敗 - ' + r.text);
+                  }
+                } catch (e) {
+                  updateLocalStatus && updateLocalStatus('連接失敗 - ' + r.text);
+                }
+              }
+            }
+          } catch (e) { console.error('連接失敗:', e); }
+        });
+        // place connect in the headerConnectionControls (homepage title area)
+        btnConnectHeader.disabled = !window._loggedIn;
+        if (connControls) {
+          if (btnConnectHeader.parentElement !== connControls) connControls.appendChild(btnConnectHeader);
+        } else if (authButtons && btnConnectHeader.parentElement !== authButtons) {
+          authButtons.appendChild(btnConnectHeader);
+        }
+
+        // create "斷開" button
+        // create or reuse disconnect button (avoid duplicates on re-runs)
+        let btnDisconnectHeader = document.getElementById('btnDisconnectHeader');
+        if (!btnDisconnectHeader) {
+          btnDisconnectHeader = document.createElement('button');
+          btnDisconnectHeader.id = 'btnDisconnectHeader';
+        }
+        btnDisconnectHeader.textContent = '斷開';
+        btnDisconnectHeader.addEventListener('click', async () => {
+          try {
+            const r = await guardedPost('btnDisconnectHeader', '/disconnect');
+            if (!r.ok) {
+              if (r.text === 'not_logged_in') {
+                try { showPinModal(); } catch (_) {}
+              } else {
+                updateLocalStatus && updateLocalStatus('斷開失敗 - ' + r.text);
+              }
+            }
+          } catch (e) { console.error('斷開失敗:', e); }
+        });
+        btnDisconnectHeader.disabled = !window._loggedIn;
+        if (connControls) {
+          if (btnDisconnectHeader.parentElement !== connControls) connControls.appendChild(btnDisconnectHeader);
+        } else if (authButtons && btnDisconnectHeader.parentElement !== authButtons) {
+          authButtons.appendChild(btnDisconnectHeader);
+        }
+
+        // create "Auto Test" button to open auto_test.html
+        const btnAutoTest = document.createElement('button');
+        btnAutoTest.id = 'btnAutoTest';
+        btnAutoTest.textContent = '自動畫面';
+        btnAutoTest.addEventListener('click', () => {
+          openOrFocusWindow('/auto.html', 'wusoem_auto');
+        });
+        btnAutoTest.disabled = !window._loggedIn;
+        authButtons.appendChild(btnAutoTest);
+
+        // create "自動程序啟動" / "自動程序停止" buttons in the header area
+        // create or reuse start/stop auto buttons (avoid duplicates on re-runs)
+        let btnStartAutoHeader = document.getElementById('btnStartAutoHeader');
+        if (!btnStartAutoHeader) {
+          btnStartAutoHeader = document.createElement('button');
+          btnStartAutoHeader.id = 'btnStartAutoHeader';
+        }
+        btnStartAutoHeader.textContent = '自動程序啟動';
+        btnStartAutoHeader.addEventListener('click', async () => {
+          try {
+            const r = await guardedPost('btnStartAutoHeader', '/start_auto');
+            if (r.ok) {
+              // 啟動成功後跳轉到自動視窗頁面
+              window.location.href = 'auto.html';
+            } else {
+              updateLocalStatus('自動程序啟動失敗 - ' + r.text);
+            }
+          } catch (e) { console.error('自動程序啟動失敗:', e); }
+        });
+        btnStartAutoHeader.disabled = !window._loggedIn;
+        if (connControls) {
+          if (btnStartAutoHeader.parentElement !== connControls) connControls.appendChild(btnStartAutoHeader);
+        } else if (authButtons && btnStartAutoHeader.parentElement !== authButtons) {
+          authButtons.appendChild(btnStartAutoHeader);
+        }
+
+        let btnStopAutoHeader = document.getElementById('btnStopAutoHeader');
+        if (!btnStopAutoHeader) {
+          btnStopAutoHeader = document.createElement('button');
+          btnStopAutoHeader.id = 'btnStopAutoHeader';
+        }
+        btnStopAutoHeader.textContent = '自動程序停止';
+        btnStopAutoHeader.addEventListener('click', async () => {
+          try {
+            const r = await guardedPost('btnStopAutoHeader', '/stop_auto');
+            if (!r.ok) updateLocalStatus('自動程序停止失敗 - ' + r.text);
+          } catch (e) { console.error('自動程序停止失敗:', e); }
+        });
+        btnStopAutoHeader.disabled = !window._loggedIn;
+        if (connControls) {
+          if (btnStopAutoHeader.parentElement !== connControls) connControls.appendChild(btnStopAutoHeader);
+        } else if (authButtons && btnStopAutoHeader.parentElement !== authButtons) {
+          authButtons.appendChild(btnStopAutoHeader);
+        }
+
+        // create login/logout button depending on state
+        if (window._loggedIn) {
+          const btnLogout = document.createElement('button');
+          btnLogout.id = 'btnLogout';
+          btnLogout.textContent = '登出';
+          btnLogout.addEventListener('click', logout);
+          authButtons.appendChild(btnLogout);
+          authStatus.textContent = '';
+          authStatus.className = 'auth-status';
+        } else {
+          const btnLogin = document.createElement('button');
+          btnLogin.id = 'btnLogin';
+          btnLogin.textContent = '登入';
+          btnLogin.addEventListener('click', showPinModal);
+          authButtons.appendChild(btnLogin);
+          authStatus.textContent = '';
+          authStatus.className = 'auth-status';
+        }
+
+      // Disable/enable interactive controls depending on login state
+      try {
+        const ids = ['btnOscilloscope','btnAttitude','btnMechanism','btnAutoTest','btnConnectHeader', 'btnDisconnectHeader', 'btnStartAutoHeader', 'btnStopAutoHeader', 'btnToggleStatusHeader', 'btnBrowseEsi', 'btnReadSDO', 'btnWriteSDO', 'btnReadAllSDO', 'btnWriteAllSDO', 'slaveSelect', 'adapterSelect'];
+        
+        if (window._loggedIn) {
+          // If logged in, keep buttons disabled initially and wait for server UI state
+          ids.forEach(id => {
+            try {
+              const el = document.getElementById(id);
+              if (el) el.disabled = true; // Keep disabled until pollUiState completes
+            } catch (_) { }
+          });
+          // Fetch UI state from server first, then enable buttons based on server response
+          (async () => {
+            try {
+              await pollUiState();
+              // Enable buttons that are not explicitly disabled by server
+              ids.forEach(id => {
+                try {
+                  const el = document.getElementById(id);
+                  // Only enable if not already disabled by pollUiState
+                  if (el && el.disabled) {
+                    // Check if this button has a server-side disable flag, otherwise enable
+                    const serverDisableMap = {
+                      'btnConnectHeader': window._lastUiState?.connect,
+                      'btnDisconnectHeader': window._lastUiState?.disconnect,
+                      'btnStartAutoHeader': window._lastUiState?.start_auto,
+                      'btnStopAutoHeader': window._lastUiState?.stop_auto,
+                      'btnToggleStatusHeader': window._lastUiState?.toggle_status,
+                      'btnBrowseEsi': window._lastUiState?.browse_esi
+                    }; 
+                    // Only apply server-provided UI state. Do NOT let the client
+                    // enable buttons when the server did not explicitly send a
+                    // value for this control — that would allow the page to
+                    // 'self-enable' buttons. If server sends a boolean, honor it.
+                    const srvVal = serverDisableMap[id];
+                    if (typeof srvVal !== 'undefined') {
+                      el.disabled = !!srvVal;
+                    }
+                  }
+                } catch (_) { }
+              });
+            } catch (_) {
+              // If pollUiState fails, do NOT enable buttons locally — the
+              // authoritative state comes from the server via SSE or ui_state.
+              // Keep buttons disabled until the server explicitly provides
+              // their states.
+            }
+          })();
+        } else {
+          // Not logged in, disable all buttons
+          ids.forEach(id => {
+            try {
+              const el = document.getElementById(id);
+              if (el) el.disabled = true;
+            } catch (_) { }
+          });
+        }
+
+        // After login: ensure a default adapter is selected in the UI and inform server.
+        // Run asynchronously so updateAuthUI stays synchronous.
+        if (window._loggedIn) (async function applyDefaultAdapterAfterLogin() {
+          try {
+            const sel = document.getElementById('adapterSelect');
+            const st = document.getElementById('adapterStatus');
+            if (!sel) return;
+            let appliedServerSelection = false;
+            if (lastServerSelectedAdapterValue) {
+              appliedServerSelection = applyAdapterSelection(lastServerSelectedAdapterValue);
+            }
+            if (!appliedServerSelection) {
+              let firstIndex = -1;
+              for (let i = 0; i < sel.options.length; ++i) {
+                if (!sel.options[i].disabled) { firstIndex = i; break; }
+              }
+              if (firstIndex === -1 && sel.options.length > 0) firstIndex = 0;
+              if (firstIndex === -1) return;
+              if (sel.selectedIndex !== firstIndex) {
+                sel.selectedIndex = firstIndex;
+              }
+            }
+            // Do NOT automatically notify server of the selection on page reload.
+            // Previously we posted '/set_adapter' here which caused duplicate
+            // "Selected adapter (web)" logs on refresh; instead, only notify
+            // the server when the user explicitly changes the adapter via UI.
+            try {
+              if (st) {
+                if (appliedServerSelection) st.textContent = '已還原伺服器選取的網卡項目';
+                else st.textContent = '登入後預設已選擇網卡（不自動同步至伺服器）';
+              }
+            } catch (_) { }
+          } catch (_) { }
+        })();
+        // Adapter sync removed: frontend will no longer accept server-provided adapter lists
+      } catch (_) { }
+    }
+
+    async function post(path, options = {}) {
+      try {
+        const headers = options.headers || {};
+        // Use credentials to include HttpOnly session cookie when present
+        const r = await fetch(path, Object.assign({ method: 'POST', headers, credentials: 'same-origin' }, options));
+        const t = await r.text();
+        return { ok: r.ok, text: t };
+      } catch (e) {
+        return { ok: false, text: e.toString() };
+      }
+    }
+
+    // ESI upload handling (guarded to prevent repeated/overlapping Win32 file dialogs)
+    const btnBrowseEsi = document.getElementById('btnBrowseEsi');
+    if (btnBrowseEsi) {
+      // global lock: true when an ESI browse is in progress
+      window._esiBrowseLock = window._esiBrowseLock || false;
+      btnBrowseEsi.addEventListener('click', async (ev) => {
+        if (window._esiBrowseLock) {
+          updateLocalStatus('ESI 瀏覽已在進行中，請勿重複按下。');
+          return;
+        }
+        window._esiBrowseLock = true;
+        // disable UI affordance immediately to give user feedback
+        try { btnBrowseEsi.disabled = true; } catch (_) { }
+
+        // safety timeout: if something hangs, auto-unlock after 30s
+        let safetyTimer = setTimeout(() => {
+          window._esiBrowseLock = false;
+          try { btnBrowseEsi.disabled = false; } catch (_) { }
+          updateLocalStatus('ESI 鎖定已超時並已解除，請重試。');
+        }, 30000);
+
+        try {
+          // Notify server to open local file browser and import ESI
+          const r = await fetch('/browse_esi', { method: 'POST', credentials: 'same-origin' });
+          if (!r.ok) { updateLocalStatus('無法通知後端瀏覽 ESI (HTTP ' + r.status + ')'); return; }
+          updateLocalStatus('已通知後端開啟 ESI 瀏覽，請在主機視窗完成選擇');
+
+          // Refresh slave list (ESI may add slaves) and request a full SDO read to populate cache
+          try { await fetchAndRender(); } catch (_) { }
+          try { await fetch('/read_all_sdo', { method: 'POST', credentials: 'same-origin' }); } catch (_) { }
+
+          // Poll for parsed SDOs for selected or first slave
+          let sel = (document.getElementById('slaveSelect') && document.getElementById('slaveSelect').value) || '';
+          if (!sel) {
+            try { const rr = await fetch('/slaves', { cache: 'no-store' }); if (rr.ok) { const arr = await rr.json(); if (Array.isArray(arr) && arr.length > 0) sel = arr[0].position !== undefined ? String(arr[0].position) : (arr[0].index !== undefined ? String(arr[0].index) : ''); } } catch (_) { }
+          }
+
+          async function pollSdoOnce(slavePos) { if (!slavePos) return null; try { const r2 = await fetch('/sdo?slave=' + encodeURIComponent(slavePos), { cache: 'no-store' }); if (!r2.ok) return null; try { return await r2.json(); } catch (_) { return null; } } catch (_) { return null; } }
+
+          const timeoutMs = 10000; const start = Date.now(); let found = null;
+          while (Date.now() - start < timeoutMs) { found = await pollSdoOnce(sel); if (found && Array.isArray(found) && found.length > 0) break; await new Promise(r => setTimeout(r, 500)); }
+          if (found && Array.isArray(found) && found.length > 0) { renderSdoTable(found); updateLocalStatus('已載入並顯示解析後的 SDO'); }
+          else updateLocalStatus('尚未收到解析後的 SDO，請確認 Win32 視窗是否完成匯入');
+        } catch (e) { updateLocalStatus('通知後端瀏覽 ESI 失敗: ' + e); }
+        finally {
+          // clear safety timer and release lock
+          try { clearTimeout(safetyTimer); } catch (_) { }
+          window._esiBrowseLock = false;
+          try { btnBrowseEsi.disabled = false; } catch (_) { }
+        }
+      });
+    }
+
+    // getStatus removed: logs are not displayed in the web UI
+
+    // Login modal now provided by shared auth.js (simple modal). Old keyboard modal removed.
+
+    // --- Numeric keypad for configured period (ms) ---
+    (function () {
+      // create keypad DOM once
+      const kbHtml = `
+      <div id="numKbOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.4);display:none;align-items:center;justify-content:center;z-index:9999">
+        <div id="numKb" style="background:#333;color:#fff;border:1px solid #666;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px;min-width:320px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <div style="font-weight:bold">輸入週期 (ms)</div>
+            <button id="numKbClose" style="background:#444;border:1px solid #666;color:#fff;border-radius:4px">關閉</button>
+          </div>
+          <input id="numKbInput" type="text" inputmode="decimal" pattern="[0-9]*([\\.,][0-9]+)?" style="font-size:1.2rem;padding:8px;border-radius:6px;border:1px solid #666;background:#222;color:#fff;text-align:right" title="輸入週期 (ms)" placeholder="ms" />
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            <button class="numBtn">7</button>
+            <button class="numBtn">8</button>
+            <button class="numBtn">9</button>
+            <button class="numBtn">4</button>
+            <button class="numBtn">5</button>
+            <button class="numBtn">6</button>
+            <button class="numBtn">1</button>
+            <button class="numBtn">2</button>
+            <button class="numBtn">3</button>
+            <button class="numBtn">0</button>
+            <button id="numDot" class="numBtn">.</button>
+            <button id="numClear" class="numBtn">⌫</button>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end">
+            <button id="numKbCancel" style="min-width:100px;background:#444;border:1px solid #666;color:#fff;border-radius:6px">取消</button>
+            <button id="numKbOk" style="min-width:100px;background:#0b7;background:#0a7;border:1px solid #0c8;color:#000;border-radius:6px;font-weight:bold">確定</button>
+          </div>
+        </div>
+      </div>`;
+
+      document.body.insertAdjacentHTML('beforeend', kbHtml);
+      const overlay = document.getElementById('numKbOverlay');
+      const input = document.getElementById('numKbInput');
+      const display = document.getElementById('configuredPeriod');
+      const hidden = document.getElementById('configuredPeriodInput');
+
+      function openKb() {
+        // respect server-side disabled state
+        if (display && display.classList && display.classList.contains('disabled')) return;
+        if (!overlay) return;
+        input.value = hidden.value || '';
+        overlay.style.display = 'flex';
+        setTimeout(() => input.focus(), 20);
+      }
+      function closeKb() { overlay.style.display = 'none'; }
+
+      // attach events
+      if (display) {
+        display.addEventListener('click', openKb);
+        display.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openKb(); } });
+      }
+      const buttons = overlay.querySelectorAll('.numBtn');
+      buttons.forEach(b => {
+        b.addEventListener('click', () => {
+          const v = b.textContent.trim();
+          if (v === '⌫') {
+            input.value = input.value.slice(0, -1);
+          } else {
+            input.value += v;
+          }
+        });
+      });
+      const dot = document.getElementById('numDot');
+      if (dot) dot.addEventListener('click', () => { if (!input.value.includes('.')) input.value += '.'; });
+      const clear = document.getElementById('numClear');
+      if (clear) clear.addEventListener('click', () => { input.value = ''; });
+      const btnClose = document.getElementById('numKbClose'); if (btnClose) btnClose.addEventListener('click', closeKb);
+      const btnCancel = document.getElementById('numKbCancel'); if (btnCancel) btnCancel.addEventListener('click', closeKb);
+      const btnOk = document.getElementById('numKbOk'); if (btnOk) btnOk.addEventListener('click', async () => {
+        // normalize value: allow comma as decimal separator
+        let v = input.value.trim().replace(',', '.');
+        // allow only numeric input with optional decimal
+        if (v === '') { closeKb(); return; }
+        const num = parseFloat(v);
+        if (isNaN(num)) { alert('輸入不為數字'); return; }
+        
+        // 🔧 範圍驗證：0.5~10 ms，超出範圍提示並自動設為 1 ms
+        let finalNum = num;
+        if (num < 0.5 || num > 10.0) {
+          alert('週期必須在 0.5~10 ms 之間，已自動設為 1 ms');
+          finalNum = 1.0;
+        }
+        
+        // clamp / format to two decimals
+        const formatted = (Math.round(finalNum * 100) / 100).toFixed(2);
+        // update UI
+        if (display) display.textContent = formatted + ' ms';
+        if (hidden) hidden.value = formatted;
+        // mark last user edit time so automatic server updates don't immediately overwrite
+        try { window._configuredPeriodLastUserEdit = Date.now(); } catch (e) { }
+        closeKb();
+        // send to server /set_period
+        try {
+          await post('/set_period', { headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: formatted });
+          updateLocalStatus('設定週期已送出: ' + formatted);
+        } catch (e) { updateLocalStatus('送出設定週期失敗: ' + e); }
+      });
+
+      // close when clicking outside keypad box
+      overlay.addEventListener('click', (ev) => { if (ev.target === overlay) closeKb(); });
+    })();
+    // NOTE: index.html now reuses the shared auth modal from auth.js. auth.js sets
+    // window.showPinModal/hidePinModal/logout aliases so existing references work.
+
+    async function logout() {
+      try {
+        const r = await fetch('/logout', { method: 'POST', credentials: 'same-origin' });
+        // regardless of result, clear UI state
+        window._loggedIn = false;
+        localStorage.removeItem('wusoem_logged_in');
+        try { localStorage.removeItem('wusoem_logged_in_v1'); } catch(_) {}
+        const authStatus = document.getElementById('authStatus');
+        authStatus.textContent = '已登出';
+        authStatus.className = 'auth-status error';
+        updateAuthUI();
+        try { window.dispatchEvent(new CustomEvent('wusoem-auth-change', { detail: { loggedIn: false } })); } catch(_) {}
+      } catch (e) {
+        window._loggedIn = false;
+        updateAuthUI();
+      }
+    }
+
+    // Remove old keyboard-style PIN modal (using shared modal from auth.js)
+    // Ensure index listens to auth change events so UI updates when auth.js logs in/out
+    try { window.addEventListener('wusoem-auth-change', (e) => { 
+        try { 
+            window._loggedIn = !!(e && e.detail && e.detail.loggedIn); 
+            updateAuthUI();
+            // Close SSE connection when logging out
+            if (!window._loggedIn && eventSourceMain) {
+                console.log("Auth change: logging out, closing SSE");
+                eventSourceMain.close();
+                eventSourceMain = null;
+            } else if (window._loggedIn && !eventSourceMain) {
+                console.log("Auth change: logging in, restoring SSE connection");
+                // Restart SSE connection when logging in
+          startSseIndex();
+          try { loadAdapters().catch(()=>{}); } catch(_) {}
+            }
+        } catch(_) {} 
+    }); } catch(_) {}
+
+    // PIN modal and keypad markup functions will be added below in DOM
+
+    // auth buttons are created dynamically by updateAuthUI()
+
+    // Button event listeners for btnConnect, btnDisconnect, btnToggleStatus, btnClearStatus
+    // have been moved to updateAuthUI() where buttons are dynamically created in the header
+
+    // SDO buttons wired to HTTP API
+    document.getElementById('btnReadSDO').addEventListener('click', async () => {
+      const r = await guardedPost('btnReadSDO', '/read_sdo');
+      if (!r.ok) updateLocalStatus('讀取 SDO 失敗 - ' + r.text);
+      else updateLocalStatus('讀取指令已送出');
+    });
+    document.getElementById('btnWriteSDO').addEventListener('click', async () => {
+      const r = await guardedPost('btnWriteSDO', '/write_sdo');
+      if (!r.ok) updateLocalStatus('寫入 SDO 失敗 - ' + r.text);
+      else updateLocalStatus('寫入指令已送出');
+    });
+    document.getElementById('btnReadAllSDO').addEventListener('click', async () => {
+      const r = await guardedPost('btnReadAllSDO', '/read_all_sdo');
+      if (!r.ok) updateLocalStatus('全部讀取失敗 - ' + r.text);
+      else updateLocalStatus('全部讀取指令已送出');
+    });
+    document.getElementById('btnWriteAllSDO').addEventListener('click', async () => {
+      const r = await guardedPost('btnWriteAllSDO', '/write_all_sdo');
+      if (!r.ok) updateLocalStatus('全部寫入失敗 - ' + r.text);
+      else updateLocalStatus('全部寫入指令已送出');
+    });
+    // initial UI state (no log display)
+    updateAuthUI();
+    // Poll server for UI state (which buttons should be disabled)
+    async function pollUiState() {
+      try {
+        if (!window._loggedIn) return;
+        const r = await fetch('/ui_state', { cache: 'no-store' });
+        if (!r.ok) return;
+        const j = await r.json();
+        // Save UI state for reference
+        window._lastUiState = j;
+        try {
+          if (typeof j.selected_adapter === 'string' && j.selected_adapter) {
+            applyServerSelectedAdapter(
+              j.selected_adapter,
+              typeof j.selected_adapter_display === 'string' ? j.selected_adapter_display : ''
+            );
+          }
+        } catch (_) {}
+        // expected keys: connect, disconnect, toggle_status, clear_status
+        try { if (Object.prototype.hasOwnProperty.call(j, 'connect')) setServerDisabled('btnConnectHeader', !!j.connect); } catch(_) {}
+        try { if (Object.prototype.hasOwnProperty.call(j, 'disconnect')) setServerDisabled('btnDisconnect', !!j.disconnect); } catch(_) {}
+        try { if (Object.prototype.hasOwnProperty.call(j, 'disconnect')) setServerDisabled('btnDisconnectHeader', !!j.disconnect); } catch(_) {}
+        // toggle_status opens status page; only update when server explicitly provides value
+        try { if (Object.prototype.hasOwnProperty.call(j, 'toggle_status')) setServerDisabled('btnToggleStatus', !!j.toggle_status); } catch (_) { }
+        try { if (Object.prototype.hasOwnProperty.call(j, 'clear_status')) setServerDisabled('btnClearStatus', !!j.clear_status); } catch (_) { }
+        // Map server-side browse flag to web button — only when provided
+        try { if (Object.prototype.hasOwnProperty.call(j, 'browse_esi')) setServerDisabled('btnBrowseEsi', !!j.browse_esi); } catch (_) {}
+        // Map server-side cycle edit lock to configuredPeriod control
+        try { const el = document.getElementById('configuredPeriod'); if (el && Object.prototype.hasOwnProperty.call(j, 'set_cycle')) { if (!!j.set_cycle) { el.classList.add('disabled'); el.tabIndex = -1; } else { el.classList.remove('disabled'); el.tabIndex = 0; } } } catch(_) {}
+        // Map auto start/stop server-side flags to web header buttons
+        try { if (Object.prototype.hasOwnProperty.call(j, 'start_auto')) setServerDisabled('btnStartAutoHeader', !!j.start_auto); } catch(_) {}
+        try { if (Object.prototype.hasOwnProperty.call(j, 'stop_auto')) setServerDisabled('btnStopAutoHeader', !!j.stop_auto); } catch(_) {}
+        // Some parts of the native UI publish 'auto_connect' (used by auto.html).
+        // Accept either form so header buttons stay synchronized with the PC UI.
+        try { if (Object.prototype.hasOwnProperty.call(j, 'auto_connect')) setServerDisabled('btnStartAutoHeader', !!j.auto_connect); } catch(_) {}
+        try { if (Object.prototype.hasOwnProperty.call(j, 'browse_esi')) setServerDisabled('btnBrowseEsi', !!j.browse_esi); } catch (_) { }
+        try { if (Object.prototype.hasOwnProperty.call(j, 'send_mailbox')) setServerDisabled('btnSendMailbox', !!j.send_mailbox); } catch (_) {}
+        // Update cycle display if provided (server reports microseconds)
+        try {
+          if (j.desiredCycleTime !== undefined) {
+            const el = document.getElementById('configuredPeriod');
+            // avoid overwriting if user recently edited the configured value
+            const last = window._configuredPeriodLastUserEdit || 0;
+            const now = Date.now();
+            const graceMs = 3000; // 3s grace period after user edit
+            if (el) { if (!last || (now - last) > graceMs) el.textContent = (Number(j.desiredCycleTime) / 1000.0).toFixed(2) + ' ms'; }
+          }
+          if (j.commsTime !== undefined || j.actualCycleTime !== undefined) {
+            const actual = j.commsTime !== undefined ? j.commsTime : j.actualCycleTime;
+            const el2 = document.getElementById('actualPeriod');
+            if (el2) { el2.value = (Number(actual) / 1000.0).toFixed(2) + ' ms'; }
+          }
+          if (j.maxObservedCycleTime !== undefined) {
+            const el3 = document.getElementById('maxPeriod');
+            if (el3) { el3.textContent = (Number(j.maxObservedCycleTime) / 1000.0).toFixed(2) + ' ms'; }
+          }
+        } catch (e) { /* ignore conversion errors */ }
+      } catch (e) { /* ignore */ }
+    }
+
+    // Install a guard to detect accidental local changes to connect-related disabled state.
+    // If the server has published a known connect state (window._lastUiState.connect), any
+    // local change to the button's 'disabled' attribute will be reverted and a warning logged.
+    function setupConnectButtonGuard() {
+      try {
+        const ids = ['btnConnectHeader', 'btnConnect'];
+        ids.forEach(id => {
+          const el = document.getElementById(id);
+          if (!el) return;
+          const obs = new MutationObserver(mutations => {
+            for (const m of mutations) {
+              if (m.type === 'attributes' && (m.attributeName === 'disabled' || m.attributeName === 'class')) {
+                try {
+                  const last = window._lastUiState && typeof window._lastUiState.connect !== 'undefined' ? !!window._lastUiState.connect : null;
+                  if (last !== null) {
+                    // determine effective disabled state (attribute OR class)
+                    const current = !!el.disabled || !!el.classList && el.classList.contains && el.classList.contains('disabled');
+                    if (current !== last) {
+                      obs.disconnect();
+                      // revert both attribute and class to match authoritative server state
+                      el.disabled = last;
+                      try { if (last) el.classList.add('disabled'); else el.classList.remove('disabled'); } catch (_) {}
+                      obs.observe(el, { attributes: true, attributeFilter: ['disabled', 'class'] });
+                      console.warn(`Reverted local change to #${id} to match server (_lastUiState.connect=${last})`);
+                    }
+                  }
+                } catch (e) { /* ignore */ }
+              }
+            }
+          });
+          obs.observe(el, { attributes: true, attributeFilter: ['disabled', 'class'] });
+        });
+      } catch (e) { /* ignore */ }
+    }
+    // run guard after DOM ready
+    try { setupConnectButtonGuard(); } catch (_) {}
+
+    // Install guard for auto-start header buttons (mirror connect-guard behaviour)
+    function setupAutoButtonGuard() {
+      try {
+        const defs = [
+          { id: 'btnStartAutoHeader', keys: ['start_auto', 'auto_connect'] },
+          { id: 'btnStopAutoHeader', keys: ['stop_auto'] }
+        ];
+        defs.forEach(d => {
+          const el = document.getElementById(d.id);
+          if (!el) return;
+          const obs = new MutationObserver(mutations => {
+            for (const m of mutations) {
+              if (m.type === 'attributes' && (m.attributeName === 'disabled' || m.attributeName === 'class')) {
+                try {
+                  let last = null;
+                  if (window._lastUiState) {
+                    for (const k of d.keys) {
+                      if (Object.prototype.hasOwnProperty.call(window._lastUiState, k)) { last = !!window._lastUiState[k]; break; }
+                    }
+                  }
+                  if (last !== null) {
+                    const current = !!el.disabled || !!el.classList && el.classList.contains && el.classList.contains('disabled');
+                    if (current !== last) {
+                      obs.disconnect();
+                      el.disabled = last;
+                      try { if (last) el.classList.add('disabled'); else el.classList.remove('disabled'); } catch (_) {}
+                      obs.observe(el, { attributes: true, attributeFilter: ['disabled', 'class'] });
+                      console.warn(`Reverted local change to #${d.id} to match server (_lastUiState.${d.keys.join('|')}=${last})`);
+                    }
+                  }
+                } catch (e) { /* ignore */ }
+              }
+            }
+          });
+          obs.observe(el, { attributes: true, attributeFilter: ['disabled', 'class'] });
+        });
+      } catch (e) { /* ignore */ }
+    }
+    try { setupAutoButtonGuard(); } catch (_) {}
+
+    // Debug helper: simulate receiving a /ui_state or SSE message from server.
+    // Usage from the console: simulateUiState({ connect: true });
+    // NOTE: This is a local test helper and should only be used for manual verification.
+    function simulateUiState(data) {
+      try {
+        if (!window._lastUiState) window._lastUiState = {};
+        Object.assign(window._lastUiState, data || {});
+        // Reuse the same mapping logic as in pollUiState/SSE handler
+        if (typeof data.connect !== 'undefined') { setServerDisabled('btnConnectHeader', !!data.connect); setServerDisabled('btnConnect', !!data.connect); }
+        if (typeof data.disconnect !== 'undefined') { setServerDisabled('btnDisconnect', !!data.disconnect); setServerDisabled('btnDisconnectHeader', !!data.disconnect); }
+        if (typeof data.start_auto !== 'undefined') setServerDisabled('btnStartAutoHeader', !!data.start_auto);
+        if (typeof data.stop_auto !== 'undefined') setServerDisabled('btnStopAutoHeader', !!data.stop_auto);
+        if (typeof data.auto_connect !== 'undefined') setServerDisabled('btnStartAutoHeader', !!data.auto_connect);
+        if (typeof data.send_mailbox !== 'undefined') setServerDisabled('btnSendMailbox', !!data.send_mailbox);
+        console.log('simulateUiState applied:', data);
+      } catch (e) { console.warn('simulateUiState failed', e); }
+    }
+
+    // Central helper for applying server-driven disabled state to buttons.
+    // This function is the single place that sets an element's disabled attribute
+    // based on authoritative server data. It also records the last server state
+    // on dataset.serverState for debugging and for the MutationObserver guard.
+    function setServerDisabled(idOrEl, disabled) {
+      try {
+        const el = typeof idOrEl === 'string' ? document.getElementById(idOrEl) : idOrEl;
+        if (!el) return;
+        // Set both the disabled attribute and toggle a 'disabled' class so
+        // components that use classes (e.g., div-based buttons in auto.html)
+        // will also reflect the server-provided state.
+        el.disabled = !!disabled;
+        try { if (!!disabled) el.classList.add('disabled'); else el.classList.remove('disabled'); } catch (_) {}
+        try { el.dataset.serverState = !!disabled ? '1' : '0'; } catch (_) {}
+      } catch (e) { /* ignore */ }
+    }
+    // polling interval adjusted to 1s to reduce load while guardedPost prevents rapid double-clicks
+    // Poll /ui_state occasionally as a fallback — but skip polling while SSE is connected
+    // so mobile/homepage clients which already use SSE don't create repeated HTTP connections.
+    (function pollOnlyWhenNoSse() {
+      const POLL_MS = 5000;
+      setInterval(() => {
+        try {
+          // if browser doesn't support EventSource, always poll
+          if (!window.EventSource) {
+            pollUiState();
+            return;
+          }
+          // If we have an EventSource and it's OPEN, skip polling — SSE will deliver updates
+          if (typeof eventSourceMain === 'undefined' || !eventSourceMain || eventSourceMain.readyState !== EventSource.OPEN) {
+            pollUiState();
+          } else {
+            // SSE active: skip poll to avoid connection churn
+            // console.log('SSE active — skipping /ui_state poll');
+          }
+        } catch (e) { /* swallow errors silently */ }
+      }, POLL_MS);
+    })();
+
+    document.addEventListener('DOMContentLoaded', function () {
+      try { if (typeof renderSdoTable === 'function') renderSdoTable([]); } catch (_) { }
+
+
+      // Start SSE on the index page so UI-state changes (start_auto, disconnect, connect, etc.)
+      // are applied immediately to header controls without waiting for the poll interval.
+      let eventSourceMain = null;
+      function startSseIndex() {
+        if (!window.EventSource) return;
+        if (eventSourceMain) return;
+        try {
+          eventSourceMain = new EventSource('/pdo_sse');
+          eventSourceMain.onopen = () => { console.log('Index SSE connected'); try { if (window.StatusUI && typeof window.StatusUI.setConnected === 'function') window.StatusUI.setConnected(); } catch(_) {} };
+          eventSourceMain.onerror = () => { console.log('Index SSE error'); try { if (window.StatusUI && typeof window.StatusUI.setDisconnected === 'function') window.StatusUI.setDisconnected(); } catch(_) {} };
+          eventSourceMain.onmessage = (e) => {
+            try {
+              // Only apply server state when logged in; ignore SSE updates when not logged in
+              if (!window._loggedIn) return;
+              const data = JSON.parse(e.data);
+              updateSlaveErrorCodesFromSse(data);
+              // Update all UI buttons from SSE message
+              // Header buttons (always present)
+              try { if (typeof data.start_auto !== 'undefined') setServerDisabled('btnStartAutoHeader', !!data.start_auto); } catch(_){ }
+              try { if (typeof data.stop_auto !== 'undefined') setServerDisabled('btnStopAutoHeader', !!data.stop_auto); } catch(_){ }
+              // Support native UI publishing 'auto_connect' so clients receive the
+              // authoritative auto-start/connect state regardless of the exact key used.
+              try { if (typeof data.auto_connect !== 'undefined') setServerDisabled('btnStartAutoHeader', !!data.auto_connect); } catch(_){ }
+              try { if (typeof data.connect !== 'undefined') setServerDisabled('btnConnectHeader', !!data.connect); } catch(_){ }
+              try { if (typeof data.disconnect !== 'undefined') setServerDisabled('btnDisconnectHeader', !!data.disconnect); } catch(_){ }
+              // Other page buttons (may not exist on all pages)
+              try { if (typeof data.disconnect !== 'undefined') setServerDisabled('btnDisconnect', !!data.disconnect); } catch(_){ }
+              try { if (typeof data.toggle_status !== 'undefined') setServerDisabled('btnToggleStatus', !!data.toggle_status); } catch(_){ }
+              try { if (typeof data.clear_status !== 'undefined') setServerDisabled('btnClearStatus', !!data.clear_status); } catch(_){ }
+              // configured period lock from server
+              try { const cp = document.getElementById('configuredPeriod'); if (cp && typeof data.set_cycle !== 'undefined') { if (data.set_cycle) { cp.classList.add('disabled'); cp.tabIndex = -1; } else { cp.classList.remove('disabled'); cp.tabIndex = 0; } } } catch(_){ }
+              try { if (typeof data.browse_esi !== 'undefined') setServerDisabled('btnBrowseEsi', !!data.browse_esi); } catch(_){ }
+              // Web-only buttons (oscilloscope, attitude, mechanism, auto_test, toggle_status)
+              try { if (typeof data.oscilloscope !== 'undefined') setServerDisabled('btnOscilloscope', !!data.oscilloscope); } catch(_){ }
+              try { if (typeof data.attitude !== 'undefined') setServerDisabled('btnAttitude', !!data.attitude); } catch(_){ }
+              try { if (typeof data.mechanism !== 'undefined') setServerDisabled('btnMechanism', !!data.mechanism); } catch(_){ }
+              try { if (typeof data.auto_test !== 'undefined') setServerDisabled('btnAutoTest', !!data.auto_test); } catch(_){ }
+              try { if (typeof data.toggle_status !== 'undefined') setServerDisabled('btnToggleStatusHeader', !!data.toggle_status); } catch(_){ }
+              // Save to window._lastUiState for reference
+              if (!window._lastUiState) window._lastUiState = {};
+              Object.assign(window._lastUiState, data);
+              // If server signals connect==true but reports not-online (oOnline==false),
+              // don't let the server's startup default disable the client's Connect button.
+              try {
+                if (typeof data.connect !== 'undefined' && data.connect === true && typeof data.oOnline !== 'undefined' && !data.oOnline) {
+                  setServerDisabled('btnConnectHeader', false);
+                }
+              } catch(_){ }
+              // Disable or enable adapter select according to connection state
+              try {
+                const sel = document.getElementById('adapterSelect');
+                if (sel) {
+                  if (typeof data.adapter_select !== 'undefined') {
+                    // Server explicitly controls adapter select disabled state
+                    sel.disabled = !!data.adapter_select;
+                  } else if (typeof data.connect !== 'undefined') {
+                    // Fallback: when server disables Connect button (connect==true) we consider
+                    // the app connecting/connected and therefore lock the adapter selection.
+                    // Only treat connect==true as authoritative when server also reports oOnline
+                    // or explicitly sets disconnect==true; otherwise leave selection unlocked.
+                    if (data.connect === false) sel.disabled = false;
+                    else if (data.connect === true) {
+                      if (typeof data.oOnline !== 'undefined') {
+                        sel.disabled = !!data.oOnline;
+                      } else if (typeof data.disconnect !== 'undefined' && data.disconnect === true) {
+                        sel.disabled = true;
+                      }
+                    }
+                  }
+                }
+                try {
+                  if (typeof data.selected_adapter === 'string' && data.selected_adapter) {
+                    applyServerSelectedAdapter(
+                      data.selected_adapter,
+                      typeof data.selected_adapter_display === 'string' ? data.selected_adapter_display : ''
+                    );
+                  }
+                } catch (_) {}
+                // Update adapter status display when provided by server (e.g., "link_up:ifname")
+                try {
+                  const st = document.getElementById('adapterStatus');
+                  if (st && typeof data.adapter_status !== 'undefined') {
+                    const parts = String(data.adapter_status).split(':');
+                    const adapterValue = parts.slice(1).join(':');
+                    if (!(typeof data.selected_adapter === 'string' && data.selected_adapter)) {
+                      applyServerSelectedAdapter(
+                        adapterValue,
+                        typeof data.selected_adapter_display === 'string' ? data.selected_adapter_display : ''
+                      );
+                    }
+                    const adapterLabel = getAdapterDisplayLabel(
+                      (typeof data.selected_adapter === 'string' && data.selected_adapter) ? data.selected_adapter : adapterValue
+                    );
+                    if (parts[0] === 'simulation') st.textContent = '已選模擬介面: ' + adapterLabel;
+                    else if (parts[0] === 'link_up') st.textContent = '已選網卡已連線: ' + adapterLabel;
+                    else if (parts[0] === 'no_link') st.textContent = adapterLabel ? ('已選網卡未連線或無鏈路: ' + adapterLabel) : '已選網卡未連線或無鏈路';
+                    else st.textContent = parts.join(':');
+                  }
+                } catch (_) {}
+              } catch (_) { }
+            } catch (ex) { /* ignore parse errors */ }
+          };
+        } catch (ex) { console.error('Failed to start index SSE', ex); }
+      }
+
+      // Kick off SSE listener for immediate UI updates
+      startSseIndex();
+
+      // Immediate UI feedback: when user clicks Connect/Disconnect, lock/unlock adapter select
+      document.addEventListener('click', function (ev) {
+        try {
+          const id = ev && ev.target && ev.target.id ? ev.target.id : '';
+          const sel = document.getElementById('adapterSelect');
+          if (!sel) return;
+          if (id === 'btnConnect' || id === 'btnConnectHeader') {
+            sel.disabled = true;
+          } else if (id === 'btnDisconnect' || id === 'btnDisconnectHeader') {
+            sel.disabled = false;
+          }
+        } catch (_) { }
+      });
+
+      (async function applyCycleFromServer() {
+        // Try ui_state first for live UI values
+        try {
+          const r = await fetch('/ui_state', { cache: 'no-store' });
+          if (r.ok) {
+            const j = await r.json();
+            // possible keys: desiredCycleTime (μs), commsTime (us), actualCycleTime
+            if (j.desiredCycleTime !== undefined) {
+              const el = document.getElementById('configuredPeriod');
+              // avoid overwriting recent manual edits
+              const last = window._configuredPeriodLastUserEdit || 0;
+              const now = Date.now();
+              const graceMs = 3000;
+              if (el) { if (!last || (now - last) > graceMs) { const ms = (Number(j.desiredCycleTime) / 1000.0).toFixed(2) + ' ms'; el.textContent = ms; } }
+            }
+            if (j.commsTime !== undefined || j.actualCycleTime !== undefined) {
+              const actual = j.commsTime !== undefined ? j.commsTime : j.actualCycleTime;
+              const el2 = document.getElementById('actualPeriod');
+              if (el2) {
+                const ms = (Number(actual) / 1000.0).toFixed(2) + ' ms';
+                el2.value = ms;
+              }
+            }
+          }
+        } catch (e) { /* ignore */ }
+
+        // fallback: try /info for configured build info (may not include cycle)
+        try {
+          const r2 = await fetch('/info', { cache: 'no-store' });
+          if (r2.ok) {
+            const info = await r2.json();
+            // some servers may expose cycle in info under different key
+            if (info.desiredCycleTime !== undefined) {
+              const el = document.getElementById('configuredPeriod');
+              const last = window._configuredPeriodLastUserEdit || 0;
+              const now = Date.now();
+              const graceMs = 3000;
+              if (el) { if (!last || (now - last) > graceMs) { const ms = (Number(info.desiredCycleTime) / 1000.0).toFixed(2) + ' ms'; el.textContent = ms; } }
+            }
+          }
+        } catch (_) { }
+      })();
+
+
+
+      // Load slave list and display in a resilient table. Cache last-known data so UI still shows
+      // something when the Win32 helper window (server side) is closed.
+      (function () {
+        // If an element with id 'slavesContainer' already exists in the static HTML,
+        // reuse it to avoid duplicate IDs / mis-targeting. Otherwise create the container.
+        let existing = document.getElementById('slavesContainer');
+        if (!existing) {
+          const container = document.createElement('div');
+          container.style.marginTop = '8px';
+          container.innerHTML = '<strong>從站列表：</strong><div id="slavesContainer">(loading...)</div>';
+          const ref = document.getElementById('pinModal');
+          if (ref && ref.parentNode) ref.parentNode.insertBefore(container, ref);
+          else document.body.appendChild(container);
+          existing = document.getElementById('slavesContainer');
+        }
+
+        window._lastSlaves = window._lastSlaves || null;
+
+        function formatErrorCode603F(slave) {
+          if (!slave || !slave.errorCode603FValid || typeof slave.errorCode603F !== 'number') return 'N/A';
+          return '0x' + slave.errorCode603F.toString(16).toUpperCase().padStart(4, '0');
+        }
+
+        function updateSlaveErrorCodesFromSse(data) {
+          const slaves = data && Array.isArray(data.slaves) ? data.slaves : [];
+          for (let i = 0; i < slaves.length; i++) {
+            const td = document.querySelector(`#slavesContainer td[data-error-axis="${i + 1}"]`);
+            if (td) td.textContent = formatErrorCode603F(slaves[i]);
+          }
+        }
+
+        function renderSlaves(arr, note) {
+          const cont = document.getElementById('slavesContainer');
+          cont.textContent = '';
+          if (note) { const n = document.createElement('div'); n.style.color = '#f0ad4e'; n.textContent = note; n.style.marginBottom = '8px'; cont.appendChild(n); }
+          if (!Array.isArray(arr) || arr.length === 0) {
+            // If a note already explains the empty state, avoid adding the same default message twice
+            if (!note) {
+              const msg = document.createElement('div');
+              msg.textContent = 'No slaves discovered. Use the Connect button above to probe the network.';
+              msg.style.marginBottom = '6px';
+              cont.appendChild(msg);
+            }
+            return;
+          }
+          const tbl = document.createElement('table');
+          tbl.style.borderCollapse = 'collapse';
+          tbl.style.width = '100%';
+          const hdr = document.createElement('tr');
+          ['站號', '名稱', '0x603F', 'Vendor', 'Product', 'State', 'Outputs', 'Inputs'].forEach(h => {
+            const th = document.createElement('th'); th.textContent = h; th.style.border = '1px solid #666'; th.style.padding = '10px'; hdr.appendChild(th);
+          });
+          tbl.appendChild(hdr);
+          for (const s of arr) {
+            const tr = document.createElement('tr');
+            const vendorHex = s.vendorId !== undefined ? '0x' + (s.vendorId >>> 0).toString(16) : '';
+            const productHex = s.productCode !== undefined ? '0x' + (s.productCode >>> 0).toString(16) : '';
+            const cols = [s.position ?? '', s.name ?? '', formatErrorCode603F(s), vendorHex, productHex, s.state ?? '', s.outputs ?? '', s.inputs ?? ''];
+            cols.forEach((v, idx) => { const td = document.createElement('td'); td.textContent = v; td.style.border = '1px solid #666'; td.style.padding = '10px'; if (idx === 2) td.dataset.errorAxis = String(s.position ?? ''); tr.appendChild(td); });
+            // Actions column removed to match Win32 UI; no per-row buttons are added.
+            tbl.appendChild(tr);
+          }
+          cont.appendChild(tbl);
+          // ensure SDO display area exists (do not place it inside slavesContainer to avoid moving it)
+          let sdoArea = document.getElementById('sdoArea');
+          if (!sdoArea) {
+            const section = cont.parentNode || document.querySelector('.slaves-section') || document.body;
+            sdoArea = document.createElement('div');
+            sdoArea.id = 'sdoArea';
+            sdoArea.className = 'sdo-display';
+            section.appendChild(sdoArea);
+            try { renderSdoTable([]); } catch (_) { }
+          }
+        }
+
+        async function fetchAndRender() {
+          try {
+            const r = await fetch('/slaves', { cache: 'no-store' });
+            console.debug('[debug] GET /slaves status=', r.status);
+            if (!r.ok) {
+              // server returned error: show cached if available, otherwise message
+              if (window._lastSlaves) { renderSlaves(window._lastSlaves, '顯示快取資料 — Win32 視窗可能未執行'); }
+              else { const c = document.getElementById('slavesContainer'); if (c) c.textContent = 'Win32 視窗未運行或資料不可用'; }
+              return;
+            }
+            const arr = await r.json();
+            if (!Array.isArray(arr) || arr.length === 0) {
+              // empty result: clear and message
+              renderSlaves([], 'No slaves discovered. Use the Connect button above to probe the network.');
+              window._lastSlaves = null;
+              return;
+            }
+            // success: render and cache
+            window._lastSlaves = arr;
+            renderSlaves(arr);
+            // populate slaveSelect dropdown
+            try {
+              const sel = document.getElementById('slaveSelect');
+              if (sel) {
+                const cur = sel.value;
+                sel.innerHTML = '<option value="">(未選擇)</option>';
+                arr.forEach(s => {
+                  const o = document.createElement('option');
+                  // use position as the canonical identifier
+                  o.value = (s.position !== undefined) ? String(s.position) : (s.index !== undefined ? String(s.index) : (s.name || ''));
+                  o.textContent = (s.position !== undefined ? String(s.position) + ' - ' : '') + (s.name || ('slave ' + o.value));
+                  sel.appendChild(o);
+                });
+                // try retain previous selection
+                if (cur) {
+                  try { sel.value = cur; } catch (_) { }
+                }
+                sel.disabled = false;
+                // fetch and render SDO table for current selection (if any)
+                try { if (sel.value) fetchAndRenderSdo(sel.value); } catch (_) { }
+              }
+            } catch (e) { /* ignore */ }
+          } catch (e) {
+            // network error: use cache if present
+            if (window._lastSlaves) { renderSlaves(window._lastSlaves, '顯示快取資料 — 無法連線到 Win32'); }
+            else { const c = document.getElementById('slavesContainer'); if (c) c.textContent = '無法連線取得從站資訊'; }
+          }
+        }
+
+        // initial fetch and then poll every 2s — but skip polling while SSE is connected
+        fetchAndRender();
+        // Consider SSE active while connecting (CONNECTING=0) or open (OPEN=1). Only skip polls when CLOSED (2).
+        function isSseActive() { return (typeof eventSourceMain !== 'undefined' && eventSourceMain && eventSourceMain.readyState !== EventSource.CLOSED); }
+        setInterval(() => { if (!isSseActive()) fetchAndRender(); /* else SSE will update */ }, 2000);
+        // reflect server-selected slave from /ui_state periodically
+        async function syncSelectedSlave() {
+          try {
+            const r = await fetch('/ui_state', { cache: 'no-store' });
+            if (!r.ok) return;
+            const j = await r.json();
+            if (!j) return;
+            const sel = document.getElementById('slaveSelect');
+            if (sel && j.selectedSlave !== undefined) {
+              try {
+                sel.value = String(j.selectedSlave);
+                // update SDO table for new selection
+                fetchAndRenderSdo(sel.value);
+              } catch (_) { }
+            }
+          } catch (e) {/*ignore*/ }
+        }
+        // sync selected slave less frequently — UI will also receive server-side updates via SSE
+        setInterval(() => { if (!isSseActive()) syncSelectedSlave(); }, 5000);
+
+        // when user changes selected slave, POST to server
+        document.addEventListener('change', function (e) {
+          try {
+            const t = e.target;
+            if (t && t.id === 'slaveSelect') {
+              const val = t.value || '';
+              // send selection to server; no button guarding needed
+              fetch('/select_slave', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: JSON.stringify({ selected: val }) }).catch(() => { });
+            }
+            // when user explicitly changes adapter selection, notify server
+            if (t && t.id === 'adapterSelect') {
+              try {
+                const selectedOption = t.options[t.selectedIndex] || null;
+                const val = selectedOption ? selectedOption.value : '';
+                if (val && window._loggedIn) {
+                  lastServerSelectedAdapterValue = val;
+                  lastServerSelectedAdapterDisplay = selectedOption ? (selectedOption.textContent || '') : '';
+                  fetch('/set_adapter', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: val }).catch(() => {});
+                  try {
+                    const st2 = document.getElementById('adapterStatus');
+                    if (st2) st2.textContent = '已選擇網卡: ' + getAdapterDisplayLabel(val);
+                  } catch (_) {}
+                }
+              } catch (_) {}
+            }
+          } catch (_) { }
+        });
+        // Fetch and render SDO table for selected slave
+        async function fetchAndRenderSdo(slavePos) {
+          try {
+            // Ensure sdoArea exists inside .slaves-section (do not create inside slavesContainer)
+            const sdoAreaElem = document.getElementById('sdoArea');
+            if (!sdoAreaElem) {
+              const section = document.querySelector('.slaves-section') || document.getElementById('slavesContainer') || document.body;
+              const div = document.createElement('div'); div.id = 'sdoArea'; div.className = 'sdo-display'; section.appendChild(div);
+            }
+            if (!slavePos) {
+              // Render empty table when no slave selected
+              renderSdoTable([]);
+              return;
+            }
+            const r = await fetch('/sdo?slave=' + encodeURIComponent(slavePos), { cache: 'no-store' });
+            console.debug('[debug] GET /sdo?slave=', slavePos, ' status=', r.status);
+            let arr = [];
+            if (r.ok) {
+              try { arr = await r.json(); } catch (_) { arr = []; }
+            } else {
+              arr = [];
+            }
+
+            // Build table with headers always present (empty body if no items)
+            const tbl = document.createElement('table');
+            tbl.style.width = '100%';
+            tbl.style.borderCollapse = 'collapse';
+            const hdr = document.createElement('tr');
+            ['Index', 'Sub', 'Name', 'Type', 'Access', 'Value', 'Hex'].forEach(h => { const th = document.createElement('th'); th.textContent = h; th.style.border = '1px solid #666'; th.style.padding = '6px'; hdr.appendChild(th); });
+            tbl.appendChild(hdr);
+
+            if (Array.isArray(arr) && arr.length > 0) {
+              for (const it of arr) {
+                const tr = document.createElement('tr');
+                const idx = it.index !== undefined ? ('0x' + (it.index >>> 0).toString(16)) : '';
+                const sub = it.subindex !== undefined ? ('0x' + (it.subindex >>> 0).toString(16)) : '';
+                const cols = [idx, sub, it.name || '', it.bitlen ? (it.bitlen + 'bit') : '', it.access || '', it.value || '', it.hex || ''];
+                cols.forEach(v => { const td = document.createElement('td'); td.textContent = v; td.style.border = '1px solid #666'; td.style.padding = '6px'; tr.appendChild(td); });
+                tbl.appendChild(tr);
+              }
+            } else {
+              // When no SDO items, show 5 empty rows so the table isn't just headers
+              for (let i = 0; i < 5; ++i) {
+                const tr = document.createElement('tr');
+                const cols = ['', '', '', '', '', '', ''];
+                cols.forEach(v => { const td = document.createElement('td'); td.textContent = v; td.style.border = '1px solid #666'; td.style.padding = '6px'; tr.appendChild(td); });
+                tbl.appendChild(tr);
+              }
+            }
+
+            // Render into sdoArea (replace children)
+            const area = document.getElementById('sdoArea');
+            if (area) {
+              while (area.firstChild) area.removeChild(area.firstChild);
+              area.appendChild(tbl);
+            } else {
+              // fallback: append to .slaves-section
+              const section = document.querySelector('.slaves-section') || document.getElementById('slavesContainer') || document.body;
+              section.appendChild(tbl);
+            }
+          } catch (e) { const sdoArea = document.getElementById('sdoArea') || document.getElementById('sdoDisplay'); if (sdoArea) sdoArea.textContent = '(讀取 SDO 時發生錯誤)'; }
+        }
+        // Helper to render SDO table into #sdoArea
+        function renderSdoTable(arr) {
+          try {
+            const area = document.getElementById('sdoArea') || (function () { const p = document.getElementById('slavesContainer') || document.body; const d = document.createElement('div'); d.id = 'sdoArea'; d.className = 'sdo-display'; p.appendChild(d); return d; })();
+            // build table
+            const tbl = document.createElement('table'); tbl.style.width = '100%'; tbl.style.borderCollapse = 'collapse';
+            const hdr = document.createElement('tr');['Index', 'Sub', 'Name', 'Type', 'Access', 'Value', 'Hex'].forEach(h => { const th = document.createElement('th'); th.textContent = h; th.style.border = '1px solid #666'; th.style.padding = '6px'; hdr.appendChild(th); }); tbl.appendChild(hdr);
+            if (Array.isArray(arr) && arr.length > 0) {
+              for (const it of arr) {
+                const tr = document.createElement('tr');
+                const idx = it.index !== undefined ? ('0x' + (it.index >>> 0).toString(16)) : '';
+                const sub = it.subindex !== undefined ? ('0x' + (it.subindex >>> 0).toString(16)) : '';
+                const cols = [idx, sub, it.name || '', it.bitlen ? (it.bitlen + 'bit') : '', it.access || '', it.value || '', it.hex || ''];
+                cols.forEach(v => { const td = document.createElement('td'); td.textContent = v; td.style.border = '1px solid #666'; td.style.padding = '6px'; tr.appendChild(td); });
+                tbl.appendChild(tr);
+              }
+            } else {
+              for (let i = 0; i < 5; ++i) { const tr = document.createElement('tr'); for (let c = 0; c < 7; ++c) { const td = document.createElement('td'); td.textContent = ''; td.style.border = '1px solid #666'; td.style.padding = '6px'; tr.appendChild(td); } tbl.appendChild(tr); }
+            }
+            // replace area content
+            while (area.firstChild) area.removeChild(area.firstChild);
+            area.appendChild(tbl);
+          } catch (_) { }
+        }
+        // Listen to slave selection changes to update SDO table
+        document.getElementById('slaveSelect').addEventListener('change', function () { try { const v = this.value; fetchAndRenderSdo(v); } catch (_) { } });
+      })();
+    });
+
+    // Helper to guard against rapid repeated clicks: mark button as busy while request is in flight.
+    // NOTE: important: do NOT modify the element's "disabled" attribute here because
+    // the authoritative enable/disable state MUST come from the server via /ui_state or SSE.
+    // We use a data-busy flag and a CSS class for local feedback only.
+    async function guardedPost(btnId, path, options = {}) {
+      const btn = document.getElementById(btnId);
+      if (btn && btn.dataset && btn.dataset.busy === '1') return { ok: false, text: 'busy' };
+      // prevent actions when not logged in
+      if (!window._loggedIn) return { ok: false, text: 'not_logged_in' };
+      if (btn) { btn.dataset.busy = '1'; btn.classList.add('busy'); }
+      try {
+        const res = await post(path, options);
+        return res;
+      } catch (e) {
+        return { ok: false, text: e.toString() };
+      } finally {
+        if (btn) { delete btn.dataset.busy; btn.classList.remove('busy'); }
+      }
+    }
+
+    // Adapter select no longer posts changes to server (bidirectional sync removed)
+  </script>
+  <script>
+    // Adapter SSE handling removed: server no longer provides adapter lists/selection.
+    // Remaining SSE/UI updates are handled by the main SSE listener started earlier.
+  </script>
+  <script>
+    // Ensure SDO area contains a table (headers + 5 empty rows) on load and keep the #sdoArea element
+    (function renderDefaultSdoTable() {
+      try {
+        // find the canonical sdoArea created in the static HTML; if missing, create it under .slaves-section
+        let area = document.getElementById('sdoArea');
+        if (!area) {
+          const section = document.querySelector('.slaves-section') || document.getElementById('slavesContainer') || document.body;
+          area = document.createElement('div'); area.id = 'sdoArea'; area.className = 'sdo-display';
+          section.appendChild(area);
+        }
+        // build markup for a table with headers + 5 empty rows and inject into sdoArea (preserves the container)
+        const cols = ['Index', 'Sub', 'Name', 'Type', 'Access', 'Value', 'Hex'];
+        let html = '<table id="sdoTable" style="width:100%;border-collapse:collapse">';
+        html += '<tr>' + cols.map(h => '<th style="border:1px solid #666;padding:6px">' + h + '</th>').join('') + '</tr>';
+        for (let r = 0; r < 5; ++r) { html += '<tr>' + new Array(cols.length).fill('<td style="border:1px solid #666;padding:6px"></td>').join('') + '</tr>'; }
+        html += '</table>';
+        // replace inner content but keep #sdoArea element intact
+        area.innerHTML = html;
+      } catch (_) { }
+    })();
+  </script>
+  <!-- Keyboard modal (hidden by default) -->
+  <script>
+    let lastServerSelectedAdapterValue = '';
+    let lastServerSelectedAdapterDisplay = '';
+
+    function applyServerSelectedAdapter(adapterValue, adapterDisplay) {
+      if (!adapterValue) return false;
+      lastServerSelectedAdapterValue = adapterValue;
+      if (adapterDisplay) {
+        lastServerSelectedAdapterDisplay = adapterDisplay;
+      }
+      return applyAdapterSelection(adapterValue);
+    }
+
+    function applyAdapterSelection(adapterValue) {
+      const sel = document.getElementById('adapterSelect');
+      if (!sel || !adapterValue) return false;
+      for (let i = 0; i < sel.options.length; ++i) {
+        const option = sel.options[i];
+        if (option && option.value === adapterValue) {
+          sel.selectedIndex = i;
+          return true;
+        }
+      }
+      return false;
+    }
+
+    function getAdapterDisplayLabel(adapterValue) {
+      if (!adapterValue) return '';
+      if (adapterValue === lastServerSelectedAdapterValue && lastServerSelectedAdapterDisplay) {
+        return lastServerSelectedAdapterDisplay;
+      }
+      const sel = document.getElementById('adapterSelect');
+      if (!sel) return adapterValue;
+      for (let i = 0; i < sel.options.length; ++i) {
+        const option = sel.options[i];
+        if (option && option.value === adapterValue) {
+          return option.textContent || adapterValue;
+        }
+      }
+      return adapterValue;
+    }
+
+    // Client-side adapter loader: fetch adapter list from server and populate dropdown
+    async function loadAdapters() {
+      try {
+        if (!window._loggedIn) return;
+        const sel = document.getElementById('adapterSelect');
+        if (!sel) return;
+        if (!lastServerSelectedAdapterValue) {
+          try {
+            const uiStateResponse = await fetch('/ui_state', { cache: 'no-store', credentials: 'same-origin' });
+            if (uiStateResponse.ok) {
+              const uiState = await uiStateResponse.json();
+              if (typeof uiState.selected_adapter === 'string' && uiState.selected_adapter) {
+                lastServerSelectedAdapterValue = uiState.selected_adapter;
+                lastServerSelectedAdapterDisplay = typeof uiState.selected_adapter_display === 'string' ? uiState.selected_adapter_display : '';
+              } else if (typeof uiState.adapter_status === 'string') {
+                const parts = String(uiState.adapter_status).split(':');
+                lastServerSelectedAdapterValue = parts.slice(1).join(':');
+              }
+            }
+          } catch (_) {}
+        }
+        const r = await fetch('/adapters', { cache: 'no-store', credentials: 'same-origin' });
+        if (!r.ok) return;
+        const arr = await r.json();
+        if (!Array.isArray(arr)) return;
+        sel.innerHTML = '';
+        const seen = new Set();
+        arr.forEach((it, idx) => {
+          const val = it.pcapName || it.display || String(idx);
+          if (seen.has(val)) return; // skip duplicates by canonical id
+          seen.add(val);
+          const o = document.createElement('option');
+          o.value = val;
+          let label = it.display || it.friendly || it.pcapName || ('Adapter ' + idx);
+          const isSimulation = String(val).startsWith('__SIM_') || String(it.adapterName || '').startsWith('__SIM_');
+          if (it.adapterName && !isSimulation) label += ' [' + (it.adapterName.length > 8 ? it.adapterName.slice(-8) : it.adapterName) + ']';
+          o.textContent = label;
+          if (!it.linkUp) o.disabled = true;
+          sel.appendChild(o);
+        });
+        let appliedServerSelection = false;
+        if (lastServerSelectedAdapterValue) {
+          appliedServerSelection = applyServerSelectedAdapter(lastServerSelectedAdapterValue, lastServerSelectedAdapterDisplay);
+        }
+        if (!appliedServerSelection) {
+          let firstIndex = -1;
+          for (let i = 0; i < sel.options.length; ++i) {
+            if (!sel.options[i].disabled) {
+              firstIndex = i;
+              break;
+            }
+          }
+          if (firstIndex >= 0) sel.selectedIndex = firstIndex;
+          else if (sel.options.length > 0) sel.selectedIndex = 0;
+        }
+        sel.disabled = false;
+        try { const st = document.getElementById('adapterStatus'); if (st) st.textContent = '已由伺服器載入網卡清單'; } catch (_) { }
+      } catch (e) { console.warn('loadAdapters failed', e); }
+    }
+
+    // Adapter selection is synchronized both ways via /set_adapter, /ui_state, and SSE.
+  </script>
+  <script>
+    // Ensure auth check and UI update still run on load
+    (async function initAuthAndUi() {
+      await window.Auth.ready();
+      const keepalive = window.Auth.createKeepalive();
+      updateAuthUI();
+      if (window._loggedIn) {
+        try { await loadAdapters(); } catch(_) {}
+      }
+      void keepalive;
+    })();
+
+    window.Auth.installBfcacheReload();
+  </script>
+  <!-- Shared sidebar/menu behavior (required so the hamburger icon and sidebar work) -->
+  <script src="sidebar-menu.js"></script>
+  <!-- Inline keypad PIN modal removed — using shared auth.js modal for simple input -->
+</body>
+
+</html>

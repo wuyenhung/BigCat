@@ -1,0 +1,480 @@
+/* Page-specific styles for viewer_6dof.html */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    overflow: hidden;
+}
+
+#container {
+    width: 100vw;
+    height: 100vh;
+    position: relative;
+}
+
+#canvas-container {
+    width: 100%;
+    height: 100%;
+}
+
+/* 橫向置頂控制面板 */
+#controls {
+    position: absolute;
+    top: 8px;
+    left: 0;
+    right: 0;
+    margin: 0 auto;
+    /* transform: translateX(-50%); Removed to allow fixed children positioning */
+    padding: 4px 10px;
+    max-width: calc(100% - 40px);
+    width: fit-content;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.input-source-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+
+.input-source-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: #1f2937;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.input-source-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #0f766e;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 96px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #374151;
+    background: rgba(148, 163, 184, 0.18);
+}
+
+.status-badge.manual {
+    color: #1d4ed8;
+    background: rgba(191, 219, 254, 0.78);
+}
+
+.status-badge.external {
+    color: #9a3412;
+    background: rgba(254, 215, 170, 0.85);
+}
+
+.status-badge.connected {
+    color: #166534;
+    background: rgba(187, 247, 208, 0.9);
+}
+
+h2 {
+    margin-bottom: 8px;
+    color: #333;
+    font-size: 13px;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 4px;
+}
+
+.control-group {
+    margin-bottom: 12px;
+}
+
+.control-group label {
+    display: block;
+    margin-bottom: 5px;
+    color: #000000;
+    font-weight: 600;
+    font-size: 11px;
+}
+
+.control-row {
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    flex-wrap: wrap;
+    /* 允許在窄螢幕換行，避免溢出 */
+    align-items: flex-start;
+}
+
+.slider-group {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    width: auto;
+    min-width: 140px;
+    box-sizing: border-box;
+    padding: 4px 4px;
+    flex: 1 1 160px;
+    /* 等分伸縮，保持等長且可在窄螢幕縮放 */
+    max-width: 33%;
+    /* 預設每行最多三個，避免過長 */
+}
+
+/* 為 XYZ 使用略寬的滑桿組，避免標示與數值重疊（但不會分得太開） */
+.slider-group.wide {
+    min-width: 160px;
+}
+
+.slider-group label {
+    display: flex;
+    justify-content: space-around;
+    margin-bottom: 3px;
+    font-size: 10px;
+    width: 100%;
+    align-items: center;
+    padding: 0 8px;
+    /* 收窄左右空間 */
+    column-gap: 8px;
+}
+
+/* 當使用 wide 時，讓標示靠左、數值靠右 */
+.slider-group.wide label {
+    justify-content: space-between;
+}
+
+.value-container {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+input[type="range"] {
+    width: 100%;
+    /* 增加滑桿高度，讓操作區更容易點擊 */
+    height: 10px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #e6e6e6, #d8d8d8);
+    outline: none;
+    cursor: pointer;
+    /* 讓 track 有點內陰影增加對比 */
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+}
+
+input[type="range"]:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    /* 放大控制點，使其與變寬的 track 對齊 */
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #667eea;
+    cursor: pointer;
+    /* 使 thumb 垂直居中於增高的 track */
+    margin-top: -4px; /* (18 - 10)/2 * -1 = -4 */
+    box-shadow: 0 3px 6px rgba(0,0,0,0.18);
+    border: 2px solid rgba(255,255,255,0.12);
+}
+
+/* WebKit track (for consistency with Firefox track) */
+input[type="range"]::-webkit-slider-runnable-track {
+    height: 10px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #e6e6e6, #d8d8d8);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+}
+
+/* Firefox 特殊樣式 */
+input[type="range"]::-moz-range-track {
+    height: 10px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #e6e6e6, #d8d8d8);
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.08);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #667eea;
+    border: 2px solid rgba(255,255,255,0.12);
+    box-shadow: 0 3px 6px rgba(0,0,0,0.18);
+}
+
+/* page-level buttons only; keep sidebar buttons using shared sidebar-menu.css */
+button:not(.menu-toggle):not(.sidebar-buttons *) {
+    padding: var(--btn-padding);
+    background: #667eea;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    transition: background 0.3s;
+}
+
+/* 固定於視窗底部中間的按鈕群組 (Desktop) */
+.button-group {
+    position: fixed;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: 10px;
+    z-index: 999;
+    display: flex;
+    gap: 15px;
+}
+
+.button-group button {
+    padding: 8px 16px;
+    font-size: 13px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+
+button:hover {
+    background: #5568d3;
+}
+
+button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+#info {
+    position: absolute;
+    top: 15px;
+    right: 15px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 12px;
+    border-radius: 10px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    font-size: 10px;
+    color: #00008B;
+    max-width: 200px;
+}
+
+#info h3 {
+    margin: 0 0 8px 0;
+    color: #00008B;
+    font-size: 13px;
+    border-bottom: 2px solid #00008B;
+    padding-bottom: 5px;
+}
+
+#info ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+#info li {
+    margin-bottom: 6px;
+    padding-left: var(--page-padding-left);
+    position: relative;
+}
+
+#info li:before {
+    content: "▸";
+    position: absolute;
+    left: 0;
+    color: #00008B;
+    font-weight: bold;
+}
+
+.value {
+    color: #FF0000;
+    font-weight: bold;
+    font-size: 11px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    /* 使用等寬字體 */
+    font-variant-numeric: tabular-nums;
+    /* 數字等寬對齊 */
+    text-align: right;
+    min-width: 45px;
+    /* 固定最小寬度，避免數值跳動影響排版 */
+    display: inline-block;
+}
+
+/* 僅套用到 label 的第一個 span（標示文字），避免影響到 value-container */
+.slider-group label>span:first-child {
+    color: #000000 !important;
+    font-weight: 700 !important;
+    background-color: #DCEEFF;
+    /* 淡藍底 */
+    padding: 2px 6px;
+    border-radius: 4px;
+    display: inline-block;
+    line-height: 1;
+}
+
+/* 確保顯示值容器與值本身沒有底色 */
+.slider-group .value-container {
+    background: transparent !important;
+    padding: 0 !important;
+}
+
+.slider-group .value {
+    background: transparent !important;
+}
+
+/* Compact rule for load status text (prevent overflow on small phones) */
+@media (max-width: 600px) {
+    #loadStatus {
+        font-size: 0.9em;
+        max-width: 12rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: inline-block;
+        vertical-align: middle;
+    }
+}
+
+/* RWD: Mobile Adaptation (手機版自適應) */
+@media (max-width: 768px) {
+    #controls {
+        width: 100%;
+        max-width: 100%;
+        top: 0;
+        left: 0;
+        transform: none;
+        padding: 5px;
+        /* 減少內距 */
+        /* 移除邊框感：背景全透明或極淡，移除陰影 */
+        background: rgba(255, 255, 255, 0.0);
+        /* Safari requires the -webkit- prefixed property for backdrop-filter (Safari 9+, iOS Safari 9+) */
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+        box-shadow: none;
+        border-radius: 0;
+
+        /* 使用 Grid 佈局達成「排成兩排」(兩列) 的整齊效果 */
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 5px 8px;
+        /* 減少間距，避免超出畫面 */
+        align-items: center;
+        box-sizing: border-box;
+        /* 確保 padding 不會撐大寬度 */
+    }
+
+    .input-source-row {
+        grid-column: 1 / -1;
+        width: 100%;
+        padding: 8px 10px;
+        margin-bottom: 2px;
+    }
+
+    .input-source-toggle {
+        font-size: 12px;
+    }
+
+    .status-badge {
+        min-width: 88px;
+        font-size: 10px;
+    }
+
+    /* 讓原本的列容器消失，子元素直接參與 Grid */
+    .control-row {
+        display: contents;
+    }
+
+    .slider-group,
+    .slider-group.wide {
+        width: 100%;
+        /* 填滿 Grid Cell */
+        max-width: none;
+        min-width: 0;
+        /* 覆蓋 Desktop 的 min-width 設定，避免撐開 */
+        flex: none;
+        margin: 0;
+        padding: 0;
+    }
+
+    .slider-group label {
+        display: flex;
+        /* 強制 Flex */
+        justify-content: space-between;
+        /* 標籤靠左，數值靠右 */
+        width: 100%;
+        font-size: 12px;
+        margin-bottom: 2px;
+        font-weight: bold;
+        /* 增加文字對比度，因為背景變透明了 */
+        text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+    }
+
+    /* 移動棒調整：寬度縮小，高度加高 */
+    input[type="range"] {
+        width: 90%;
+        /* 縮小寬度，避免貼邊 */
+        margin: 0 auto;
+        /* 居中 */
+        display: block;
+        height: 14px;
+        /* 加高 (8 -> 14) */
+        border-radius: 7px;
+        background: rgba(255, 255, 255, 0.6);
+        border: 1px solid #ccc;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+        width: 24px;
+        /* 加大控制點 */
+        height: 24px;
+        margin-top: -6px;
+        /* (24-14)/2 * -1 = -5 */
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    }
+
+    #info {
+        display: none !important;
+    }
+
+    /* 按鈕群組：跨兩欄 */
+    .button-group {
+        grid-column: 1 / -1;
+        position: static;
+        transform: none;
+        width: 100%;
+        margin-top: 10px;
+        display: flex;
+        gap: 10px;
+    }
+
+    .button-group button {
+        flex: 1;
+        padding: 12px;
+        font-size: 14px;
+        box-shadow: none;
+        background: #667eea;
+        color: white;
+        border-radius: 8px;
+    }
+}
