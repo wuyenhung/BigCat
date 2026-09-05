@@ -50,6 +50,21 @@ std::vector<SlaveInfo> EtherCATMaster::GetSlaveInfo() {
     return info;
 }
 
+std::string EtherCATMaster::GetSlaveEsiFile(int slaveIndex) const
+{
+    if (slaveIndex < 1 || slaveIndex > (int)slaveEsiFiles_.size()) {
+        return std::string();
+    }
+    return slaveEsiFiles_[slaveIndex];
+}
+
+std::string EtherCATMaster::GetSlaveEsiDeviceName(int slaveIndex) const
+{
+    if (slaveIndex < 1 || slaveIndex > (int)slaveEsiDeviceNames_.size()) {
+        return std::string();
+    }
+    return slaveEsiDeviceNames_[slaveIndex];
+}
 
 void EtherCATMaster::SetError(const std::string& error) {
     lastError = error;
@@ -364,7 +379,12 @@ void EtherCATMaster::TriggerAllPDOFiltersSoftStart()
     // actual feedback; without clearing here, a stale staged 0x60FF can remain
     // active until the second cycle and can push an axis away from a zero target.
     ClearStagedOutputsForCyclicMotionCommands();
-    if (IsRunning()) {
+    // On real hardware the cyclic task handles PDO exchange; calling
+    // ecx_send_processdata from this (auto-connect) thread races with
+    // the cyclic task and can cause WKC=0 / frame corruption.
+    // In simulation mode SendProcessDataOnce is needed to advance the
+    // simulation engine, and there is no concurrent cyclic thread.
+    if (IsRunning() && simulationMode_.load(std::memory_order_relaxed)) {
         SendProcessDataOnce();
     }
 

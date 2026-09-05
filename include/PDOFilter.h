@@ -325,8 +325,9 @@ private:
     // 緩啟動時最大速度縮減比例 (0..1)。目前使用既有 0.2 再下修 0.7 倍，
     // 也就是軟啟動期間限制為設定最高速度的 14%。
     static constexpr double SOFT_START_VEL_RATIO = 0.14;
-    static constexpr double SOFT_START_SETTLE_TIME = 0.05;  // 位置接近後需要持續的時間（秒）
-    static constexpr double SOFT_START_POSITION_TOLERANCE = 0.1;  // 位置接近判斷閥值（機械單位）
+    static constexpr double SOFT_START_SETTLE_TIME = 0.20;  // 位置接近後需要持續的時間（秒）
+    static constexpr double SOFT_START_POSITION_TOLERANCE = 0.2;  // 剎車死區閥值（濾波器何時停止移動）
+    static constexpr double SOFT_START_READY_TOLERANCE = 0.5;   // Ready 判斷閥值（須大於剎車死區+伺服追隨誤差）
     // 在接近目標時提前減速的因子 (0..1)。已移除可動態設定API，使用內部預設值。
     double ioPositionCloseStartTime_;  // 位置開始接近的時間戳（秒）
     bool ioPositionWasClose_;          // 上一週期位置是否接近

@@ -186,7 +186,9 @@ bool EtherCATMaster::ReadSDODuringIdleWindow(uint16_t slave, uint16_t index, uin
     std::string lastAttemptError;
     bool success = false;
 
-    EnterCriticalSection(&sdoCS);
+    // Wait for idle window OUTSIDE sdoCS so background SDO readers (0x60FD,
+    // 0x603F) can also detect the same gap and compete fairly.  Only the
+    // actual mailbox access is serialized under sdoCS.
     while (true) {
         int attemptTimeoutUs = 0;
         if (!WaitForSdoIdleWindow(deadline, kSdoIdleMinAttemptUs, kSdoIdleGuardUs, attemptTimeoutUs)) {
@@ -196,23 +198,44 @@ bool EtherCATMaster::ReadSDODuringIdleWindow(uint16_t slave, uint16_t index, uin
             break;
         }
 
-        int readSize = size;
-        std::string attemptError;
-        success = ReadSDODirectLocked(slave, index, subindex, data, readSize,
-                                      attemptTimeoutUs, false, &attemptError);
-        if (success) {
-            size = readSize;
-            break;
-        }
+        EnterCriticalSection(&sdoCS);
+        {
+            // Re-verify idle window is still valid under lock
+            bool idleStillValid = false;
+            if (IsRunning()) {
+                if (!pdoExchangeActive_.load(std::memory_order_acquire)) {
+                    const long long idleDeadlineUs = pdoIdleWindowDeadlineUs_.load(std::memory_order_acquire);
+                    const auto now = std::chrono::steady_clock::now();
+                    const long long nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch()).count();
+                    if (idleDeadlineUs - nowUs - kSdoIdleGuardUs >= kSdoIdleMinAttemptUs) {
+                        idleStillValid = true;
+                    }
+                }
+            } else {
+                idleStillValid = true;
+            }
 
-        if (!attemptError.empty()) {
-            lastAttemptError = attemptError;
+            if (idleStillValid) {
+                int readSize = size;
+                std::string attemptError;
+                success = ReadSDODirectLocked(slave, index, subindex, data, readSize,
+                                              attemptTimeoutUs, false, &attemptError);
+                if (success) {
+                    size = readSize;
+                } else if (!attemptError.empty()) {
+                    lastAttemptError = attemptError;
+                }
+            }
         }
+        LeaveCriticalSection(&sdoCS);
+
+        if (success) break;
+
         if (std::chrono::steady_clock::now() >= deadline) {
             break;
         }
     }
-    LeaveCriticalSection(&sdoCS);
 
     if (!success) {
         if (errorMessage) {
@@ -244,7 +267,7 @@ bool EtherCATMaster::WriteSDODuringIdleWindow(uint16_t slave, uint16_t index, ui
     std::string lastAttemptError;
     bool success = false;
 
-    EnterCriticalSection(&sdoCS);
+    // Wait for idle window OUTSIDE sdoCS — same fairness fix as ReadSDODuringIdleWindow.
     while (true) {
         int attemptTimeoutUs = 0;
         if (!WaitForSdoIdleWindow(deadline, kSdoIdleMinAttemptUs, kSdoIdleGuardUs, attemptTimeoutUs)) {
@@ -254,21 +277,40 @@ bool EtherCATMaster::WriteSDODuringIdleWindow(uint16_t slave, uint16_t index, ui
             break;
         }
 
-        std::string attemptError;
-        success = WriteSDODirectLocked(slave, index, subindex, data, size,
-                                       attemptTimeoutUs, false, &attemptError);
-        if (success) {
-            break;
-        }
+        EnterCriticalSection(&sdoCS);
+        {
+            bool idleStillValid = false;
+            if (IsRunning()) {
+                if (!pdoExchangeActive_.load(std::memory_order_acquire)) {
+                    const long long idleDeadlineUs = pdoIdleWindowDeadlineUs_.load(std::memory_order_acquire);
+                    const auto now = std::chrono::steady_clock::now();
+                    const long long nowUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                        now.time_since_epoch()).count();
+                    if (idleDeadlineUs - nowUs - kSdoIdleGuardUs >= kSdoIdleMinAttemptUs) {
+                        idleStillValid = true;
+                    }
+                }
+            } else {
+                idleStillValid = true;
+            }
 
-        if (!attemptError.empty()) {
-            lastAttemptError = attemptError;
+            if (idleStillValid) {
+                std::string attemptError;
+                success = WriteSDODirectLocked(slave, index, subindex, data, size,
+                                               attemptTimeoutUs, false, &attemptError);
+                if (!success && !attemptError.empty()) {
+                    lastAttemptError = attemptError;
+                }
+            }
         }
+        LeaveCriticalSection(&sdoCS);
+
+        if (success) break;
+
         if (std::chrono::steady_clock::now() >= deadline) {
             break;
         }
     }
-    LeaveCriticalSection(&sdoCS);
 
     if (!success) {
         if (errorMessage) {

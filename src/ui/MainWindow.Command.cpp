@@ -178,6 +178,10 @@ void MainWindow::AbortAutoConnectSoftStartForStop(const char *logPrefix) {
     if (!this->autoConnectRunning.load()) return;
 
     this->autoConnectAbortRequested.store(true);
+    // Clear the busy flag immediately so oBusy turns off without waiting
+    // for the auto-connect thread to reach its cleanup code. The thread
+    // will still run to completion and clear the flag again (no-op).
+    SetBusyFlagAndNotify(this->autoConnectBusy, false);
     this->softStartSoundPlaying_.store(false);
     this->StopSystemAlertSoundIfIdle();
     PostUTF8LogToUI(std::string(logPrefix) + "Requested abort of Auto Connect soft-start\n");
@@ -1854,19 +1858,19 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                             try {
                                 master->TriggerAllPDOFiltersSoftStart();
                                 PostUTF8LogToUI(std::string("[AUTO] Soft Start 已觸發（連線運轉開始）\n"));
-                                // Immediately enable PDO filtering so filters become active
-                                // and can perform soft-start behavior. Some master-side
-                                // implementations require filtering to be enabled for
-                                // per-axis soft-start to progress.
+                                master->ClearGlobalError();
                                 try {
                                     master->EnablePDOFiltering(true);
-                                    // Inform AutoWindow owner-side online flag
-                                    NotifyAutoWindowOwnerState((WPARAM)0x2);
-                                    // PDO filtering enabled log removed for cleaner output
+                                    if (!master->IsPDOFilteringEnabled()) {
+                                        std::string lastErr = master->GetLastError();
+                                        PostUTF8LogToUI(std::string("[AUTO] PDO filtering NOT enabled: ")
+                                            + (lastErr.empty() ? "unknown reason" : lastErr) + "\n");
+                                    } else {
+                                        NotifyAutoWindowOwnerState((WPARAM)0x2);
+                                    }
                                 } catch(...) {
-                                    PostUTF8LogToUI(std::string("[AUTO] Failed to enable PDO filtering immediately after trigger\n"));
+                                    PostUTF8LogToUI(std::string("[AUTO] Failed to enable PDO filtering\n"));
                                 }
-                                // [AUTO-DBG] diagnostic logs removed for production
                             } catch (...) {
                                 PostUTF8LogToUI(std::string("[AUTO] Failed to trigger Soft Start\n"));
                             }
@@ -1923,25 +1927,57 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                     // Sound state log removed for cleaner output
                                 }
 
+                                double lastStatusLogSec = -3.0; // force first log at t=0
+                                double allCurrentlyReadySince = -1.0; // elapsed sec when all axes became simultaneously ready
+                                const double SIMULTANEOUS_READY_SETTLE_SEC = 0.20; // require all axes simultaneously ready for 0.2s
                                 while (waited < timeoutSec) {
-                                    // If an immediate/emergency stop requested abort of Auto Connect,
-                                    // exit the soft-start coordination early.
                                     if (this->autoConnectAbortRequested.load()) {
                                         PostUTF8LogToUI(std::string("[AUTO] Soft Start aborted by Immediate/Emergency Stop\n"));
                                         break;
                                     }
+                                    // Check current ready state of every axis (not one-way latch).
+                                    // With the PDOFilter fix, ioSoftStartReady_ now resets when an
+                                    // axis leaves the ready zone, so we can trust the live cached value.
+                                    int currentlyReadyCount = 0;
                                     for (int si = 1; si <= sc_local; ++si) {
                                         bool r = false;
                                         try { r = master->IsPDOFilterSoftStartReady_Cached(si); } catch (...) { r = false; }
-                                        if (r && !prevReady[si]) {
-                                            // Per-axis ready log removed for cleaner output
-                                            prevReady[si] = 1;
+                                        if (r) {
+                                            ++currentlyReadyCount;
+                                            prevReady[si] = 1; // track for diagnostic logging
                                         }
                                     }
                                     if (checkPersistentTrackingError(waited)) {
                                         break;
                                     }
-                                    if (master->AreAllPDOFiltersSoftStartReady_Cached()) { allReady = true; break; }
+                                    // Require ALL axes to be simultaneously ready for a short
+                                    // settle duration. This prevents declaring completion when
+                                    // an axis briefly crosses the ready threshold while still
+                                    // oscillating or overshooting.
+                                    const bool allCurrentlyReady = (currentlyReadyCount == sc_local);
+                                    if (allCurrentlyReady) {
+                                        if (allCurrentlyReadySince < 0.0) {
+                                            allCurrentlyReadySince = waited;
+                                        } else if ((waited - allCurrentlyReadySince) >= SIMULTANEOUS_READY_SETTLE_SEC) {
+                                            allReady = true; break;
+                                        }
+                                    } else {
+                                        allCurrentlyReadySince = -1.0;
+                                    }
+                                    // Periodic status: log every ~3s which axes are still not ready
+                                    if (waited - lastStatusLogSec >= 3.0) {
+                                        lastStatusLogSec = waited;
+                                        int notReadyCount = sc_local - currentlyReadyCount;
+                                        if (notReadyCount > 0) {
+                                            uint32_t wkc = 0;
+                                            try { wkc = master->GetWorkingCounter(); } catch (...) {}
+                                            std::ostringstream oss;
+                                            oss << "[AUTO] Soft Start waiting t=" << std::fixed << std::setprecision(0) << waited
+                                                << "s ready=" << currentlyReadyCount << "/" << sc_local
+                                                << " WKC=" << wkc << "\n";
+                                            PostUTF8LogToUI(oss.str());
+                                        }
+                                    }
                                     std::this_thread::sleep_for(std::chrono::duration<double>(pollIntervalSec));
                                     waited += pollIntervalSec;
                                 }
@@ -1967,14 +2003,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                         std::string("[AUTO] Soft Start aborted due to persistent global error\n") :
                                         std::string("[AUTO] Soft Start aborted by request\n"));
                                 } else if (allReady) {
-                                    // [AUTO-DBG] diagnostic logs removed for production
-                                    // All ready: enable filtering (now safe) and request completion,
-                                    // then stop sound. Enabling filtering only after readiness
-                                    // reduces the chance of abrupt output steps.
+                                    // All axes simultaneously ready — clear the busy
+                                    // flag BEFORE notifying AutoWindow so any subsequent
+                                    // background poll sees snapshot.busy=false and does
+                                    // not re-assert g_oBusy=true over our notification.
+                                    this->autoConnectBusy.store(false);
                                     try {
                                         master->EnablePDOFiltering(true);
                                         NotifyAutoWindowOwnerState((WPARAM)0x2);
-                                        // PDO filtering enabled log removed for cleaner output
                                     } catch(...) {
                                         PostUTF8LogToUI(std::string("[AUTO] Failed to enable PDO filtering after readiness\n"));
                                     }
@@ -1983,6 +2019,9 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                     if (!this->violationSoundPlaying_.load()) {
                                         try { PlaySound(NULL, NULL, 0); } catch(...) {}
                                     }
+                                    // Force UI refresh now that busy is cleared
+                                    PostAutoStatusUpdate();
+                                    RequestMotionUiRefresh();
                                     PostUTF8LogToUI(std::string("[AUTO] All axes ready — requested master to complete Soft Start\n"));
                                 } else {
                                     // Did not complete within initial timeout: log and continue
@@ -1993,19 +2032,35 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                     // indefinite hanging if an axis is slightly out of tolerance or stuck.
                                     // Soft-start will persist until readiness, abort, or extended timeout.
                                     auto extendedWaitStart = std::chrono::steady_clock::now();
-                                    const double EXTENDED_TIMEOUT_SEC = 5.0; 
+                                    const double EXTENDED_TIMEOUT_SEC = 5.0;
+                                    // Log which axes were briefly ready during the initial wait
+                                    // so we can distinguish "stuck far away" from "close but oscillating".
+                                    {
+                                        int readyCount = 0;
+                                        for (int si = 1; si <= sc_local; ++si) {
+                                            if (prevReady[si]) ++readyCount;
+                                        }
+                                        if (readyCount > 0) {
+                                            std::ostringstream oss;
+                                            oss << "[AUTO] " << readyCount << "/" << sc_local
+                                                << " axes reached ready at least once during initial wait — extending close-range settle\n";
+                                            PostUTF8LogToUI(oss.str());
+                                        }
+                                    }
 
+                                    double extendedAllReadySince = -1.0;
                                     while (!this->autoConnectAbortRequested.load()) {
                                         if (shouldAbortSoftStart()) {
                                             break;
                                         }
                                         std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - extendedWaitStart;
+                                        int extReadyCount = 0;
                                         for (int si = 1; si <= sc_local; ++si) {
                                             bool r = false;
                                             try { r = master->IsPDOFilterSoftStartReady_Cached(si); } catch (...) { r = false; }
-                                            if (r && !prevReady[si]) {
-                                                // Per-axis ready log removed for cleaner output
-                                                prevReady[si] = 1;
+                                            if (r) {
+                                                ++extReadyCount;
+                                                prevReady[si] = 1; // track for diagnostic logging
                                             }
                                         }
 
@@ -2017,14 +2072,54 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                             break;
                                         }
 
-                                        if (master->AreAllPDOFiltersSoftStartReady_Cached()) { allReady = true; break; }
+                                        // Require ALL axes to be simultaneously ready for a short
+                                        // settle duration (same logic as the initial-wait loop).
+                                        const bool extAllCurrentlyReady = (extReadyCount == sc_local);
+                                        if (extAllCurrentlyReady) {
+                                            if (extendedAllReadySince < 0.0) {
+                                                extendedAllReadySince = elapsed.count();
+                                            } else if ((elapsed.count() - extendedAllReadySince) >= SIMULTANEOUS_READY_SETTLE_SEC) {
+                                                allReady = true; break;
+                                            }
+                                        } else {
+                                            extendedAllReadySince = -1.0;
+                                        }
                                         
                                         // Check for extended timeout
                                         if (elapsed.count() > EXTENDED_TIMEOUT_SEC) {
                                             PostUTF8LogToUI(std::string("[AUTO] Soft Start extended wait timed out (5s) — aborting and starting Emergency Stop\n"));
-                                            // Log which axes are not ready
+                                            // Log which axes are not ready with diagnostic detail
+                                            auto inputAngles = master->GetPDOFilterInputAngles();
                                             for (int si = 1; si <= sc_local; ++si) {
-                                                if (!prevReady[si]) {
+                                                bool r = false;
+                                                try { r = master->IsPDOFilterSoftStartReady_Cached(si); } catch (...) { r = false; }
+                                                if (!r) {
+                                                    bool softStartActive = false;
+                                                    bool filterError = false;
+                                                    bool trackingFatal = false;
+                                                    PDOFilter::ViolationType vtype = PDOFilter::ViolationType::None;
+                                                    try { softStartActive = master->IsPDOFilterSoftStartActive(si); } catch (...) {}
+                                                    try { master->GetPDOFilterState(si, vtype, filterError, trackingFatal); } catch (...) {}
+                                                    
+                                                    std::ostringstream diag;
+                                                    diag << "[AUTO] WARNING: Axis " << si << " was not ready before soft-start timeout stop";
+                                                    diag << " softStartActive=" << (softStartActive ? 1 : 0);
+                                                    diag << " filterError=" << (filterError ? 1 : 0);
+                                                    diag << " trackingFatal=" << (trackingFatal ? 1 : 0);
+                                                    diag << " violation=" << static_cast<int>(vtype);
+                                                    if (si >= 1 && si <= 6) {
+                                                        diag << std::fixed << std::setprecision(3);
+                                                        diag << " mmfInputAngle=" << inputAngles[si - 1];
+                                                    }
+                                                    // Also log the actual mechanical position for comparison
+                                                    try {
+                                                        MechanicalUnitMetrics metrics;
+                                                        if (master->TryGetMechanicalUnitMetricsLockFree(si, metrics) && metrics.valid) {
+                                                            std::string actualUtf8 = CoreHelpers::WideToUtf8(metrics.actualPosition);
+                                                            diag << " actualPos=" << actualUtf8;
+                                                        }
+                                                    } catch (...) {}
+                                                    PostUTF8LogToUI(diag.str() + "\n");
                                                     PostUTF8LogToUI(std::string("[AUTO] WARNING: Axis ") + std::to_string(si) + " was not ready before soft-start timeout stop\n");
                                                 }
                                             }
@@ -2046,11 +2141,12 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                             std::string("[AUTO] Soft Start aborted due to persistent global error during extended wait\n") :
                                             std::string("[AUTO] Soft Start aborted by request during extended wait\n"));
                                     } else if (allReady) {
-                                        // All ready after extended wait: enable filtering and request completion
+                                        // All ready after extended wait: clear busy first,
+                                        // then enable filtering and request completion.
+                                        this->autoConnectBusy.store(false);
                                         try {
                                             master->EnablePDOFiltering(true);
                                             NotifyAutoWindowOwnerState((WPARAM)0x2);
-                                            // PDO filtering enabled log removed for cleaner output
                                         } catch(...) {
                                             PostUTF8LogToUI(std::string("[AUTO] Failed to enable PDO filtering after extended readiness\n"));
                                         }
@@ -2059,6 +2155,8 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                         if (!this->violationSoundPlaying_.load()) {
                                             try { PlaySound(NULL, NULL, 0); } catch(...) {}
                                         }
+                                        PostAutoStatusUpdate();
+                                        RequestMotionUiRefresh();
                                         PostUTF8LogToUI(std::string("[AUTO] All axes ready (after extended wait) — requested master to complete Soft Start\n"));
                                     }
                                 }
@@ -2071,9 +2169,17 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     } catch (...) {
                         PostUTF8LogToUI(std::string("[AUTO] Auto Connect thread unexpected error\n"));
                     }
-                    // Ensure UI refresh and clear running/busy flags
+                    // Ensure UI refresh and clear running/busy flags.
+                    // Always force-clear autoConnectBusy and notify, even if
+                    // it was already cleared by AbortAutoConnectSoftStartForStop
+                    // (which can race with this cleanup). Without an explicit
+                    // PostAutoStatusUpdate the AutoWindow may keep showing
+                    // oBusy=true from a stale background poll until the next
+                    // timer tick.
                     this->autoConnectRunning.store(false);
-                    SetBusyFlagAndNotify(this->autoConnectBusy, false);
+                    this->autoConnectBusy.store(false);
+                    PostAutoStatusUpdate();
+                    RequestMotionUiRefresh();
                     WPARAM ownerState = 0;
                     if (auto* doneMaster = AppController::GetInstance().GetMaster()) {
                         try {
@@ -2274,6 +2380,14 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             int sel = (int)wParam;
             int sub = (int)lParam;
             if (sel >= 0) {
+                // Block editing of P0 (Device Name) — auto-populated from drive info
+                {
+                    wchar_t idxBuf[32] = {0};
+                    ListView_GetItemText(hListMotionParams, sel, 0, idxBuf, (int)_countof(idxBuf));
+                    if (wcscmp(idxBuf, L"P0") == 0) {
+                        break;
+                    }
+                }
                 // destroy previous
                 if (hInplaceEdit && IsWindow(hInplaceEdit)) {
                     DestroyWindow(hInplaceEdit);

@@ -182,6 +182,21 @@ void MainWindow::OnReadAllSDO()
         int prevPrio = GetThreadPriority(GetCurrentThread());
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
+        // PDO-cycle interlock: wait for at least one full PDO cycle to complete
+        // after each SDO so the slave mailbox firmware can process the response.
+        // Background SDO readers (0x60FD, 0x603F) are protected by the
+        // idle-window-level fairness fix in ReadSDODuringIdleWindow /
+        // WriteSDODuringIdleWindow (sdoCS is no longer held while waiting).
+        auto WaitOnePdoCycle = [this]() {
+            if (!MasterIsRunning()) return;
+            uint64_t startCount = MasterGetPDOSentCount();
+            for (int attempt = 0; attempt < 500; ++attempt) {
+                if (MasterGetPDOSentCount() != startCount) return;
+                if (!readAllRunning.load() || disconnecting.load()) return;
+                Sleep(1);
+            }
+        };
+
         // Batch messages to the UI to reduce PostMessage overhead.
         std::string batch;
         int batchCount = 0;
@@ -216,8 +231,10 @@ void MainWindow::OnReadAllSDO()
                 MainWindow::PostSDOItemToHWND(hwnd, std::move(out));
                 batch.clear(); batchCount = 0;
             }
-            // Small sleep to yield to PDO and other threads; tuned low to keep reasonable speed
-            Sleep(10);
+            // Interlock: wait until at least one PDO cycle completes.
+            // This lets the slave firmware process the SDO response before
+            // the next mailbox request arrives, without a fixed time delay.
+            WaitOnePdoCycle();
         }
         // Flush any remaining batched items
         if (!batch.empty()) {
@@ -525,6 +542,18 @@ void MainWindow::OnWriteAllSDO()
 
     // Launch background thread to perform writes
     std::thread([this, slave]() {
+        // PDO-cycle interlock — fairness for background SDO readers is handled
+        // at the idle-window level in WriteSDODuringIdleWindow.
+        auto WaitOnePdoCycle = [this]() {
+            if (!MasterIsRunning()) return;
+            uint64_t startCount = MasterGetPDOSentCount();
+            for (int attempt = 0; attempt < 500; ++attempt) {
+                if (MasterGetPDOSentCount() != startCount) return;
+                if (disconnecting.load()) return;
+                Sleep(1);
+            }
+        };
+
         try {
             PostUTF8LogToUI(std::string("開始全部寫入 (RW) 參數...\n"));
             for (size_t i = 0; i < currentObjects.size(); ++i) {
@@ -626,8 +655,8 @@ void MainWindow::OnWriteAllSDO()
                     PostUTF8LogToUI(std::string("寫入失敗: ") + err + "\n");
                 }
 
-                // small delay to avoid hammering the network
-                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                // Interlock: wait until at least one PDO cycle completes.
+                WaitOnePdoCycle();
             }
             PostUTF8LogToUI(std::string("全部寫入完成\n"));
             // Re-enable controls on UI thread
