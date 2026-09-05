@@ -11,7 +11,12 @@
 #include <mmsystem.h>
 #include <soem/ec_print.h>
 #include <fstream>
+#include <filesystem>
+#include <mutex>
+#include <unordered_map>
 #include "SafeMem.h"
+#include "EsiParser.h"
+#include "../include/core/CoreHelpers.h"
 
 namespace {
 
@@ -96,6 +101,99 @@ int WaitForStateWithPolling(
     }
 
     return currentState;
+}
+
+// ---------------------------------------------------------------------------
+// ESI-file cache and lookup by (vendorId, productCode)
+// ---------------------------------------------------------------------------
+
+static std::unordered_map<uint64_t, std::string> s_esiPathCache;
+static std::mutex s_esiCacheMutex;
+static bool s_esiCacheScanned = false;
+
+static std::wstring GetEsiDirectoryPath()
+{
+    wchar_t exePath[MAX_PATH] = {0};
+    if (GetModuleFileNameW(NULL, exePath, MAX_PATH) == 0) {
+        return L".\\esi";
+    }
+    wchar_t* lastSlash = wcsrchr(exePath, L'\\');
+    if (lastSlash) *lastSlash = L'\0';
+    return std::wstring(exePath) + L"\\esi";
+}
+
+static void EnsureEsiCacheScanned()
+{
+    if (s_esiCacheScanned) return;
+    std::lock_guard<std::mutex> lock(s_esiCacheMutex);
+    if (s_esiCacheScanned) return;
+
+    std::wstring esiDir = GetEsiDirectoryPath();
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(esiDir, ec)) {
+        if (!entry.is_regular_file()) continue;
+        std::wstring ext = entry.path().extension().wstring();
+        if (_wcsicmp(ext.c_str(), L".xml") != 0) continue;
+
+        std::string path = CoreHelpers::WideToUtf8(entry.path().wstring());
+        EsiDeviceIdentity id;
+        std::string err;
+        if (EsiParser::LoadDeviceIdentity(path, id, err) && id.valid) {
+            uint64_t key = (static_cast<uint64_t>(id.vendorId) << 32) | id.productCode;
+            s_esiPathCache[key] = path;
+        }
+    }
+    s_esiCacheScanned = true;
+}
+
+static std::string FindEsiFileForSlave(uint32_t vendorId, uint32_t productCode)
+{
+    EnsureEsiCacheScanned();
+    uint64_t key = (static_cast<uint64_t>(vendorId) << 32) | productCode;
+    std::lock_guard<std::mutex> lock(s_esiCacheMutex);
+    auto it = s_esiPathCache.find(key);
+    return (it != s_esiPathCache.end()) ? it->second : std::string();
+}
+
+// ESI-aware PDO index selection: returns the ESI-preferred RxPDO index for SM2,
+// or the CiA402-standard 0x1600 when no ESI match is found.
+static uint16_t SelectRxPdoIndex(const EsiSmDescriptor* desc)
+{
+    if (!desc) return 0x1600;
+    // Prefer the RxPdo explicitly marked Sm="2"
+    for (const auto& rp : desc->rxPdos) {
+        if (rp.smIndex == 2 && !rp.fixed) return rp.index;
+    }
+    // Fall back to first non-fixed RxPdo
+    for (const auto& rp : desc->rxPdos) {
+        if (!rp.fixed) return rp.index;
+    }
+    return 0x1600;
+}
+
+static uint16_t SelectTxPdoIndex(const EsiSmDescriptor* desc)
+{
+    if (!desc) return 0x1A00;
+    // Prefer the TxPdo explicitly marked Sm="3"
+    for (const auto& tp : desc->txPdos) {
+        if (tp.smIndex == 3 && !tp.fixed) return tp.index;
+    }
+    // Fall back to first non-fixed TxPdo
+    for (const auto& tp : desc->txPdos) {
+        if (!tp.fixed) return tp.index;
+    }
+    return 0x1A00;
+}
+
+// Look up SM DefaultSize from ESI descriptor; returns 0 when unknown
+// (0 = dynamic size, SOEM will calculate from PDO mapping)
+static uint16_t GetSmDefaultSize(const EsiSmDescriptor* desc, int smIndex)
+{
+    if (!desc) return 0;
+    for (const auto& sm : desc->smList) {
+        if (sm.index == smIndex) return sm.defaultSize;
+    }
+    return 0;
 }
 
 } // anonymous namespace
@@ -524,11 +622,52 @@ bool EtherCATMaster::ConfigureSlaves() {
             configErrors << "從站 " << i << " 無法達到PRE-OP狀態\n";
             continue;
         }
-        
+
+        // ---- ESI-aware PDO index selection ----
+        uint32_t slaveVendorId = context.slavelist[i].eep_man;
+        uint32_t slaveProductCode = context.slavelist[i].eep_id;
+        std::string esiPath = FindEsiFileForSlave(slaveVendorId, slaveProductCode);
+
+        EsiSmDescriptor esiDesc;
+        const EsiSmDescriptor* pEsi = nullptr;
+        if (!esiPath.empty()) {
+            std::string esiErr;
+            if (EsiParser::LoadSmDescriptor(esiPath, esiDesc, esiErr)) {
+                pEsi = &esiDesc;
+                // Store matched ESI filename and device name per slave (1-indexed)
+                if ((int)slaveEsiFiles_.size() <= i) {
+                    slaveEsiFiles_.resize(i + 1);
+                    slaveEsiDeviceNames_.resize(i + 1);
+                }
+                std::filesystem::path p(esiPath);
+                slaveEsiFiles_[i] = p.filename().string();
+                slaveEsiDeviceNames_[i] = esiDesc.deviceName;
+                ss.str("");
+                ss << "從站 " << i << ": ESI 匹配 " << esiPath
+                   << " (vendor=0x" << std::hex << slaveVendorId
+                   << " product=0x" << slaveProductCode << std::dec << ")\n";
+                SetError(ss.str());
+            }
+        }
+
+        uint16_t rxPdoIndex = SelectRxPdoIndex(pEsi);
+        uint16_t txPdoIndex = SelectTxPdoIndex(pEsi);
+        uint16_t sm2Size = GetSmDefaultSize(pEsi, 2);
+        uint16_t sm3Size = GetSmDefaultSize(pEsi, 3);
+
+        if (pEsi) {
+            ss.str("");
+            ss << "從站 " << i << ": RxPDO=0x" << std::hex << rxPdoIndex
+               << " TxPDO=0x" << txPdoIndex
+               << " SM2_size=" << std::dec << sm2Size
+               << " SM3_size=" << sm3Size << "\n";
+            SetError(ss.str());
+        }
+
         // 2. 清空舊的PDO映射
         uint8_t zero = 0;
         uint8_t one = 1;
-        
+
         // 停用RxPDO分配 (0x1C12:00 = 0)
     if (!WriteSDO(i, 0x1C12, 0, &zero, sizeof(zero))) {
             ss.str("");
@@ -536,7 +675,7 @@ bool EtherCATMaster::ConfigureSlaves() {
             SetError(ss.str());
             // 非致命錯誤，繼續嘗試
         }
-        
+
         // 停用TxPDO分配 (0x1C13:00 = 0)
     if (!WriteSDO(i, 0x1C13, 0, &zero, sizeof(zero))) {
             ss.str("");
@@ -544,7 +683,7 @@ bool EtherCATMaster::ConfigureSlaves() {
             SetError(ss.str());
             // 非致命錯誤，繼續嘗試
         }
-        
+
         // 3. 設置伺服驅動器為預設 cyclic mode
         int8_t opMode = CoreHelpers::kDefaultCyclicOperationMode;
     if (!WriteSDO(i, 0x6060, 0, &opMode, sizeof(opMode))) {
@@ -553,15 +692,15 @@ bool EtherCATMaster::ConfigureSlaves() {
             SetError(ss.str());
             // 非致命錯誤，繼續嘗試
         }
-        
-        // 4. 設置基本的 cyclic motion RxPDO 映射 (0x1600)
+
+        // 4. 設置基本的 cyclic motion RxPDO 映射 (ESI-aware index)
         // 清空舊映射
-    if (!WriteSDO(i, 0x1600, 0, &zero, sizeof(zero))) {
+    if (!WriteSDO(i, rxPdoIndex, 0, &zero, sizeof(zero))) {
             ss.str("");
-            ss << "從站 " << i << ": 無法清空RxPDO映射\n";
+            ss << "從站 " << i << ": 無法清空RxPDO映射 (0x" << std::hex << rxPdoIndex << std::dec << ")\n";
             SetError(ss.str());
         }
-        
+
         // 添加標準 cyclic motion 對象到 RxPDO
         uint32_t rxEntries[4] = {
             0x60400010,  // 控制字 (16位)
@@ -569,31 +708,31 @@ bool EtherCATMaster::ConfigureSlaves() {
             0x60FF0020,  // 目標速度 (32位)
             0x60710010   // 目標力矩 (16位)
         };
-        
+
         for (int j = 0; j < 4; j++) {
-            if (!WriteSDO(i, 0x1600, j+1, &rxEntries[j], sizeof(uint32_t))) {
+            if (!WriteSDO(i, rxPdoIndex, j+1, &rxEntries[j], sizeof(uint32_t))) {
                 ss.str("");
                 ss << "從站 " << i << ": 無法設置RxPDO映射項目 " << j+1 << "\n";
                 SetError(ss.str());
             }
         }
-        
+
         // 啟用4個RxPDO項目
         uint8_t rxCount = 4;
-    if (!WriteSDO(i, 0x1600, 0, &rxCount, sizeof(rxCount))) {
+    if (!WriteSDO(i, rxPdoIndex, 0, &rxCount, sizeof(rxCount))) {
             ss.str("");
             ss << "從站 " << i << ": 無法啟用RxPDO映射\n";
             SetError(ss.str());
         }
-        
-        // 5. 設置基本的 cyclic motion TxPDO 映射 (0x1A00)
+
+        // 5. 設置基本的 cyclic motion TxPDO 映射 (ESI-aware index)
         // 清空舊映射
-    if (!WriteSDO(i, 0x1A00, 0, &zero, sizeof(zero))) {
+    if (!WriteSDO(i, txPdoIndex, 0, &zero, sizeof(zero))) {
             ss.str("");
-            ss << "從站 " << i << ": 無法清空TxPDO映射\n";
+            ss << "從站 " << i << ": 無法清空TxPDO映射 (0x" << std::hex << txPdoIndex << std::dec << ")\n";
             SetError(ss.str());
         }
-        
+
         // 添加標準 cyclic motion 對象到 TxPDO
         uint32_t txEntries[4] = {
             0x60410010,  // 狀態字 (16位)
@@ -601,47 +740,45 @@ bool EtherCATMaster::ConfigureSlaves() {
             0x606C0020,  // 實際速度 (32位)
             0x60770010   // 實際力矩 (16位)
         };
-        
+
         for (int j = 0; j < 4; j++) {
-            if (!WriteSDO(i, 0x1A00, j+1, &txEntries[j], sizeof(uint32_t))) {
+            if (!WriteSDO(i, txPdoIndex, j+1, &txEntries[j], sizeof(uint32_t))) {
                 ss.str("");
                 ss << "從站 " << i << ": 無法設置TxPDO映射項目 " << j+1 << "\n";
                 SetError(ss.str());
             }
         }
-        
+
         // 啟用4個TxPDO項目
         uint8_t txCount = 4;
-    if (!WriteSDO(i, 0x1A00, 0, &txCount, sizeof(txCount))) {
+    if (!WriteSDO(i, txPdoIndex, 0, &txCount, sizeof(txCount))) {
             ss.str("");
             ss << "從站 " << i << ": 無法啟用TxPDO映射\n";
             SetError(ss.str());
         }
-        
+
         // 6. 分配PDO到同步管理器
         // 分配RxPDO到SM2
-        uint16_t rxPdo = 0x1600;
-    if (!WriteSDO(i, 0x1C12, 1, &rxPdo, sizeof(rxPdo))) {
+    if (!WriteSDO(i, 0x1C12, 1, &rxPdoIndex, sizeof(rxPdoIndex))) {
             ss.str("");
             ss << "從站 " << i << ": 無法分配RxPDO到同步管理器\n";
             SetError(ss.str());
         }
-        
+
         // 啟用1個RxPDO
     if (!WriteSDO(i, 0x1C12, 0, &one, sizeof(one))) {
             ss.str("");
             ss << "從站 " << i << ": 無法啟用RxPDO分配\n";
             SetError(ss.str());
         }
-        
+
         // 分配TxPDO到SM3
-        uint16_t txPdo = 0x1A00;
-    if (!WriteSDO(i, 0x1C13, 1, &txPdo, sizeof(txPdo))) {
+    if (!WriteSDO(i, 0x1C13, 1, &txPdoIndex, sizeof(txPdoIndex))) {
             ss.str("");
             ss << "從站 " << i << ": 無法分配TxPDO到同步管理器\n";
             SetError(ss.str());
         }
-        
+
         // 啟用1個TxPDO
     if (!WriteSDO(i, 0x1C13, 0, &one, sizeof(one))) {
             ss.str("");

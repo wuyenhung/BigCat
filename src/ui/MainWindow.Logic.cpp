@@ -772,8 +772,16 @@ void MainWindow::UpdateSlaveList() {
         for (const auto &s : slaves) {
             if (!first) ss << ",";
             first = false;
-            // Escape name and ip to safe JSON strings
-            std::string nameSan = Sanitize(s.name);
+            // 名稱 — 嘗試讀取 0x1008 設備名稱 (與 PC UI 一致)
+            std::string nameForWeb = s.name;  // fallback: SOEM name
+            if (isMasterRunning) {
+                char deviceName[128] = {0};
+                int nameSize = sizeof(deviceName);
+                if (master->ReadSDO(s.position, 0x1008, 0x00, deviceName, nameSize)) {
+                    nameForWeb = std::string(deviceName);
+                }
+            }
+            std::string nameSan = Sanitize(nameForWeb);
             std::string ipSan = Sanitize(s.ip);
             std::string nameEsc = JsonEscape(nameSan);
             std::string ipEsc = JsonEscape(ipSan);

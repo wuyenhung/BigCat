@@ -19,6 +19,17 @@
 #define PDOFILTER_DBG(fmt, ...) ((void)0)
 #endif
 
+// Soft-start debug: always compiled in (throttled to ~1 Hz per axis).
+// Use DebugView or similar to capture these messages at runtime.
+#ifndef PDOFILTER_SS_DEBUG_LOG
+#define PDOFILTER_SS_DEBUG_LOG 1
+#endif
+#if PDOFILTER_SS_DEBUG_LOG
+#define SS_DBG(fmt, ...) do { char _bf[256]; sprintf_s(_bf, sizeof(_bf), fmt, __VA_ARGS__); OutputDebugStringA(_bf); } while(0)
+#else
+#define SS_DBG(fmt, ...) ((void)0)
+#endif
+
 // Evaluate trapezoidal profile position at time t.
 static double eval_trapezoid_pos(double t, double tacc, double tflat, double tdec, double vp, double dir, double startPos) {
     // return position (scalar) relative to start (signed by dir)
@@ -291,12 +302,10 @@ void PDOFilter::TriggerSoftStart() {
     ioSoftStartReady_ = false;
     ioSoftStartStartTime_ = std::chrono::steady_clock::now();
 
-    // Reset settle-timer state so a fresh soft-start doesn't inherit stale
-    // "position was close" from a previous (possibly aborted) run.
     ioPositionWasClose_ = false;
     ioPositionCloseStartTime_ = 0.0;
 
-    // Ensure we start with a clean slate regarding violations
+    // Reset all violation / tracking state for a clean start
     ioLimitingEnabled_ = false;
     ioViolationActive_ = false;
     ioViolationDetectionSuspended_ = false;
@@ -322,10 +331,7 @@ void PDOFilter::TriggerSoftStart() {
     iMaxVelocity_ = iConfiguredMaxVelocity_ * SOFT_START_VEL_RATIO;
     iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
     iMaxDeceleration_ = iConfiguredMaxDeceleration_ * SOFT_START_ACCEL_RATIO;
-    // disable any in-progress blending (we're entering soft-start again)
     ioVelocityBlendActive_ = false;
-    // Reset any previous recovery-ramp state so each new soft-start really
-    // starts from soft-start limits (prevents reusing max accel/decel).
     ioAccelRampActive_ = false;
     ioAccelRampStartTime_ = std::chrono::steady_clock::time_point();
     ioAccelRampStartVel_ = 0.0;
@@ -333,14 +339,15 @@ void PDOFilter::TriggerSoftStart() {
     ioAccelRampStartDec_ = 0.0;
     ioSoftStartCompleteTime_ = std::chrono::steady_clock::time_point();
     
-    // Save original PDO limits for restoration after soft-start completes
     ioOriginalMinPDO_ = iMinPDO_;
     ioOriginalMaxPDO_ = iMaxPDO_;
     ioSoftStartLimitsAdjusted_ = false;
     
-    // Force re-initialization on next Filter() call to sync with actual feedback position.
-    // This prevents jumps if the filter was previously initialized at a different position.
+    // Force re-init on next Filter() to sync with actual feedback
     ioInitialized_ = false;
+
+    SS_DBG("PDOFilter: TriggerSoftStart vel=%.1f acc=%.1f dec=%.1f cfgVel=%.1f\n",
+           iMaxVelocity_, iMaxAcceleration_, iMaxDeceleration_, iConfiguredMaxVelocity_);
 }
 
 void PDOFilter::ClearError() {
@@ -365,16 +372,13 @@ void PDOFilter::CompleteSoftStart() {
     ioPositionWasClose_ = false;
     ioPositionCloseStartTime_ = 0.0;
     
-    // Restore original PDO limits if they were adjusted during soft-start
     if (ioSoftStartLimitsAdjusted_) {
         iMinPDO_ = ioOriginalMinPDO_;
         iMaxPDO_ = ioOriginalMaxPDO_;
         ioSoftStartLimitsAdjusted_ = false;
-        PDOFILTER_DBG("PDOFilter: Restored original limits min=%.3f max=%.3f\n", iMinPDO_, iMaxPDO_);
     }
     
-    // Start or confirm the accel/decel ramp to restore full limits.
-    // If we haven't started the ramp yet (e.g. didn't hit the 5 deg threshold), start it now.
+    // Start recovery ramp from soft-start limits back to configured full limits
     if (!ioAccelRampActive_) {
         ioAccelRampActive_ = true;
         ioAccelRampStartTime_ = std::chrono::steady_clock::now();
@@ -382,14 +386,13 @@ void PDOFilter::CompleteSoftStart() {
         ioAccelRampStartAcc_ = iMaxAcceleration_;
         ioAccelRampStartDec_ = iMaxDeceleration_;
     }
-    // Note: iMaxVelocity_ etc. will be interpolated in Filter()
     ioAccelCheckSkipCount_ = 5;
-    // Ensure previous filtered output matches current state (PT2 removed)
     ioPrevFilteredOutput_ = oFilteredOutput_;
-    // Begin a short blend period to smoothly transition the velocity source
-    // from the value used during soft-start (raw) to the smoothed velocity.
     ioSoftStartCompleteTime_ = std::chrono::steady_clock::now();
     ioVelocityBlendActive_ = true;
+
+    SS_DBG("PDOFilter: CompleteSoftStart rampStart vel=%.1f acc=%.1f dec=%.1f cfgVel=%.1f\n",
+           ioAccelRampStartVel_, ioAccelRampStartAcc_, ioAccelRampStartDec_, iConfiguredMaxVelocity_);
 }
 
 void PDOFilter::ResetStaleInputMonitoring() {
@@ -799,15 +802,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             printf("%s", bf_state);
 #endif
 
-#if PDOFILTER_DEBUG_LOG
-            char bf_anomaly[512];
-            sprintf_s(bf_anomaly, sizeof(bf_anomaly), 
-                     "PDOFilter: Input anomaly detected! Original=%.6f, Change=%.6f, MaxAllowed=%.6f, Replaced=%.6f, Reason=%s\n",
-                     originalIncomingSet, inputChange, maxAllowedChange, replacementValue, PDOFilter::InputAnomalyReasonToString(anomalyReason));
-            OutputDebugStringA(bf_anomaly);
-            printf("%s", bf_anomaly);
-#endif
-
         }
     }
 
@@ -902,26 +896,56 @@ double PDOFilter::FilterWithInputState(double iSetValue,
 
     if (ioSoftStartActive_) {
         ioSoftStartElapsedSec_ = std::chrono::duration<double>(now - ioSoftStartStartTime_).count();
-        double positionError = std::abs(iSetValue - iActValue);
-        bool isPositionClose = (positionError < SOFT_START_POSITION_TOLERANCE);
+        // Readiness uses a wider tolerance than the braking dead-zone
+        // (SOFT_START_POSITION_TOLERANCE) because the real-world servo
+        // following error adds ~0.02-0.05 deg on top of the filter
+        // convergence dead-zone.  Comparing only against the braking
+        // tolerance would reject axes that have genuinely converged but
+        // carry a small steady-state tracking offset.
+        double positionError = std::abs(originalIncomingSet - iActValue);
+        bool isPositionClose = (positionError < SOFT_START_READY_TOLERANCE);
         if (isPositionClose) {
             if (!ioPositionWasClose_) {
                 ioPositionCloseStartTime_ = ioSoftStartElapsedSec_;
                 ioPositionWasClose_ = true;
+                SS_DBG("PDOFilter: soft-start position close (err=%.4f target=%.3f actual=%.3f t=%.3f)\n",
+                         positionError, originalIncomingSet, iActValue, ioSoftStartElapsedSec_);
             } else if ((ioSoftStartElapsedSec_ - ioPositionCloseStartTime_) >= SOFT_START_SETTLE_TIME) {
                 ioSoftStartReady_ = true;
+                SS_DBG("PDOFilter: soft-start READY (err=%.4f settled=%.3f)\n",
+                         positionError, ioSoftStartElapsedSec_ - ioPositionCloseStartTime_);
             }
-        } else { ioPositionWasClose_ = false; }
+        } else {
+            if (ioPositionWasClose_) {
+                SS_DBG("PDOFilter: soft-start position left close range (err=%.4f)\n", positionError);
+            }
+            ioPositionWasClose_ = false;
+            // Reset ready flag when position leaves the ready tolerance zone.
+            // Without this, a brief transient entry into the ready window can
+            // latch ioSoftStartReady_ permanently, causing the auto-connect
+            // monitor to declare soft-start complete while the axis is still
+            // oscillating or overshooting.
+            ioSoftStartReady_ = false;
+        }
 
-        // New trigger: if we are within 1.5 degrees, start recovery ramp early 
-        // to avoid waiting for the final 0.1 degree settle.
+        // Periodic status: log position error every ~1s during soft-start
+        {
+            static int ssDbgCounter = 0;
+            if ((++ssDbgCounter % 500) == 1) {  // ~1s at 2ms cycle
+                SS_DBG("PDOFilter: soft-start status t=%.2f err=%.4f target=%.3f actual=%.3f close=%d ready=%d\n",
+                         ioSoftStartElapsedSec_, positionError, originalIncomingSet, iActValue,
+                         isPositionClose ? 1 : 0, ioSoftStartReady_ ? 1 : 0);
+            }
+        }
+
+        // Early recovery ramp: when within 1.5 degrees, start ramping limits back to full
         if (!ioAccelRampActive_ && positionError < 1.5) {
             ioAccelRampActive_ = true;
             ioAccelRampStartTime_ = now;
             ioAccelRampStartVel_ = iMaxVelocity_;
             ioAccelRampStartAcc_ = iMaxAcceleration_;
             ioAccelRampStartDec_ = iMaxDeceleration_;
-            PDOFILTER_DBG("PDOFilter: Early ramp triggered (err=%.3f)\n", positionError);
+            SS_DBG("PDOFilter: Early ramp triggered (err=%.3f)\n", positionError);
         }
     }
 
@@ -957,6 +981,9 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             // Initialize the effective setpoint to the actual position to prevent immediate velocity spike
             ioPrevEffectiveSetpoint_ = iActValue;
             ioInputBuffer_.fill(iActValue);
+            SS_DBG("PDOFilter: soft-start init actual=%.3f target=%.3f err=%.3f limitsAdj=%d\n",
+                   iActValue, originalIncomingSet, std::abs(originalIncomingSet - iActValue),
+                   ioSoftStartLimitsAdjusted_ ? 1 : 0);
         } else {
             ioPrevEffectiveSetpoint_ = iSetValue;
             ioInputBuffer_.fill(iSetValue);
@@ -1902,6 +1929,4 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     ioPrevFilteredOutput_ = finalResult;
     return finalResult;
 }
-
-// PT2 filter implementation removed.
 

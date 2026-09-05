@@ -123,6 +123,10 @@ public:
     void SetGlobalError() { persistentGlobalError_.store(true, std::memory_order_relaxed); }
     void ClearGlobalError() { persistentGlobalError_.store(false, std::memory_order_relaxed); }
     std::vector<SlaveInfo> GetSlaveInfo();
+    // Get matched ESI filename for a slave (1-indexed), empty if unknown
+    std::string GetSlaveEsiFile(int slaveIndex) const;
+    // Get ESI device name for a slave (1-indexed), empty if unknown
+    std::string GetSlaveEsiDeviceName(int slaveIndex) const;
     std::string GetLastError() const { return lastError; }
     
     // 週期任務
@@ -334,6 +338,10 @@ private:
     int slaveCount;
     bool isRunning;
     bool isInitialized;
+    // Per-slave matched ESI filename (1-indexed), empty if unknown
+    std::vector<std::string> slaveEsiFiles_;
+    // Per-slave ESI device name (1-indexed), empty if unknown
+    std::vector<std::string> slaveEsiDeviceNames_;
     
     // 遊戲共存模式：與模擬器遊戲同時運行時，避免使用 REALTIME_PRIORITY_CLASS
     // 預設停用（專用機模式），使用 REALTIME_PRIORITY_CLASS 獲得最佳即時性

@@ -1491,6 +1491,48 @@ void MainWindow::FinalizeSuccessfulConnection(
     SetUiDisabled("send_mailbox", false);
     SetUiDisabled("dump_esi", false);
 
+    // ---- Auto-populate P0 Device Name from actual slave info ----
+    {
+        auto* master = AppController::GetInstance().GetMaster();
+        if (master && master->IsInitialized()) {
+            int slaveCount = master->GetSlaveCount();
+            for (int idx = 1; idx <= slaveCount; ++idx) {
+                // P0 Value = SDO 0x1008 真實設備名稱 (e.g. DS_P100E-7), fallback 未知
+                std::wstring deviceNameW = L"\u672a\u77e5";   // 未知
+                {
+                    char deviceName[128] = {0};
+                    int nameSize = sizeof(deviceName);
+                    if (master->ReadSDO(idx, 0x1008, 0x00, deviceName, nameSize)) {
+                        std::string s(deviceName);
+                        if (!s.empty()) {
+                            deviceNameW = CoreHelpers::Utf8ToWide(s);
+                        }
+                    }
+                }
+                // P0 Desc = "裝置名稱 ESI檔=" + 實際匹配的 ESI 檔名, fallback 未知
+                std::wstring esiFileW = L"\u88dd\u7f6e\u540d\u7a31 ESI\u6a94=\u672a\u77e5";  // 裝置名稱 ESI檔=未知
+                std::string esi = master->GetSlaveEsiFile(idx);
+                if (!esi.empty()) {
+                    esiFileW = L"\u88dd\u7f6e\u540d\u7a31 ESI\u6a94=" + CoreHelpers::Utf8ToWide(esi);  // 裝置名稱 ESI檔=xxx.xml
+                }
+
+                auto it = savedMotionParamsForSlave.find(idx);
+                if (it != savedMotionParamsForSlave.end()) {
+                    for (auto& row : it->second) {
+                        if (!row.empty() && row[0] == L"P0") {
+                            if (row.size() > 3) row[3] = deviceNameW;   // Value
+                            if (row.size() > 5) row[5] = esiFileW;      // Desc
+                            break;
+                        }
+                    }
+                }
+            }
+            // Refresh motion-params UI for the currently selected slave
+            int targetSlave = (confirmedSlave > 0) ? confirmedSlave : 1;
+            SyncMotionParamsToUi(targetSlave);
+        }
+    }
+
     try {
         releaseServerConnectGuard();
     } catch (...) {}

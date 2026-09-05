@@ -5,6 +5,8 @@
 #include <tinyxml2.h>
 #include <sstream>
 #include <cctype>
+#include <cstring>
+#include <cstdlib>
 #include <unordered_map>
 
 using namespace tinyxml2;
@@ -472,4 +474,196 @@ std::string EsiParser::NormalizeAccess(const std::string& raw) {
     std::string trimmed = raw.substr(start, end - start + 1);
     for (char &c : trimmed) c = (char)tolower((unsigned char)c);
     return trimmed;
+}
+
+// ---------------------------------------------------------------------------
+// Lightweight identity-only load (vendor / product / revision)
+// ---------------------------------------------------------------------------
+
+static uint32_t ParseHexU32(const char* text)
+{
+    if (!text) return 0;
+    const char* s = text;
+    while (*s && isspace((unsigned char)*s)) ++s;
+    if (*s == '#') ++s;
+    if (*s == 'x' || *s == 'X') ++s;
+    return static_cast<uint32_t>(strtoul(s, nullptr, 16));
+}
+
+bool EsiParser::LoadDeviceIdentity(const std::string& path, EsiDeviceIdentity& id, std::string& err)
+{
+    id = EsiDeviceIdentity{};
+    err.clear();
+
+    XMLDocument doc;
+    if (doc.LoadFile(path.c_str()) != XML_SUCCESS) {
+        err = "Failed to load: ";
+        err += doc.ErrorStr();
+        return false;
+    }
+
+    XMLElement* root = doc.FirstChildElement("EtherCATInfo");
+    if (!root) {
+        err = "Missing EtherCATInfo root";
+        return false;
+    }
+
+    // Vendor ID
+    XMLElement* vendor = root->FirstChildElement("Vendor");
+    if (vendor) {
+        XMLElement* vid = vendor->FirstChildElement("Id");
+        if (vid && vid->GetText()) {
+            id.vendorId = ParseHexU32(vid->GetText());
+        }
+    }
+
+    // Device → Type (ProductCode + RevisionNo)
+    XMLElement* desc = root->FirstChildElement("Descriptions");
+    if (!desc) desc = root;
+    XMLElement* devs = desc->FirstChildElement("Devices");
+    if (devs) devs = devs->FirstChildElement("Device");
+    if (devs) {
+        XMLElement* typeEl = devs->FirstChildElement("Type");
+        if (typeEl) {
+            const char* pc = typeEl->Attribute("ProductCode");
+            if (pc) id.productCode = ParseHexU32(pc);
+            const char* rn = typeEl->Attribute("RevisionNo");
+            if (rn) id.revision = ParseHexU32(rn);
+        }
+    }
+
+    id.valid = (id.vendorId != 0 || id.productCode != 0);
+    return id.valid;
+}
+
+// ---------------------------------------------------------------------------
+// SM + PDO descriptor load from the <Sm> section at Device level
+// ---------------------------------------------------------------------------
+
+static uint8_t ParseHexU8(const char* text)
+{
+    if (!text) return 0;
+    const char* s = text;
+    while (*s && isspace((unsigned char)*s)) ++s;
+    if (*s == '#') ++s;
+    if (*s == 'x' || *s == 'X') ++s;
+    return static_cast<uint8_t>(strtoul(s, nullptr, 16));
+}
+
+static uint16_t ParseHexU16(const char* text)
+{
+    if (!text) return 0;
+    const char* s = text;
+    while (*s && isspace((unsigned char)*s)) ++s;
+    if (*s == '#') ++s;
+    if (*s == 'x' || *s == 'X') ++s;
+    return static_cast<uint16_t>(strtoul(s, nullptr, 16));
+}
+
+bool EsiParser::LoadSmDescriptor(const std::string& path, EsiSmDescriptor& desc, std::string& err)
+{
+    desc = EsiSmDescriptor{};
+    err.clear();
+
+    // First load identity
+    if (!LoadDeviceIdentity(path, desc.identity, err)) {
+        return false;
+    }
+
+    XMLDocument doc;
+    if (doc.LoadFile(path.c_str()) != XML_SUCCESS) {
+        err = "Failed to load: ";
+        err += doc.ErrorStr();
+        return false;
+    }
+
+    XMLElement* root = doc.FirstChildElement("EtherCATInfo");
+    if (!root) {
+        err = "Missing EtherCATInfo root";
+        return false;
+    }
+
+    // Navigate to <Device> under <Descriptions><Devices>
+    XMLElement* descEl = root->FirstChildElement("Descriptions");
+    if (!descEl) descEl = root;
+    XMLElement* devsEl = descEl->FirstChildElement("Devices");
+    if (devsEl) devsEl = devsEl->FirstChildElement("Device");
+    if (!devsEl) {
+        // No Device section; descriptor stays empty (valid for simple slaves)
+        return true;
+    }
+
+    // Extract device name: prefer English (LcId="1033"), fallback to first <Name>
+    for (XMLElement* nameEl = devsEl->FirstChildElement("Name"); nameEl;
+         nameEl = nameEl->NextSiblingElement("Name")) {
+        const char* lcid = nameEl->Attribute("LcId");
+        if (lcid && strcmp(lcid, "1033") == 0) {
+            const char* n = nameEl->GetText();
+            if (n) desc.deviceName = n;
+            break;
+        }
+    }
+    if (desc.deviceName.empty()) {
+        XMLElement* firstName = devsEl->FirstChildElement("Name");
+        if (firstName && firstName->GetText()) {
+            desc.deviceName = firstName->GetText();
+        }
+    }
+
+    // Parse <Sm> elements
+    int smIdx = 0;
+    for (XMLElement* smEl = devsEl->FirstChildElement("Sm"); smEl; smEl = smEl->NextSiblingElement("Sm")) {
+        EsiSmInfo sm;
+        sm.index = smIdx++;
+        const char* ds = smEl->Attribute("DefaultSize");
+        if (ds) sm.defaultSize = ParseHexU16(ds);
+        const char* sa = smEl->Attribute("StartAddress");
+        if (sa) sm.startAddress = ParseHexU16(sa);
+        const char* cb = smEl->Attribute("ControlByte");
+        if (cb) sm.controlByte = ParseHexU8(cb);
+        const char* en = smEl->Attribute("Enable");
+        sm.enable = (en && strcmp(en, "1") == 0);
+        desc.smList.push_back(sm);
+    }
+
+    // Parse <RxPdo> and <TxPdo> siblings of <Sm>
+    auto parsePdoDef = [](XMLElement* pdoEl, const char* typeName) -> EsiSmPdoDef {
+        EsiSmPdoDef def;
+        def.pdoType = typeName;
+        const char* idx = pdoEl->FirstChildElement("Index") ?
+                          pdoEl->FirstChildElement("Index")->GetText() : nullptr;
+        if (idx) def.index = ParseHexIndex(idx);
+        const char* fixed = pdoEl->Attribute("Fixed");
+        def.fixed = (fixed && strcmp(fixed, "1") == 0);
+        const char* sm = pdoEl->Attribute("Sm");
+        def.smIndex = sm ? atoi(sm) : -1;
+
+        for (XMLElement* entry = pdoEl->FirstChildElement("Entry"); entry;
+             entry = entry->NextSiblingElement("Entry")) {
+            EsiSmPdoEntry e;
+            const char* ei = entry->FirstChildElement("Index") ?
+                             entry->FirstChildElement("Index")->GetText() : nullptr;
+            if (ei) e.index = ParseHexIndex(ei);
+            const char* si = entry->FirstChildElement("SubIndex") ?
+                             entry->FirstChildElement("SubIndex")->GetText() : nullptr;
+            if (si) e.subindex = static_cast<uint8_t>(strtoul(si, nullptr, 0));
+            const char* bl = entry->FirstChildElement("BitLen") ?
+                             entry->FirstChildElement("BitLen")->GetText() : nullptr;
+            if (bl) e.bitlen = atoi(bl);
+            def.entries.push_back(e);
+        }
+        return def;
+    };
+
+    for (XMLElement* child = devsEl->FirstChildElement(); child;
+         child = child->NextSiblingElement()) {
+        std::string name = child->Name();
+        if (name == "RxPdo") {
+            desc.rxPdos.push_back(parsePdoDef(child, "RxPdo"));
+        } else if (name == "TxPdo") {
+            desc.txPdos.push_back(parsePdoDef(child, "TxPdo"));
+        }
+    }
+
+    return true;
 }
