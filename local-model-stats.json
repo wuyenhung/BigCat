@@ -246,9 +246,17 @@
       "task": "git 檢查點：334檔未提交變更入檔＋SOEM本地修補匯出patch＋補.gitmodules",
       "outcome": "success",
       "note": "主模型直跑；驗收：334檔檢查點入檔（amend後license.txt移出版控）、reverse-check exit0、dirty仅剩submodule"
+    },
+    {
+      "at": "2026-10-21T23:59:00+08:00",
+      "tier": "T3",
+      "task": "從全部公開歷史移除 generate_license（filter-branch改写＋force-push）＋CMake缺檔略過＋私有來源還原",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：main raw 404、血脈log=0、configure雙路徑OK、smoke 27/27"
     }
   ],
   "lessons": [
+    "改写歷史的checkout會重碰所有追蹤檔觀測快取；曾追蹤的私有檔改前先備份",
     "Blender5.x glTF匯出前必設 rotation_mode=XYZ，否則 euler 動畫被靜默跳過",
     "改 GLB 節點名前先查 web 端 getObjectByName 依賴，名稱必須精確保留",
     "blender-mcp look()會清除選取；use_selection匯出前須重選並驗檔案大小",

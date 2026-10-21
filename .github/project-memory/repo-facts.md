@@ -7,7 +7,7 @@
   **CMake**：target 包在 `if(EXISTS .../tools/generate_license.cpp)`，clone 缺檔印 STATUS 自動略過；README_TW/EN 加註工具不隨 repo 提供。
   **規則**：私有來源檔必須放在 `tools/` 原路徑（gitignore 規則只認這條路徑；放別處會被之後的 `git add -A` 重新收進去）。
   ⚠️ **GitHub 殘留**：舊 SHA（`1238b2b`/`971038b` 舊鏈）與 blob 在站端 GC 前仍可能被直接貼 SHA URL 命中（已 clone 過的人也持有舊檔）——要徹底清除需向 GitHub support 要求 Reference Backend GC，或接受現況。
-  Validation: 見下方 build/README 實測記錄——force-push forced update、`ls-tree origin/main tools/` 無該檔、新血脈 log＝0、匿名 raw `main/tools/generate_license.cpp`→404、舊 SHA raw→實測記錄、含私有檔增量建置＋smoke 基線、略過路徑以暫改名驗證 configure 正常。
+  Validation: force-push `971038b...fe9d941 (forced update)`；`ls-tree origin/main tools/` 僅 cpu_burn_test/mmf_scope/mmf_sine_writer；`git log main -- tools/generate_license.cpp`＝0；匿名 raw `main/tools/generate_license.cpp`→**HTTP 404**（現行公開狀態確認）；**舊 SHA raw `@971038b/...`→HTTP 200（實測，GC 前仍可命中）**；configure 暫改名（缺檔）印 `generate_license: owner-private source not present - target skipped` 且 exit 0，還原後無 skip 訊息正常定義 target；`build_incremental-Crash -NonInteractive` exit 0＋**smoke 27/27 Passed**（含 test_shutdown_guard；順帶補上前一日檢查點遺留的建置基線）。私有來源 hash 與公開前 blob 逐字元一致（`047805b0…`）。
 
 - 2026-10-21 **added (git 檢查點：SOEM 本地修補持久化 + 補 `.gitmodules` + DSH 加入維護)**: 2026-09-06 之後的全部未提交變更（Web i18n、ShutdownGuard、GuardedString＋UI 限時訊息、ForceWin10Mode、CpuTopology、`pdoExchangeCS` 拆鎖、viewer 旋翼動畫、scripts/docs 重整）以單一檢查點 commit 入檔。
   **發現的遺失風險**：`lib/SOEM` 是指向上游 `OpenEtherCATsociety/SOEM` `a7c74ce` 的 gitlink，五個本地修補檔（`src/ec_main.c`、`src/ec_coe.c` NULL guard、`osal/win32/osal_defs.h`、`oshw/win32/nicdrv.c/.h`）在 submodule 內**未提交**，且 repo 沒有 `.gitmodules`（`git submodule status` 報 fatal）→ 新環境既拿不到 patch 也無法初始化。
