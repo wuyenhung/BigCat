@@ -81,3 +81,7 @@ tools/cdb/sym/
 
 # License key stays local: public clones run trial-only (LicenseChecker/TPM enforcement unchanged)
 Par/license.txt
+
+# Owner-private license generator: source & exe are never public (rewritten out of git history 2026-10-21)
+tools/generate_license.cpp
+tools/generate_license.exe

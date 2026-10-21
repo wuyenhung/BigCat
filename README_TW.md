@@ -245,6 +245,8 @@ BigCat 使用硬體指紋（含 TPM/EK）計算 SHA-256 授權金鑰。
 
 GUI 模式：直接執行 `generate_license.exe`（無參數），可視覺化產生授權。
 
+> ⚠️ `generate_license`（來源與執行檔）為作者私有的授權工具，**不隨 public repo 提供**；取得授權時請向作者索取本工具。缺少它時建置自動略過 `generate_license` target，不影響主程式。
+
 ### 驗證失敗
 
 驗證失敗時會顯示對話框，包含：

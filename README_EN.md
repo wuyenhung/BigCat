@@ -252,6 +252,8 @@ BigCat uses hardware fingerprints (including TPM/EK) to compute SHA-256 license 
 
 GUI mode: Run `generate_license.exe` without arguments for visual license generation.
 
+> ⚠️ `generate_license` (source and executable) is an owner-private licensing tool and is **not distributed with this public repository**; obtain the binary from the author when licensed. Builds without it simply skip the `generate_license` target and are unaffected otherwise.
+
 ### Verification Failure
 
 On verification failure, a dialog displays:

@@ -495,10 +495,16 @@ target_link_libraries(bigcat_ui PUBLIC
 
 # tools: generate_license — create license.txt from fingerprint
 # Build as a WIN32 GUI app (no console) and link common GUI libs
-add_executable(generate_license WIN32 tools/generate_license.cpp)
-bigcat_configure_target(generate_license)
-set_target_properties(generate_license PROPERTIES OUTPUT_NAME "generate_license" WIN32_EXECUTABLE TRUE)
-target_link_libraries(generate_license PRIVATE bigcat_security bcrypt comdlg32 user32)
+# 注意：tools/generate_license.cpp 為作者私有（不入版控，見 .gitignore）；
+# public clone 無來源檔時自動略過，不影響 BigCat.exe 與其他工具。
+if(EXISTS "${CMAKE_SOURCE_DIR}/tools/generate_license.cpp")
+    add_executable(generate_license WIN32 tools/generate_license.cpp)
+    bigcat_configure_target(generate_license)
+    set_target_properties(generate_license PROPERTIES OUTPUT_NAME "generate_license" WIN32_EXECUTABLE TRUE)
+    target_link_libraries(generate_license PRIVATE bigcat_security bcrypt comdlg32 user32)
+else()
+    message(STATUS "generate_license: owner-private source not present - target skipped")
+endif()
 
 # tools: cpu_burn_test — 佔用指定 CPU 核心以驗證工作管理員核心配置
 add_executable(cpu_burn_test tools/cpu_burn_test.cpp)

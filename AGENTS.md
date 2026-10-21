@@ -50,7 +50,7 @@ CMake 把程式碼切成多個 static library，再由主程式組裝（見 `CMa
 | `src/ui`（`bigcat_ui`） | MainWindow（拆成 `.Command/.Connect/.Motion/.SDO/.Timer/.Watchdog/.ESI/.Adapter/.Master/...` 多檔）、AutoWindow、StatusPane、PDOProxy、Win32WindowCore。 |
 | `include/` | 對外標頭；`include/core/` 放介面（IEtherCATService、IMotionService、EventBus、SystemState 等）。 |
 | `tests/` | 測試程式（見「測試策略」）。 |
-| `tools/` | 獨立工具：`generate_license`（授權產生）、`cpu_burn_test`、`mmf_sine_writer`、`mmf_scope`。 |
+| `tools/` | 獨立工具：`cpu_burn_test`、`mmf_sine_writer`、`mmf_scope`；`generate_license`（授權產生）為**作者私有**：來源與 exe 不入版控、不在 public repo，建置時缺來源自動略過 target（見 CMakeLists 與 `repo-facts.md`）。 |
 | `resources/web/` | Web UI 靜態檔（auto.html、status.html、sdo 頁面、auth.js、sidebar-menu.js 等）；多語系引擎 `js/i18n.js` 與語系目錄 `locales/*.json`（見 `docs/WEB_I18N.md`）。 |
 | `Par/` | 運動/機械參數（`motion.xml`、`machine.xml`、`BigCat.ini`、各軸 XML）。 |
 | `esi/` | EtherCAT 從站 ESI 描述檔。 |
