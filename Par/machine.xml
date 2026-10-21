@@ -45,6 +45,8 @@
       <Roll>25</Roll>
       <Pitch>25</Pitch>
       <Yaw>10</Yaw>
+      <DynamicLimitStartRatio>0.50</DynamicLimitStartRatio>
+      <DynamicLimitMinScale>0.50</DynamicLimitMinScale>
     </MaxPoseLimits>
   </Limits>
   <InverseInput>

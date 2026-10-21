@@ -35,17 +35,17 @@
   --accent-strong: #2563eb; /* stronger accent */
   --accent-color: var(--accent);
 
-  /* Button palettes (start/end for gradient buttons) */
-  --btn-green-start: #00d400;
-  --btn-green-end: #008000;
-  --btn-blue-start: #0080ff;
-  --btn-blue-end: #0000a0;
-  --btn-yellow-start: #ffd700;
-  --btn-yellow-end: #b8860b;
-  --btn-red-start: #ff4d4d;
-  --btn-red-end: #b30000;
-  --btn-darkred-start: #cc0000;
-  --btn-darkred-end: #800000;
+  /* Button palettes (start/end for gradient buttons) — 亮色系 */
+  --btn-green-start: #00ff40;
+  --btn-green-end: #00cc00;
+  --btn-blue-start: #4088ff;
+  --btn-blue-end: #0050e0;
+  --btn-yellow-start: #ffe840;
+  --btn-yellow-end: #e0a800;
+  --btn-red-start: #ff6060;
+  --btn-red-end: #ee1111;
+  --btn-darkred-start: #ff3333;
+  --btn-darkred-end: #cc0000;
 
   /* Lamp / indicator colors */
   --lamp-blue: #000080;

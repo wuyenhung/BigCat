@@ -1,4 +1,6 @@
 #include "MainWindow.h"
+#include "../include/core/CpuIsolation.h"
+#include "../include/core/CpuTopology.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <windowsx.h>
@@ -31,7 +33,7 @@
 static std::wstring GetAppIniPath()
 {
     wchar_t buf[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\WuBigCat.ini");
+    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\BigCat.ini");
     wchar_t *p = wcsrchr(buf, L'\\');
     wchar_t *dot = wcsrchr(buf, L'.');
     if (dot && (!p || dot > p)) *dot = L'\0';
@@ -78,7 +80,7 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
     try {
         std::ostringstream os;
         os << "[Connect] OnConnect invoked: overrideIfName=" << ((overrideIfName && !overrideIfName->empty()) ? *overrideIfName : std::string("(none)"))
-           << " currentIfName=" << this->currentIfName
+           << " currentIfName=" << this->currentIfName.Copy()
            << " workerRunning=" << (workerRunning.load() ? "1" : "0")
            << " IsMasterInitialized=" << (IsMasterInitialized() ? "1" : "0")
            << " disconnecting=" << (disconnecting.load() ? "1" : "0")
@@ -110,6 +112,38 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
         void release() { released = true; }
         ~ConnectAttemptGuard() { if (!released) w->connectAttemptInProgress.store(false); }
     } guard(this);
+
+    // ── IRQ affinity readiness check ──
+    // Before allowing SOEM EtherCAT to run, verify that the NIC's IRQ is
+    // correctly routed to the target CPU.  Registry-based MSI-X affinity
+    // requires a reboot to take effect; if the actual assignment does not
+    // match the configured target, block the connection to prevent the
+    // recurring NULL-pointer crashes caused by IRQ interference.
+    bool irqReady = false;
+    {
+        std::string adapterDisplay = FindAdapterDisplayName(this->currentIfName);
+        if (!EtherCATMaster::IsSimulationAdapterSelection(this->currentIfName) &&
+            !adapterDisplay.empty()) {
+            std::string irqMsg;
+            std::string irqLog;
+            if (CoreHelpers::CheckEthercatIrqAffinityReady(adapterDisplay, irqReady, irqMsg, irqLog)) {
+                if (!irqLog.empty()) {
+                    try { PostUTF8LogToUI(std::string("[IRQ Check] ") + irqLog); } catch(...) {}
+                }
+                if (!irqReady) {
+                    std::wstring wmsg = CoreHelpers::Utf8ToWide(irqMsg);
+                    PrependStatus((L"[Connect] " + wmsg + L"\r\n").c_str());
+                    int result = MessageBoxW(hwnd, (wmsg + L"\n\n確定要強制繼續連接嗎？").c_str(),
+                        L"IRQ 親和性檢查", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+                    if (result != IDYES) {
+                        PrependStatus(L"[Connect] 使用者取消連接 (IRQ 檢查未通過)\r\n");
+                        return;
+                    }
+                    PrependStatus(L"[Connect] 使用者強制繼續 (IRQ 檢查未通過)\r\n");
+                }
+            }
+        }
+    }
 
     // If we mark the server-side 'connect' disabled at the start of the flow,
     // ensure we undo that when the connect attempt fails/aborts. On success the
@@ -233,7 +267,7 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
     uint32_t desiredCycleTime = (uint32_t)(desiredCycleTimeMs * 1000.0);
 
     // 背景執行連線流程
-    std::thread([this, ifname, desiredCycleTime, attempt, serverConnectGuard]() mutable {
+    std::thread([this, ifname, desiredCycleTime, attempt, serverConnectGuard, irqReady]() mutable {
         int prevThreadPrio = GetThreadPriority(GetCurrentThread());
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
         std::string attemptPrefix = std::string("[Connect attempt ") + std::to_string((unsigned long long)attempt) + "] ";
@@ -241,9 +275,13 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
         auto post = [attemptPrefix, hwnd](const std::string &s){ MainWindow::PostUTF8LogToHWND(hwnd, attemptPrefix + s); };
 
         if (AbortConnectIfDisconnectRequested("Connection aborted by user before initialization\n", post)) { return; }
-        OptimizeAdapterForEthercat(ifname, post);
+        OptimizeAdapterForEthercat(ifname, irqReady, post);
 
         if (!InitializeMasterWithFallback(ifname, desiredCycleTime, post)) {
+            // Close keep-alive handle if init failed — NIC won't be used
+            { std::string closeLog; CoreHelpers::NpcapKeepAliveClose(closeLog); }
+            MarkConnectionWorkComplete();
+            PostAutoStatusUpdate();
             SetThreadPriority(GetCurrentThread(), prevThreadPrio);
             return;
         }
@@ -251,13 +289,19 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
         post(std::string("Initialization successful!\n"));
         if (AbortConnectIfDisconnectRequested("Connection aborted by user after initialization\n", post)) { return; }
 
+        // ── Wait for async TwinCAT stop (started before master init) ──
+        if (tcStopFuture.valid()) {
+            tcStopFuture.wait();
+            post(std::string("[TwinCAT] Tc* 服務停止完成\n"));
+        }
+
     post(std::string("Updating slave list...\n"));
         PostMessage(hwnd, WM_APP, 0, 0);
 
         if (AbortConnectIfDisconnectRequested("Connection aborted by user before configuring slaves\n", post)) { return; }
 
         post(std::string("發送初始ProcessData以準備配置...\n"));
-        for (int i = 0; i < 5; ++i) { MasterSendProcessDataOnce(); Sleep(5); } // Reduced from 10x10ms
+        for (int i = 0; i < 3; ++i) { MasterSendProcessDataOnce(); Sleep(2); }
 
         post(std::string("配置從站使用SOEM自動配置...\n"));
         bool configOk = MasterConfigureSlaves();
@@ -268,11 +312,14 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
 
         int slaveCount = MasterGetSlaveCount();
         post(std::string("All ") + std::to_string(slaveCount) + " slaves configured successfully\n");
+        // Dump per-slave IOmap/FMMU diagnostics from ConfigureSlaves
+        post(MasterGetLastError());
+        post(std::string("\n"));
 
         {
             post(std::string("All slaves configured, starting cyclic communication...\n"));
             post(std::string("Sending initial processdata (SOEM standard)...\n"));
-            for (int i = 0; i < 20; ++i) { if (AbortConnectIfDisconnectRequested("Connection aborted by user during initial processdata\n", post)) { return; } MasterSendProcessDataOnce(); DWORD delayMs = (DWORD)(desiredCycleTime / 1000); if (delayMs == 0) delayMs = 1; Sleep(delayMs); } // Reduced from 50 iterations
+            for (int i = 0; i < 10; ++i) { if (AbortConnectIfDisconnectRequested("Connection aborted by user during initial processdata\n", post)) { return; } MasterSendProcessDataOnce(); DWORD delayMs = (DWORD)(desiredCycleTime / 1000); if (delayMs == 0) delayMs = 1; Sleep(delayMs); }
 
             if (!WriteSafeStartupControlword(post)) {
                 NotifyEthercatError(true);
@@ -291,13 +338,15 @@ void MainWindow::OnConnect(const std::string* overrideIfName) {
                 HandleStartCyclicOperationFailure(MasterGetLastError(), post);
             } else {
                 post(std::string("EtherCAT communication active\n"));
+                // Dump per-slave OP diagnostics from StartCyclicOperation
+                post(MasterGetLastError());
                 PostUTF8LogToUI(std::string("EtherCAT \u5df2\u555f\u52d5!\n"));
                 // Clear ethercat error flag now that EtherCAT is running
                 NotifyEthercatError(false);
 
                 VerifyCyclicModeAndPdoReadiness(desiredCycleTime, post);
                 
-                // 啟動 0x603F 錯誤碼循環檢查
+                // 啟動 PDO 0x603F 錯誤碼循環檢查（PDO cache，非 SDO）
                 StartErrorCodeCheck();
                 
                 StartPostConnectSdoReader();
@@ -518,16 +567,20 @@ void MainWindow::ReportShutdownExceptionAndComplete(
 void MainWindow::ResetDisconnectedRuntimeState() {
     this->linkDownSinceTick = 0;
     this->linkLossDisconnectRequested = false;
-    this->sdo60FDFailureStreak.store(0);
-    this->sdo60FDConsecutiveFailureCount.store(0);
-    this->sdo60FDFailureSinceTick.store(0);
-    this->lastSdo60FDFailureTick.store(0);
-    this->sdo60FDDisconnectRequested.store(false);
+    this->pdo60FDFailureStreak.store(0);
+    this->pdo60FDConsecutiveFailureCount.store(0);
+    this->pdo60FDFailureSinceTick.store(0);
+    this->lastPdo60FDFailureTick.store(0);
+    this->pdo60FDDisconnectRequested.store(false);
+    this->suppressAutoStopDuringStartup_.store(false);
     PostAutoStatusUpdate();
     this->maxObservedCycleTime = 0;
     this->cyclicPdoCycleDetectReady.store(false);
     if (hEditCurrentCycleTime && IsWindow(hEditCurrentCycleTime)) {
-        SetWindowTextW(hEditCurrentCycleTime, L"0.00 ms / 0.00 ms");
+        SetWindowTextW(hEditCurrentCycleTime, L"通訊: 0.00 ms | 週期: 0.00 ms | 峰值: 0.00 ms");
+    }
+    if (hEditPdoProcFreq && IsWindow(hEditPdoProcFreq)) {
+        SetWindowTextW(hEditPdoProcFreq, L"等待中...");
     }
     MasterResetMaxObservedCommsTime();
     MasterResetMaxObservedCycleMicros();
@@ -545,6 +598,8 @@ void MainWindow::PrepareDisconnectShutdown() {
 
     // Stop auto procedure if running. StopAutoProcedure() is UI-safe and
     // already owns the related UI state transitions.
+    // NOTE: StopAutoProcedure() re-enables the SDO reader for 0x60FD monitoring
+    // after auto stop, so we must explicitly stop it here before shutdown.
     bool isSdoReaderRunning = false;
     if (auto* master = AppController::GetInstance().GetMaster()) {
         isSdoReaderRunning = master->IsSdoReaderRunning();
@@ -555,6 +610,16 @@ void MainWindow::PrepareDisconnectShutdown() {
         }
         StopAutoProcedure();
     }
+    // 停止 SDO reader 與其他背景 SDO 循環，確保 MasterShutdown 期間不再有 SDO 傳輸
+    {
+        auto* master = AppController::GetInstance().GetMaster();
+        if (master && master->IsSdoReaderRunning()) {
+            if (IsWindow(hwnd)) {
+                PrependStatus(L"停止 SDO 讀取器...\r\n");
+            }
+            master->StopSdoReader();
+        }
+    }
 
     // Stop timer first so OnTimer cannot race the shutdown path.
     if (IsWindow(hwnd)) {
@@ -562,7 +627,8 @@ void MainWindow::PrepareDisconnectShutdown() {
     }
 
     // Publish disconnect state to UI/AutoWindow before worker-side teardown.
-    NotifyEthercatError(true);
+    // Pass explicit reason to avoid "unknown" fallback in the error log.
+    NotifyEthercatError(true, "normal disconnect initiated");
     PostAutoStatusUpdate();
 
     if (workerRunning.load()) {
@@ -603,6 +669,11 @@ void MainWindow::CompleteDisconnect() {
     try {
         if (auto* master = AppController::GetInstance().GetMaster()) {
             master->ClearGlobalError();
+            // 安全網：若 shutdown 看門狗提前觸發 CompleteDisconnect，
+            // 確保 IsMasterInitialized() 回傳 false 以允許關閉視窗
+            if (master->IsInitialized()) {
+                master->ForceMarkUninitialized();
+            }
         }
     } catch (...) {}
 
@@ -610,11 +681,40 @@ void MainWindow::CompleteDisconnect() {
     SetManualResetRequired(false);
     NotifyEthercatError(false);
 
+    // ── Restore NVIDIA Dynamic P-State to original value ──
+    if (!nvidiaDpsSavedValue.empty()) {
+        try {
+            std::string dpsLog;
+            CoreHelpers::NvidiaSetDisableDynamicPState(false, nvidiaDpsSavedValue, dpsLog);
+            nvidiaDpsSavedValue.clear();
+        } catch (...) {}
+    }
+
+    // ── Restore TwinCAT services ──
+    if (!twinCatSavedServices.empty()) {
+        try {
+            std::string tcLog;
+            CoreHelpers::ControlTwinCatServices(false, twinCatSavedServices, tcLog);
+            twinCatSavedServices.clear();
+        } catch (...) {}
+    }
+
+    // ── Close Npcap keep-alive handle (opened in OptimizeAdapterForEthercat) ──
+    // Must stay open until disconnect to prevent NIC power-saving idle
+    // throughout the entire EtherCAT session.
+    try {
+        std::string closeLog;
+        CoreHelpers::NpcapKeepAliveClose(closeLog);
+    } catch (...) {}
+
     this->currentIfName.clear();
 
     ApplyDisconnectedUiControlState();
 
     StopDisconnectAlertSounds();
+
+    // 提前停止 SSE broadcaster，關閉長連線以減少後續 CloseAllClientSockets 等待時間
+    StopSseBroadcaster();
 
     ResetDisconnectedRuntimeState();
 }
@@ -922,13 +1022,6 @@ bool MainWindow::LoadDefaultMotionConfigForConnect() {
         savedMotionConfigGlobal = targetFile;
         SyncMotionParamsToUi((confirmedSlave > 0) ? confirmedSlave : 1);
 
-        if (loadDiagnostics.usedDefaultTemplate || loadDiagnostics.repairedInvalidValues) {
-            std::wstring status = L"motion.xml 已自動修復並套用預設值: ";
-            status += targetFile;
-            status += L"\r\n";
-            PrependStatus(status.c_str());
-        }
-
         try {
             size_t slaveCount = savedMotionParamsForSlave.size();
             size_t totalRows = 0;
@@ -939,17 +1032,25 @@ bool MainWindow::LoadDefaultMotionConfigForConnect() {
                 std::string(" slaves=") + std::to_string(slaveCount) +
                 std::string(" rows=") + std::to_string(totalRows) + "\n";
             PostUTF8LogToUI(cacheLog);
-            if (loadDiagnostics.usedDefaultTemplate || loadDiagnostics.repairedInvalidValues) {
-                std::string repairLog = std::string("MOTION_CACHE_RECOVERED: ") + loadedUtf8 +
-                    std::string(" used_defaults=") + (loadDiagnostics.usedDefaultTemplate ? "1" : "0") +
-                    std::string(" repaired=") + (loadDiagnostics.repairedInvalidValues ? "1" : "0") +
-                    std::string(" rewrote=") + (loadDiagnostics.rewroteTargetFile ? "1" : "0") +
-                    std::string(" issues=") + std::to_string(loadDiagnostics.messages.size()) + "\n";
-                PostUTF8LogToUI(repairLog);
-            }
         } catch (...) {
         }
         return true;
+    }
+
+    // Load failed — check if the file was rebuilt from built-in defaults
+    if (loadDiagnostics.restartRequired) {
+        MessageBoxW(hwnd,
+                    L"motion.xml 已遺失或損毀，已使用內建預設值重建。\r\n"
+                    L"請重新啟動程式以使重建的設定檔生效。",
+                    L"motion.xml 已重建",
+                    MB_OK | MB_ICONWARNING);
+        try {
+            std::string rebuildLog = std::string("MOTION_CACHE_REBUILT: ") + CoreHelpers::WideToUtf8(targetFile) +
+                std::string(" used_defaults=1 restart_required=1\n");
+            PostUTF8LogToUI(rebuildLog);
+        } catch (...) {
+        }
+        return false;
     }
 
     if (MotionConfigIO::LoadMotionParamsFromFileAtPath(hListMotionParams, targetFile, loadedUtf8)) {
@@ -993,8 +1094,45 @@ bool MainWindow::InitializeMasterWithFallback(
         MasterShutdownSync();
     }
 
+    // ── Ensure static IP on EtherCAT NIC (no-op if TCP/IP unbound) ──
+    // A TCP/IP binding with a static IP keeps the NDIS miniport active,
+    // preventing NIC micro-sleep between PDO frames → WKC stays stable.
+    // When TCP/IP is not bound, this step is skipped gracefully.
+    {
+        std::string ipLog;
+        CoreHelpers::EnsureStaticIpOnEthercatNic(ifname, ipLog);
+        std::istringstream iss(ipLog);
+        std::string line;
+        while (std::getline(iss, line)) {
+            if (line.empty()) continue;
+            post("[Static IP] " + line + "\n");
+        }
+    }
+
+    // NOTE: Npcap keep-alive handle stays open across MasterInitialize —
+    // it is closed later in CompleteDisconnect() to ensure the NIC never
+    // enters power-saving idle throughout the entire EtherCAT session.
+
     if (MasterInitialize(ifname)) {
         return true;
+    }
+
+    const bool simulationSelected = EtherCATMaster::IsSimulationAdapterSelection(ifname);
+    if (simulationSelected) {
+        post(std::string("Simulation initialization failed unexpectedly: ") + MasterGetLastError() + "\n");
+        RequestAutomaticDisconnect("Connect: simulation init failed - issuing disconnect\n");
+        this->currentIfName.clear();
+        PostAutoStatusUpdate();
+        NotifyEthercatError(true);
+        SetControlEnabled(hBtnConnect, true);
+        if (hBtnLoadConfig) {
+            SetControlEnabled(hBtnLoadConfig, true);
+        }
+        if (hComboAdapter && IsWindow(hComboAdapter)) {
+            SetControlEnabled(hComboAdapter, true);
+        }
+        MarkConnectionWorkComplete();
+        return false;
     }
 
     post(std::string("Initialization failed: ") + MasterGetLastError() + "\n");
@@ -1234,14 +1372,33 @@ void MainWindow::WriteStartupMotionParams(const std::function<void(const std::st
                 static_cast<uint8_t>((value60e1 >> 24) & 0xFF)
             };
 
-            const bool ok60e0 = MasterWriteSDO(slave, 0x60E0, 0x00, bytes60e0, 4);
-            if (!ok60e0) {
-                failed60e0.push_back(slave);
-            }
+            // Write torque limits via SDO (works before OP).
+            // X1S uses 0x2019/0x201A; DVS uses 0x60E0/0x60E1.
+            // For extended PDO (7+7), also stage into IOmap so PDO sends correct values after OP.
+            auto* m = AppController::GetInstance().GetMaster();
+            const ecx_contextt* ctx = m ? m->GetContext() : nullptr;
+            uint32_t eepMan = (ctx && slave <= ctx->slavecount) ? ctx->slavelist[slave].eep_man : 0;
+            uint16_t idxPos = EtherCATMaster::GetTorqueLimitPosIdx(eepMan);
+            uint16_t idxNeg = EtherCATMaster::GetTorqueLimitNegIdx(eepMan);
 
-            const bool ok60e1 = MasterWriteSDO(slave, 0x60E1, 0x00, bytes60e1, 4);
-            if (!ok60e1) {
-                failed60e1.push_back(slave);
+            const bool ok60e0 = MasterWriteSDO(slave, idxPos, 0x00, bytes60e0, 4);
+            const bool ok60e1 = MasterWriteSDO(slave, idxNeg, 0x00, bytes60e1, 4);
+
+            // If extended PDO, stage torque limits into RxPDO (kPdoOutOff_PosTorqueLim/kPdoOutOff_NegTorqueLim)
+            if (ok60e0 || ok60e1) {
+                if (m && ctx && slave <= ctx->slavecount && ctx->slavelist[slave].Obytes >= 17) {
+                    int outBase = 0, inBase = 0;
+                    if (m->GetSlaveIOBaseBytes(slave, outBase, inBase)) {
+                        if (ok60e0) {
+                            uint8_t pdo60e0[2] = { bytes60e0[0], bytes60e0[1] };
+                            m->StageOutputBytes(outBase + EtherCATMaster::kPdoOutOff_PosTorqueLim, pdo60e0, 2);
+                        }
+                        if (ok60e1) {
+                            uint8_t pdo60e1[2] = { bytes60e1[0], bytes60e1[1] };
+                            m->StageOutputBytes(outBase + EtherCATMaster::kPdoOutOff_NegTorqueLim, pdo60e1, 2);
+                        }
+                    }
+                }
             }
 
             if (ok60e0 && ok60e1) {
@@ -1340,10 +1497,37 @@ void MainWindow::CacheMotionParamsFromUi(int slaveIndex) {
 
 void MainWindow::OptimizeAdapterForEthercat(
     const std::string &ifname,
+    bool irqAlreadyReady,
     const std::function<void(const std::string&)> &post) {
     if (EtherCATMaster::IsSimulationAdapterSelection(ifname)) {
         post(std::string("[Simulation] skipping NIC optimization and adapter isolation\n"));
         return;
+    }
+
+    // ── Report CPU isolation status ──
+    {
+        bool active = CoreHelpers::CpuIsolation::IsHardIsolationActive();
+        if (active) {
+            DWORD_PTR mask = CoreHelpers::CpuIsolation::GetRtThreadMask();
+            int physicalCore = CoreHelpers::CpuIsolation::GetRtPhysicalCoreIndex();
+
+            // Resolve logical CPU (Task Manager numbering) from topology
+            CoreHelpers::CpuTopology::EnsurePopulated();
+            const auto* ci = CoreHelpers::CpuTopology::FindCoreByPhysIdx(physicalCore);
+            int primaryLp = (ci && !ci->lps.empty()) ? ci->lps[0] : physicalCore;
+
+            std::ostringstream oss;
+            oss << "[CPU隔離] 硬隔離已啟用 — cyclic thread 固定於 CPU " << primaryLp
+                << " (實體核心 #" << physicalCore
+                << ", 遮罩 0x" << std::hex << mask << std::dec;
+            if (ci && ci->lps.size() >= 2) {
+                oss << ", SMT sibling(s) 閒置";
+            }
+            oss << ")\n";
+            post(oss.str());
+        } else {
+            post(std::string("[CPU隔離] ⚠ 硬隔離未啟用 — RT 核心不存在，使用 legacy 親和性 fallback\n"));
+        }
     }
 
     post(std::string("正在優化網卡中斷親和性設定...\n"));
@@ -1383,6 +1567,48 @@ void MainWindow::OptimizeAdapterForEthercat(
     }
 
     try {
+        if (irqAlreadyReady) {
+            post(std::string("[System IRQ] ✓ EtherCAT NIC IRQ 親和性已正確設定，但仍在確認其他裝置的 IRQ 設定...\n"));
+        }
+        post(std::string("[System IRQ] 正在設定全系統硬體 IRQ 分散策略 (拓撲自適應)...\n"));
+        post(std::string("[System IRQ] 佈局: GPU/USB/LAN→低編號實體核心 | NVMe→中編號 | ECAT-NIC→高編號 | RT核心→最高編號\n"));
+        post(std::string("[System IRQ] 所有 IRQ 只使用主要邏輯處理器，永不使用 SMT/HT 兄弟執行緒\n"));
+        std::string irqLog;
+        bool irqDevicesSet = false;
+        CoreHelpers::ApplySystemWideIrqAffinityToCpu0(adapterDisplay, irqLog);
+        if (!irqLog.empty()) {
+            std::istringstream iss(irqLog);
+            std::string line;
+            while (std::getline(iss, line)) {
+                if (line.empty()) continue;
+                if (line.find("=== Summary") != std::string::npos ||
+                    line.find("CPU ") != std::string::npos ||
+                    line.find("WARNING") != std::string::npos ||
+                    line.find("Resolved EtherCAT") != std::string::npos ||
+                    line.find("REBOOT") != std::string::npos ||
+                        line.find("需重新啟動") != std::string::npos ||
+                        line.find("NOTE:") != std::string::npos) {
+                        post(line + "\n");
+                    }
+                    if (line.find("=== Summary") != std::string::npos) {
+                        irqDevicesSet = (line.find(" 0 devices") == std::string::npos);
+                    }
+                }
+            }
+            if (irqDevicesSet) {
+                post(std::string("\n"));
+                post(std::string("⚠ ================================================================ ⚠\n"));
+                post(std::string("⚠  IRQ 中斷分散設定已寫入登錄檔，需要【重新啟動電腦】才會生效！\n"));
+                post(std::string("⚠  目前的 IRQ 配置仍是舊的，重開機前 EtherCAT 可能仍受干擾。\n"));
+                post(std::string("⚠ ================================================================ ⚠\n"));
+            }
+    } catch (const std::exception &ex) {
+        post(std::string("System IRQ Affinity 設定時發生異常: ") + ex.what() + "\n");
+    } catch (...) {
+        post(std::string("System IRQ Affinity 設定時發生未知異常\n"));
+    }
+
+    try {
         if (!adapterDisplay.empty()) {
             post(std::string("[Adapter Isolation] 正在隔離網卡以防止其他軟體干擾...\n"));
             std::string isolateLog;
@@ -1395,6 +1621,103 @@ void MainWindow::OptimizeAdapterForEthercat(
             } else {
                 post(std::string("[Adapter Isolation] ⚠ 網卡隔離未完成（可能需要管理員權限）\n"));
             }
+
+            // ── Lock NIC hardware against power-saving (registry: D3/IM/EEE/DMA) ──
+            // Works even when TCP/IP is unbound; writes persist across reboots.
+            post(std::string("[NIC Lock] 正在鎖定網卡硬體設定防止省電待命...\n"));
+            try {
+                std::string lockLog;
+                CoreHelpers::LockNicHardwareRealtime(ifname, lockLog);
+                if (!lockLog.empty()) {
+                    std::istringstream liss(lockLog);
+                    std::string lline;
+                    while (std::getline(liss, lline)) {
+                        if (lline.empty()) continue;
+                        if (lline.find("✓") != std::string::npos ||
+                            lline.find("SET") != std::string::npos ||
+                            lline.find("WARNING") != std::string::npos ||
+                            lline.find("ERROR") != std::string::npos) {
+                            post(lline + "\n");
+                        }
+                    }
+                }
+            } catch (...) {
+                post(std::string("[NIC Lock] 鎖定過程中發生異常\n"));
+            }
+
+            // ── Npcap persistent keep-alive: open handle to prevent NIC idle ──
+            // When TCP/IP is unbound, Windows stops NDIS OID requests → NIC
+            // firmware enters power-saving idle → WKC instability on Win11.
+            // This handle stays open across NIC tuning → master init, keeping
+            // NDIS OID processing active. Closed after SOEM opens its own handle.
+            post(std::string("[Npcap KeepAlive] 正在開啟持久 handle 防止網卡省電待命...\n"));
+            try {
+                std::string warmLog;
+                CoreHelpers::NpcapKeepAliveOpen(ifname, warmLog);
+                if (!warmLog.empty()) {
+                    std::istringstream wiss(warmLog);
+                    std::string wline;
+                    while (std::getline(wiss, wline)) {
+                        if (wline.empty()) continue;
+                        if (wline.find("✓") != std::string::npos ||
+                            wline.find("⚠") != std::string::npos ||
+                            wline.find("ERROR") != std::string::npos) {
+                            post(wline + "\n");
+                        }
+                    }
+                }
+            } catch (...) {
+                post(std::string("[Npcap KeepAlive] 開啟過程中發生異常\n"));
+            }
+
+            // ── NIC driver-level real-time tuning (synchronous: complete before master init) ──
+            // Set NetworkThrottlingIndex BEFORE NIC property tuning so the OS
+            // stops rate-limiting packet I/O before the master opens the pcap handle.
+            post(std::string("[NIC Realtime] 正在關閉 Windows 網路節流...\n"));
+            try {
+                std::string throttleLog;
+                CoreHelpers::SetNetworkThrottlingForRealtime(throttleLog);
+                if (!throttleLog.empty()) {
+                    std::istringstream tiss(throttleLog);
+                    std::string tline;
+                    while (std::getline(tiss, tline)) {
+                        if (tline.empty()) continue;
+                        if (tline.find("✓") != std::string::npos ||
+                            tline.find("✗") != std::string::npos ||
+                            tline.find("⚠") != std::string::npos ||
+                            tline.find("ERROR") != std::string::npos) {
+                            post(tline + "\n");
+                        }
+                    }
+                }
+            } catch (...) {
+                post(std::string("[NIC Realtime] 網路節流設定時發生異常\n"));
+            }
+
+            post(std::string("[NIC Realtime] 正在關閉網卡中斷調節、最大化緩衝區...\n"));
+            try {
+                std::string rtNicLog;
+                CoreHelpers::OptimizeNicForRealtime(adapterDisplay, rtNicLog);
+                if (!rtNicLog.empty()) {
+                    std::istringstream riss(rtNicLog);
+                    std::string rline;
+                    while (std::getline(riss, rline)) {
+                        if (rline.empty()) continue;
+                        if (rline.find("✓") != std::string::npos ||
+                            rline.find("✗") != std::string::npos ||
+                            rline.find("⚠") != std::string::npos ||
+                            rline.find("ERROR") != std::string::npos ||
+                            rline.find("FAIL") != std::string::npos ||
+                            rline.find("reboot") != std::string::npos ||
+                            rline.find("SET:") != std::string::npos) {
+                            post(rline + "\n");
+                        }
+                    }
+                }
+                post(std::string("[NIC Realtime] 網卡即時調優完成\n"));
+            } catch (...) {
+                post(std::string("[NIC Realtime] 調優過程中發生異常\n"));
+            }
         } else {
             post(std::string("[Adapter Isolation] 未找到匹配的網卡資訊，跳過隔離\n"));
         }
@@ -1402,6 +1725,66 @@ void MainWindow::OptimizeAdapterForEthercat(
         post(std::string("[Adapter Isolation] 異常: ") + ex.what() + "\n");
     } catch (...) {
         post(std::string("[Adapter Isolation] 未知異常\n"));
+    }
+
+    // ── NVIDIA GPU: Disable Dynamic P-State to suppress nvlddmkm DPC bursts ──
+    try {
+        post(std::string("[NVIDIA GPU] 正在停用動態 P-State 以抑制 nvlddmkm DPC...\n"));
+        std::string dpsLog;
+        std::string prevVal;
+        CoreHelpers::NvidiaSetDisableDynamicPState(true, prevVal, dpsLog);
+        if (!prevVal.empty()) {
+            nvidiaDpsSavedValue = prevVal;
+        }
+        if (!dpsLog.empty()) {
+            // Extract summary lines
+            std::istringstream diss(dpsLog);
+            std::string dline;
+            while (std::getline(diss, dline)) {
+                if (dline.empty()) continue;
+                if (dline.find("disabled on") != std::string::npos ||
+                    dline.find("already disabled") != std::string::npos ||
+                    dline.find("ERROR") != std::string::npos ||
+                    dline.find("WARNING") != std::string::npos) {
+                    post(dline + "\n");
+                }
+            }
+        }
+    } catch (const std::exception &ex) {
+        post(std::string("[NVIDIA GPU] 異常: ") + ex.what() + "\n");
+    } catch (...) {
+        post(std::string("[NVIDIA GPU] 未知異常\n"));
+    }
+
+    // ── TwinCAT: Stop Tc* services (async: runs in parallel with master init) ──
+    try {
+        post(std::string("[TwinCAT] 正在停止 Tc* 服務以抑制 TcRouter/TcIo DPC... (背景執行)\n"));
+        tcStopFuture = std::async(std::launch::async, [this, post]() {
+            try {
+                std::string tcLog;
+                std::string savedList;
+                CoreHelpers::ControlTwinCatServices(true, savedList, tcLog);
+                if (!savedList.empty()) {
+                    twinCatSavedServices = savedList;
+                }
+                if (!tcLog.empty()) {
+                    std::istringstream tiss(tcLog);
+                    std::string tline;
+                    while (std::getline(tiss, tline)) {
+                        if (tline.empty()) continue;
+                        if (tline.find("Stopped") != std::string::npos ||
+                            tline.find("NONE_RUNNING") != std::string::npos ||
+                            tline.find("ERROR") != std::string::npos) {
+                            post(tline + "\n");
+                        }
+                    }
+                }
+            } catch (...) {}
+        });
+    } catch (const std::exception &ex) {
+        post(std::string("[TwinCAT] 異常: ") + ex.what() + "\n");
+    } catch (...) {
+        post(std::string("[TwinCAT] 未知異常\n"));
     }
 }
 
@@ -1413,17 +1796,19 @@ void MainWindow::VerifyCyclicModeAndPdoReadiness(
     constexpr DWORD kModeVerifyRetryDelayMs = 5;
     bool modeReady = true;
     int verifySlaveCount = MasterGetSlaveCount();
+    const int8_t configuredMode = AppController::GetInstance().GetMaster()
+        ? AppController::GetInstance().GetMaster()->GetCyclicOperationMode()
+        : CoreHelpers::kDefaultCyclicOperationMode;
     for (int slaveIndex = 1; slaveIndex <= verifySlaveCount; ++slaveIndex) {
         bool modeOk = false;
-        int32_t modeDisplay = 0;
+        uint8_t modeDisplay = 0;
+        auto* verifyMaster = AppController::GetInstance().GetMaster();
         for (int retry = 0; retry < kModeVerifyRetries && !modeOk; ++retry) {
-            int modeSize = (int)sizeof(modeDisplay);
-            modeDisplay = 0;
-            if (MasterReadSDO((uint16_t)slaveIndex, 0x6061, 0x00, &modeDisplay, modeSize, kModeVerifyTimeoutUs)) {
-                if ((int8_t)(modeDisplay & 0xFF) == CoreHelpers::kDefaultCyclicOperationMode) {
-                    modeOk = true;
-                    break;
-                }
+            // Read 0x6061 from PDO cache (was SDO; cache updated every cycle)
+            if (verifyMaster && verifyMaster->GetPdo6061(static_cast<uint16_t>(slaveIndex), modeDisplay)
+                && (int8_t)modeDisplay == configuredMode) {
+                modeOk = true;
+                break;
             }
             if (retry + 1 < kModeVerifyRetries) {
                 Sleep(kModeVerifyRetryDelayMs);
@@ -1433,7 +1818,7 @@ void MainWindow::VerifyCyclicModeAndPdoReadiness(
             modeReady = false;
             std::ostringstream css;
             css << "[Connect] "
-                << CoreHelpers::DescribeOperationModeShortName(CoreHelpers::kDefaultCyclicOperationMode)
+                << CoreHelpers::DescribeOperationModeShortName(configuredMode)
                 << " verify failed: slave=" << slaveIndex
                 << " modeDisplay=" << (int)((int8_t)(modeDisplay & 0xFF)) << "\n";
             post(css.str());
@@ -1491,6 +1876,70 @@ void MainWindow::FinalizeSuccessfulConnection(
     SetUiDisabled("send_mailbox", false);
     SetUiDisabled("dump_esi", false);
 
+    // Query and display effective IRQ CPU for the selected adapter (if available)
+    try {
+        if (hStaticAdapterIrqCpu && IsWindow(hStaticAdapterIrqCpu)) {
+            std::string adapterDisplay;
+            if (EtherCATMaster::IsSimulationAdapterSelection(this->currentIfName)) {
+                SetWindowTextW(hStaticAdapterIrqCpu, L"Sim");
+            } else {
+                adapterDisplay = FindAdapterDisplayName(this->currentIfName);
+                int irqCpu = -1;
+                std::string irqLog;
+                bool ok = CoreHelpers::GetAdapterEffectiveIrqCpu(adapterDisplay, irqCpu, irqLog);
+
+                // Detect MSI-X vs Legacy INTx
+                CoreHelpers::AdapterInterruptType intType = CoreHelpers::AdapterInterruptType::Unknown;
+                std::string intTypeDesc;
+                std::string intTypeLog;
+                CoreHelpers::GetAdapterInterruptType(adapterDisplay, intType, intTypeDesc, intTypeLog);
+
+                // Query actual IRQ number from WMI (same value as msinfo32)
+                unsigned long long actualIrq = 0;
+                std::string actualIrqName;
+                std::string actualIrqLog;
+                bool irqOk = CoreHelpers::GetAdapterActualIrqNumber(adapterDisplay, actualIrq, actualIrqName, actualIrqLog);
+
+                std::wstring adapterW = CoreHelpers::Utf8ToWide(adapterDisplay);
+                std::wstring txt = adapterW + L" → ";
+                if (irqOk && actualIrq > 0) {
+                    txt += L"IRQ " + std::to_wstring(actualIrq);
+                    if (ok && irqCpu >= 0) {
+                        txt += L" (CPU" + std::to_wstring(irqCpu) + L")";
+                    }
+                } else if (ok && irqCpu >= 0) {
+                    txt += L"CPU" + std::to_wstring(irqCpu);
+                } else {
+                    txt += L"N/A";
+                }
+                if (intType == CoreHelpers::AdapterInterruptType::MsiX) {
+                    txt += L" [MSI-X]";
+                } else if (intType == CoreHelpers::AdapterInterruptType::LegacyIntx) {
+                    txt += L" [Legacy INTx ⚠]";
+                }
+                SetWindowTextW(hStaticAdapterIrqCpu, txt.c_str());
+
+                if (!irqLog.empty()) PostUTF8LogToUI(std::string("[Adapter IRQ] ") + irqLog);
+                if (!intTypeLog.empty()) PostUTF8LogToUI(std::string("[IRQ Type] ") + intTypeLog);
+                if (!actualIrqLog.empty()) PostUTF8LogToUI(std::string("[Actual IRQ] ") + actualIrqLog);
+                if (intType == CoreHelpers::AdapterInterruptType::LegacyIntx) {
+                    PostUTF8LogToUI(std::string("⚠ Legacy INTx 中斷無法透過 registry 綁定 CPU，IRQ affinity 設定對此網卡無效\n"));
+                }
+            }
+
+            if (hStaticOtherIrqAssignments && IsWindow(hStaticOtherIrqAssignments)) {
+                std::string otherIrqSummary;
+                std::string otherIrqLog;
+                if (CoreHelpers::GetSystemIrqAffinitySummary(adapterDisplay, otherIrqSummary, otherIrqLog) && !otherIrqSummary.empty()) {
+                    SetWindowTextW(hStaticOtherIrqAssignments, CoreHelpers::Utf8ToWide(otherIrqSummary).c_str());
+                } else {
+                    SetWindowTextW(hStaticOtherIrqAssignments, L"N/A");
+                }
+                if (!otherIrqLog.empty()) PostUTF8LogToUI(std::string("[Other IRQs] ") + otherIrqLog);
+            }
+        }
+    } catch(...) {}
+
     // ---- Auto-populate P0 Device Name from actual slave info ----
     {
         auto* master = AppController::GetInstance().GetMaster();
@@ -1543,6 +1992,21 @@ void MainWindow::FinalizeSuccessfulConnection(
         shouldAutoStart = true;
     }
     if (shouldAutoStart) {
+        // Connection work is complete — clear busy flags so StartAutoProcedure
+        // is not blocked. MarkConnectionWorkComplete clears workerRunning;
+        // autoConnectBusy and immediateStopBusy must be cleared separately.
+        // immediateStopBusy may have been set by SDO 0x60FD bit0 check at
+        // connection (hardware E-Stop appears active before drive is fully
+        // configured — a false positive that should not block auto-startup).
+        //
+        // suppressAutoStopDuringStartup_ prevents the SDO/PDO reader (10 ms
+        // period) from posting WM_USER_AUTO_IMMEDIATE_STOP_REQUEST or
+        // WM_USER_AUTO_EMERGENCY_STOP_REQUEST between the flag clear below
+        // and StartAutoProcedure's busy check on the UI thread.
+        this->suppressAutoStopDuringStartup_.store(true);
+        MarkConnectionWorkComplete();
+        this->autoConnectBusy.store(false);
+        this->immediateStopBusy.store(false);
         post(std::string("[AutoStartup] 連接成功，準備自動啟動程序...\n"));
         Sleep(50);
         const bool suppressPcAutoWindow = startupAutoStart && this->suppressAutoWindowForStartupAuto.exchange(false);
@@ -1602,26 +2066,26 @@ bool MainWindow::AbortConnectIfDisconnectRequested(
 
 void MainWindow::StartPostConnectSdoReader() {
     if (auto* master = AppController::GetInstance().GetMaster()) {
-        sdo60FDFailureStreak.store(0);
-        sdo60FDConsecutiveFailureCount.store(0);
-        sdo60FDFailureSinceTick.store(0);
-        lastSdo60FDFailureTick.store(0);
-        sdo60FDDisconnectRequested.store(false);
+        pdo60FDFailureStreak.store(0);
+        pdo60FDConsecutiveFailureCount.store(0);
+        pdo60FDFailureSinceTick.store(0);
+        lastPdo60FDFailureTick.store(0);
+        pdo60FDDisconnectRequested.store(false);
         master->StartSdoReader(10, [this](const std::string &message) {
-            this->HandleSdo60FDCallback(message);
+            this->HandlePdo60FDCallback(message);
         });
     }
 }
 
-void MainWindow::HandleSdo60FDCallback(const std::string &message) {
+void MainWindow::HandlePdo60FDCallback(const std::string &message) {
     const ULONGLONG nowTick = GetTickCount64();
     if (message.rfind("Read 0x60FD failed:", 0) == 0) {
-        sdo60FDFailureStreak.fetch_add(1);
-        const int failureCount = sdo60FDConsecutiveFailureCount.fetch_add(1) + 1;
-        ULONGLONG failureSinceTick = sdo60FDFailureSinceTick.load();
+        pdo60FDFailureStreak.fetch_add(1);
+        const int failureCount = pdo60FDConsecutiveFailureCount.fetch_add(1) + 1;
+        ULONGLONG failureSinceTick = pdo60FDFailureSinceTick.load();
         if (failureSinceTick == 0) {
             failureSinceTick = nowTick;
-            sdo60FDFailureSinceTick.store(failureSinceTick);
+            pdo60FDFailureSinceTick.store(failureSinceTick);
             PostUTF8LogToUI(std::string("[AUTO] Read 0x60FD failed - monitoring sustained communication failure\n"));
             PostUTF8LogToUI(std::string("[AUTO] ") + message + "\n");
         } else if ((failureCount % 25) == 0) {
@@ -1629,23 +2093,23 @@ void MainWindow::HandleSdo60FDCallback(const std::string &message) {
             PostUTF8LogToUI(std::string("[AUTO] Read 0x60FD still failing - count=") + std::to_string(failureCount)
                 + std::string(" elapsed=") + std::to_string(elapsedMs) + std::string(" ms\n"));
         }
-        lastSdo60FDFailureTick.store(nowTick);
+        lastPdo60FDFailureTick.store(nowTick);
         PostAutoStatusUpdate();
 
-        if (!sdo60FDDisconnectRequested.load() && failureSinceTick != 0 && nowTick >= failureSinceTick
+        if (!pdo60FDDisconnectRequested.load() && failureSinceTick != 0 && nowTick >= failureSinceTick
             && (nowTick - failureSinceTick) >= SDO_60FD_FAILURE_WINDOW_MS) {
-            sdo60FDDisconnectRequested.store(true);
+            pdo60FDDisconnectRequested.store(true);
             RequestAutomaticDisconnect(
                 "[AUTO] Read 0x60FD failed continuously for over 1000 ms - issuing disconnect\n",
                 L"0x60FD 連續讀取失敗超過 1 秒，執行自動斷開...\r\n");
         }
         return;
     } else {
-        sdo60FDFailureStreak.store(0);
-        const int failureCount = sdo60FDConsecutiveFailureCount.exchange(0);
-        const ULONGLONG failureSinceTick = sdo60FDFailureSinceTick.exchange(0);
-        lastSdo60FDFailureTick.store(0);
-        sdo60FDDisconnectRequested.store(false);
+        pdo60FDFailureStreak.store(0);
+        const int failureCount = pdo60FDConsecutiveFailureCount.exchange(0);
+        const ULONGLONG failureSinceTick = pdo60FDFailureSinceTick.exchange(0);
+        lastPdo60FDFailureTick.store(0);
+        pdo60FDDisconnectRequested.store(false);
         if (failureCount > 0 && failureSinceTick != 0) {
             const ULONGLONG elapsedMs = (nowTick >= failureSinceTick) ? (nowTick - failureSinceTick) : 0;
             PostUTF8LogToUI(std::string("[AUTO] 0x60FD read recovered after ") + std::to_string(elapsedMs)
@@ -1657,12 +2121,12 @@ void MainWindow::HandleSdo60FDCallback(const std::string &message) {
     this->PostAutoStatusUpdate();
     try {
         std::vector<uint8_t> bytes;
-        if (!this->TryGetLastSdo60FD(bytes) || bytes.empty()) {
+        if (!this->TryGetPdo60FD(bytes) || bytes.empty()) {
             return;
         }
 
         uint8_t last = bytes.back();
-        int prev = this->lastSdo60FDLastByte.load();
+        int prev = this->lastPdo60FDLastByte.load();
         const auto snapshot = GetSystemStateSnapshot();
         const auto autoConnectDecision = CoreHelpers::EvaluateAutoConnect(snapshot);
         const auto downToOriginDecision = CoreHelpers::EvaluateAutoDownToOrigin(snapshot);
@@ -1684,44 +2148,50 @@ void MainWindow::HandleSdo60FDCallback(const std::string &message) {
 
         int newb1 = (last & 0x02) ? 1 : 0;
         int prevb1 = (prev & 0x02) ? 1 : 0;
-        int newb0 = (last & 0x01) ? 1 : 0;
-        int prevb0 = (prev & 0x01) ? 1 : 0;
-        if (prev != -1 && newb0 == 1 && prevb0 == 0) {
-            if (!this->immediateStopBusy.load()) {
-                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 asserted -> auto-triggering immediate stop\n"));
-                PostMessageW(this->GetHwnd(), WM_USER_AUTO_IMMEDIATE_STOP_REQUEST, (WPARAM)0, 0);
-            } else {
-                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 asserted but immediate stop already busy\n"));
-            }
-        }
-
         int newb5 = (last & 0x20) ? 1 : 0;
         int prevb5 = (prev & 0x20) ? 1 : 0;
-        if (newb5 == 0 && !this->errorSoundPlaying_.load()) {
-            if (!this->softStartSoundPlaying_.load() && !this->violationSoundPlaying_.load()) {
-                try { PlaySound(TEXT("SystemAsterisk"), NULL, SND_ALIAS | SND_ASYNC | SND_LOOP); } catch(...) {}
+        if (prev != -1 && newb5 == 1 && prevb5 == 0) {
+            if (!this->immediateStopBusy.load() && !this->suppressAutoStopDuringStartup_.load()) {
+                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 asserted -> auto-triggering immediate stop\n"));
+                PostMessageW(this->GetHwnd(), WM_USER_AUTO_IMMEDIATE_STOP_REQUEST, (WPARAM)0, 0);
+            } else if (this->suppressAutoStopDuringStartup_.load()) {
+                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 asserted but suppressed during auto-startup window\n"));
+            } else {
+                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 asserted but immediate stop already busy\n"));
             }
-            this->errorSoundPlaying_.store(true);
-            PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5=0 (E-Stop pressed) -> emergency alert sound ON\n"));
         }
 
-        if ((prev == -1 && newb5 == 0) || (prev != -1 && prevb5 == 1 && newb5 == 0)) {
-            if (!this->immediateStopBusy.load()) {
-                if (prev == -1) {
-                    PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 active (0) at connection -> auto-triggering emergency stop\n"));
-                } else {
-                    PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 active (0) -> auto-triggering emergency stop\n"));
+        int newb0 = (last & 0x01) ? 1 : 0;
+        int prevb0 = (prev & 0x01) ? 1 : 0;
+        if (externalEstopEnabled_.load()) {
+            if (newb0 == 0 && !this->errorSoundPlaying_.load()) {
+                if (!this->softStartSoundPlaying_.load() && !this->violationSoundPlaying_.load()) {
+                    try { PlaySound(TEXT("SystemAsterisk"), NULL, SND_ALIAS | SND_ASYNC | SND_LOOP); } catch(...) {}
                 }
-                PostMessageW(this->GetHwnd(), WM_USER_AUTO_EMERGENCY_STOP_REQUEST, (WPARAM)0, 0);
-            } else {
-                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 active but immediate/emergency stop already busy\n"));
+                this->errorSoundPlaying_.store(true);
+                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0=0 (E-Stop pressed) -> emergency alert sound ON\n"));
             }
-        }
-        if (prev != -1 && prevb5 == 0 && newb5 == 1) {
-            if (this->errorSoundPlaying_.load()) {
-                this->errorSoundPlaying_.store(false);
-                StopSystemAlertSoundIfIdle();
-                PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit5 released -> stopping emergency alert sound\n"));
+
+            if ((prev == -1 && newb0 == 0) || (prev != -1 && prevb0 == 1 && newb0 == 0)) {
+                if (!this->immediateStopBusy.load() && !this->suppressAutoStopDuringStartup_.load()) {
+                    if (prev == -1) {
+                        PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 active (0) at connection -> auto-triggering emergency stop\n"));
+                    } else {
+                        PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 active (0) -> auto-triggering emergency stop\n"));
+                    }
+                    PostMessageW(this->GetHwnd(), WM_USER_AUTO_EMERGENCY_STOP_REQUEST, (WPARAM)0, 0);
+                } else if (this->suppressAutoStopDuringStartup_.load()) {
+                    PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 active but suppressed during auto-startup window\n"));
+                } else {
+                    PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 active but immediate/emergency stop already busy\n"));
+                }
+            }
+            if (prev != -1 && prevb0 == 0 && newb0 == 1) {
+                if (this->errorSoundPlaying_.load()) {
+                    this->errorSoundPlaying_.store(false);
+                    StopSystemAlertSoundIfIdle();
+                    PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit0 released -> stopping emergency alert sound\n"));
+                }
             }
         }
 
@@ -1730,7 +2200,7 @@ void MainWindow::HandleSdo60FDCallback(const std::string &message) {
         if (prev != -1 && newb3 == 1 && prevb3 == 0) {
             if (downToOriginDecision.allowed) {
                 PostUTF8LogToUI(std::string("[AUTO] SDO 0x60FD bit3 asserted -> requesting DownToOrigin via MainWindow auto flow\n"));
-                AppController::GetInstance().RequestAutoDownToOrigin(0, true);
+                AppController::GetInstance().RequestAutoDownToOrigin(0);
             } else {
                 logRejectedExternalAutoAction("SDO 0x60FD bit3 DownToOrigin request", downToOriginDecision);
             }
@@ -1745,8 +2215,114 @@ void MainWindow::HandleSdo60FDCallback(const std::string &message) {
             }
         }
 
-        this->lastSdo60FDLastByte.store((int)last);
+        this->lastPdo60FDLastByte.store((int)last);
     } catch (...) {}
+}
+
+void MainWindow::PollExternalAutoInputsPdo()
+{
+    // PDO-based 0x60FD monitoring — replaces the old SDO-reader callback path.
+    // After the 2026-06-15 PDO migration (0x60FD now in TxPDO), the SDO reader
+    // may fail because the object is PDO-mapped. This function reads directly
+    // from the atomic PDO cache updated every cycle by the cyclic thread.
+    auto* master = AppController::GetInstance().GetMaster();
+    if (!master || !master->IsInitialized()) return;
+
+    uint8_t last = 0;
+    if (!master->GetPdo60FDLowByte(last)) return;
+
+    int prev = this->lastPdo60FDLastByte.load();
+    if ((int)last == prev) return;  // no change
+
+    const auto snapshot = GetSystemStateSnapshot();
+    const auto autoConnectDecision = CoreHelpers::EvaluateAutoConnect(snapshot);
+    const auto downToOriginDecision = CoreHelpers::EvaluateAutoDownToOrigin(snapshot);
+    auto logRejectedExternalAutoAction = [this](const char* actionName,
+                            const CoreHelpers::CommandPolicyDecision& decision) {
+        PostUTF8LogToUI(std::string("[AUTO-PDO] ") + actionName +
+                " ignored: " +
+                CoreHelpers::DescribeCommandPolicyRejection(decision.rejection) +
+                "\n");
+    };
+
+    int newb6 = (last & 0x40) ? 1 : 0;
+    int prevb6 = (prev & 0x40) ? 1 : 0;
+    if (prev != -1 && newb6 == 1 && prevb6 == 0) {
+        HWND hRequester = (this->hAutoWindow && IsWindow(this->hAutoWindow)) ? this->hAutoWindow : NULL;
+        PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit6 asserted -> requesting Fault Reset via MainWindow auto flow\n"));
+        AppController::GetInstance().RequestAutoFaultReset(reinterpret_cast<uintptr_t>(hRequester));
+    }
+
+    int newb5 = (last & 0x20) ? 1 : 0;
+    int prevb5 = (prev & 0x20) ? 1 : 0;
+    if (prev != -1 && newb5 == 1 && prevb5 == 0) {
+        if (!this->immediateStopBusy.load() && !this->suppressAutoStopDuringStartup_.load()) {
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit5 asserted -> auto-triggering immediate stop\n"));
+            PostMessageW(this->GetHwnd(), WM_USER_AUTO_IMMEDIATE_STOP_REQUEST, (WPARAM)0, 0);
+        } else if (this->suppressAutoStopDuringStartup_.load()) {
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit5 asserted but suppressed during auto-startup window\n"));
+        } else {
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit5 asserted but immediate stop already busy\n"));
+        }
+    }
+
+    int newb0 = (last & 0x01) ? 1 : 0;
+    int prevb0 = (prev & 0x01) ? 1 : 0;
+    if (externalEstopEnabled_.load()) {
+        if (newb0 == 0 && !this->errorSoundPlaying_.load()) {
+            if (!this->softStartSoundPlaying_.load() && !this->violationSoundPlaying_.load()) {
+                try { PlaySound(TEXT("SystemAsterisk"), NULL, SND_ALIAS | SND_ASYNC | SND_LOOP); } catch(...) {}
+            }
+            this->errorSoundPlaying_.store(true);
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0=0 (E-Stop pressed) -> emergency alert sound ON\n"));
+        }
+
+        if ((prev == -1 && newb0 == 0) || (prev != -1 && prevb0 == 1 && newb0 == 0)) {
+            if (!this->immediateStopBusy.load() && !this->suppressAutoStopDuringStartup_.load()) {
+                if (prev == -1) {
+                    PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0 active (0) at init -> auto-triggering emergency stop\n"));
+                } else {
+                    PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0 active (0) -> auto-triggering emergency stop\n"));
+                }
+                PostMessageW(this->GetHwnd(), WM_USER_AUTO_EMERGENCY_STOP_REQUEST, (WPARAM)0, 0);
+            } else if (this->suppressAutoStopDuringStartup_.load()) {
+                PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0 active but suppressed during auto-startup window\n"));
+            } else {
+                PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0 active but immediate/emergency stop already busy\n"));
+            }
+        }
+        if (prev != -1 && prevb0 == 0 && newb0 == 1) {
+            if (this->errorSoundPlaying_.load()) {
+                this->errorSoundPlaying_.store(false);
+                StopSystemAlertSoundIfIdle();
+                PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit0 released -> stopping emergency alert sound\n"));
+            }
+        }
+    }
+
+    int newb3 = (last & 0x08) ? 1 : 0;
+    int prevb3 = (prev & 0x08) ? 1 : 0;
+    if (prev != -1 && newb3 == 1 && prevb3 == 0) {
+        if (downToOriginDecision.allowed) {
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit3 asserted -> requesting DownToOrigin via MainWindow auto flow\n"));
+            AppController::GetInstance().RequestAutoDownToOrigin(0);
+        } else {
+            logRejectedExternalAutoAction("0x60FD bit3 DownToOrigin request", downToOriginDecision);
+        }
+    }
+
+    int newb1 = (last & 0x02) ? 1 : 0;
+    int prevb1 = (prev & 0x02) ? 1 : 0;
+    if (prev != -1 && newb1 == 1 && prevb1 == 0) {
+        if (autoConnectDecision.allowed) {
+            PostUTF8LogToUI(std::string("[AUTO-PDO] 0x60FD bit1 asserted -> requesting Connect/Run via MainWindow auto flow\n"));
+            AppController::GetInstance().RequestAutoConnect();
+        } else {
+            logRejectedExternalAutoAction("0x60FD bit1 Connect/Run request", autoConnectDecision);
+        }
+    }
+
+    this->lastPdo60FDLastByte.store((int)last);
 }
 
 // -----------------------------------------------------------------------------

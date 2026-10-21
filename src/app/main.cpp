@@ -3,7 +3,8 @@
 
 #include "MainWindow.h"
 #include "EtherCATMaster.h"
-// #include "core/CpuIsolation.h" - removed
+#include "../include/core/CpuIsolation.h"
+#include "../include/core/CpuTopology.h"
 #include <windows.h>
 #include <thread>
 #include "SafeMem.h"
@@ -11,6 +12,7 @@
 #include "HttpServer.h"
 #include "AppController.h"
 #include "core/AppConfig.h"
+#include "core/ShutdownGuard.h"
 // Core helpers (Utf8/Wide conversion used to launch browser URL)
 #include "../include/core/CoreHelpers.h"
 
@@ -210,6 +212,173 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     EtherCATMaster::SetPhysicalEthercatAllowed(physicalEthercatAllowed, physicalEthercatRestrictionReason);
 
     // ========================================================================
+    // 系統電源策略優化：啟用卓越性能、禁用核心休眠、USB 暫停、硬碟關閉
+    // ========================================================================
+    {
+        std::string powerLog;
+        CoreHelpers::ApplyRealtimePowerPolicy(powerLog);
+        if (!powerLog.empty()) {
+            OutputDebugStringA(powerLog.c_str());
+        }
+    }
+
+    // ========================================================================
+    // CPU 核心硬隔離：偵測 CPU 拓撲，將 RT 實體核心全部邏輯核心保留給 SOEM
+    // 自動偵測可用核心數，從最高實體核心向下嘗試，排除 Core 0（保留給 OS）。
+    // 可透過 INI [EtherCAT] RtCoreIndex=N 指定特定實體核心（優先於自動偵測）。
+    // ========================================================================
+    bool hardIsolationOk = false;
+    std::string hardIsolationLog;
+    int settledRtCore = -1;
+    DWORD detectedPhysCores = 0;  // saved for status report outside this block
+    {
+        // Build a dynamic candidate list: highest physical core first, skip core 0.
+        // Uses CpuTopology (shared topology cache) instead of raw API calls.
+        CoreHelpers::CpuTopology::EnsurePopulated();
+        int physCores = CoreHelpers::CpuTopology::PhysicalCoreCount();
+        detectedPhysCores = static_cast<DWORD>(physCores);
+
+        // Fallback if CpuTopology returned 0 (shouldn't happen on real hardware)
+        if (physCores == 0) {
+            DWORD logical = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+            physCores = (logical >= 8) ? static_cast<int>(logical / 2) : static_cast<int>(logical);
+            detectedPhysCores = static_cast<DWORD>(physCores);
+        }
+
+        // ── INI override: [EtherCAT] RtCoreIndex=N ──
+        int iniRtCore = -1;
+        {
+            wchar_t iniPath[MAX_PATH] = {0};
+            if (GetModuleFileNameW(NULL, iniPath, MAX_PATH) != 0) {
+                std::wstring iniPathStr = iniPath;
+                wchar_t *dot = wcsrchr(&iniPathStr[0], L'.');
+                wchar_t *slash = wcsrchr(&iniPathStr[0], L'\\');
+                if (dot && (!slash || dot > slash)) *dot = L'\0';
+                iniPathStr += L".ini";
+                iniRtCore = GetPrivateProfileIntW(L"EtherCAT", L"RtCoreIndex", -1, iniPathStr.c_str());
+            }
+        }
+
+        std::vector<int> candidates;
+        if (iniRtCore >= 0) {
+            // User-specified RT core: try it first, then fall back to auto
+            candidates.push_back(iniRtCore);
+            printf("[CpuIsolation] INI override: [EtherCAT] RtCoreIndex=%d\n", iniRtCore);
+        }
+        // Build candidate list: from (physCores-1) down to 1 (skip core 0)
+        for (int c = physCores - 1; c >= 1; --c) {
+            if (c != iniRtCore) candidates.push_back(c);
+        }
+        // Always include core 0 as last resort
+        if (physCores >= 1) candidates.push_back(0);
+
+        // Log topology summary for diagnostics
+        std::string topoDump = CoreHelpers::CpuTopology::DumpTable();
+        OutputDebugStringA(topoDump.c_str());
+
+        printf("[CpuIsolation] System has %d physical cores"
+               " (%d logical processors); RT candidates: ",
+               physCores, CoreHelpers::CpuTopology::LogicalProcessorCount());
+        for (size_t i = 0; i < candidates.size() && i < 8; ++i) {
+            printf("%d%s", candidates[i], (i + 1 < candidates.size()) ? ", " : "");
+        }
+        printf("\n");
+
+        for (int candidate : candidates) {
+            std::string attemptLog;
+            hardIsolationOk = CoreHelpers::CpuIsolation::InitializeHardIsolation(candidate, attemptLog);
+            if (!attemptLog.empty()) {
+                hardIsolationLog += attemptLog;
+                OutputDebugStringA(attemptLog.c_str());
+            }
+            if (hardIsolationOk) {
+                settledRtCore = candidate;
+                // Show logical CPU (Task Manager numbering) from topology
+                CoreHelpers::CpuTopology::EnsurePopulated();
+                const auto* ci = CoreHelpers::CpuTopology::FindCoreByPhysIdx(candidate);
+                int primaryLp = (ci && !ci->lps.empty()) ? ci->lps[0] : candidate;
+                printf("[CpuIsolation] RT core settled on CPU %d (physical core %d)\n",
+                       primaryLp, candidate);
+                break;
+            }
+            printf("[CpuIsolation] Physical core %d unavailable, trying next candidate...\n", candidate);
+        }
+
+        // Immediately repel foreign processes from the RT core once at startup,
+        // before the periodic monitor begins. This closes the gap between init
+        // and the first monitor cycle.
+        if (hardIsolationOk) {
+            CoreHelpers::CpuIsolation::RepelOnce();
+        }
+    }
+
+    // ========================================================================
+    // 處理器閒置停用 (PROCESSOR_IDLE_DISABLE)
+    // 防止 RT 核心進入 C-State 省電狀態，消除喚醒延遲對 PDO 週期的影響。
+    // 對 RT 實體核心的所有邏輯處理器寫入 PROCESSOR_IDLE_DISABLE=1。
+    // 需要重新啟動電腦才能完全生效。
+    // ========================================================================
+    {
+        std::string idleLog;
+        CoreHelpers::SetProcessorIdleDisableForRtCore(idleLog);
+        if (!idleLog.empty()) {
+            OutputDebugStringA(idleLog.c_str());
+            printf("%s\n", idleLog.c_str());
+        }
+    }
+
+    // ========================================================================
+    // USB IRQ 重導向：將 USB 主控器中斷導離 RT 核心
+    // 在啟動階段寫入 registry IRQ affinity，避免 USB ISR/DPC 搶佔 PDO 週期。
+    // ========================================================================
+    {
+        std::string usbIrqLog;
+        CoreHelpers::RedirectUsbIrqAffinityFromRtCore(usbIrqLog);
+        if (!usbIrqLog.empty()) {
+            OutputDebugStringA(usbIrqLog.c_str());
+            printf("%s\n", usbIrqLog.c_str());
+        }
+    }
+
+    // ========================================================================
+    // NIC IRQ 重導向：將非 EtherCAT 網卡中斷導離 RT 核心
+    // ========================================================================
+    {
+        std::string nicIrqLog;
+        CoreHelpers::RedirectNicIrqFromRtCore(nicIrqLog);
+        if (!nicIrqLog.empty()) {
+            OutputDebugStringA(nicIrqLog.c_str());
+            printf("%s\n", nicIrqLog.c_str());
+        }
+    }
+
+    // ========================================================================
+    // USB 中斷頻率降低：xHCI 控制器 IMOD 設為 500 Hz (2 ms)
+    // 降低 USB 中斷產生速率，減少 ISR/DPC 對 PDO 週期的干擾。
+    // ========================================================================
+    {
+        std::string usb500Log;
+        CoreHelpers::SetUsbInterruptRate500Hz(usb500Log);
+        if (!usb500Log.empty()) {
+            OutputDebugStringA(usb500Log.c_str());
+            printf("%s\n", usb500Log.c_str());
+        }
+    }
+
+    // ========================================================================
+    // HID Polling Rate 降低：USB HID 裝置輪詢間隔設為 125 Hz (8 ms)
+    // 降低搖桿、滑鼠、TrackIR 等 HID 裝置的 USB 中斷傳輸輪詢頻率。
+    // ========================================================================
+    {
+        std::string hidPollLog;
+        CoreHelpers::SetHidPollingRate(hidPollLog);
+        if (!hidPollLog.empty()) {
+            OutputDebugStringA(hidPollLog.c_str());
+            printf("%s\n", hidPollLog.c_str());
+        }
+    }
+
+    // ========================================================================
     // CPU 核心隔離初始化
     // ========================================================================
     // 新版實作已移至 MainWindow::Create() 中呼叫 CoreHelpers::CpuIsolation::StartIsolationMonitor()
@@ -394,12 +563,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // first enumerated adapter so that the real connection (later in the
     // UI flow) experiences a "warmed" driver.
     if (EtherCATMaster::IsPhysicalEthercatAllowed()) {
-        std::string err;
-        std::vector<CoreHelpers::AdapterEntry> adapters = CoreHelpers::EnumerateAdapters(err);
-        if (!adapters.empty()) {
-            const std::string &firstIf = adapters[0].pcapName;
-            // ignore result; failure is non‑fatal
-            EtherCATMaster::PreloadInterface(firstIf.c_str());
+        try {
+            std::string err;
+            std::vector<CoreHelpers::AdapterEntry> adapters = CoreHelpers::EnumerateAdapters(err);
+            if (!adapters.empty()) {
+                const std::string &firstIf = adapters[0].pcapName;
+                // ignore result; failure is non‑fatal
+                EtherCATMaster::PreloadInterface(firstIf.c_str());
+            }
+        } catch (...) {
+            // Network preload failure is non-fatal; continue startup
+            OutputDebugStringA("[Startup] Network preload failed (non-fatal)\n");
         }
     }
 
@@ -408,6 +582,52 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     bool httpEnabledOnStart = AppConfig::ReadBool(L"Server", L"EnableLocalHttpServer", false);
     bool showMainOnStart = AppConfig::ReadBool(L"Startup", L"ShowMainWindow", false);
     bool autoTrigger = AppConfig::ReadBool(L"Startup", L"AutoTrigger", true);
+    const bool forceWin10Mode = AppConfig::ReadForceWin10Compat();
+
+    // Set the configured cyclic operation mode (CSP/CSV) on the master before connect.
+    etherCATMaster.SetCyclicOperationMode(AppConfig::ReadCyclicOperationMode());
+
+    // ========================================================================
+    // Windows Defender 排除路徑自動設定
+    // 將 BigCat.exe 所在目錄加入 Defender 白名單，減少 MsMpEng.exe DPC 干擾。
+    // ========================================================================
+    {
+        std::string defenderLog;
+        CoreHelpers::AddDefenderExclusionForSelf(defenderLog);
+        if (!defenderLog.empty()) {
+            OutputDebugStringA(defenderLog.c_str());
+            printf("%s\n", defenderLog.c_str());
+        }
+    }
+
+    // ========================================================================
+    // 關機 / 重新啟動防護：程式執行期間封鎖 Windows 關機、重新啟動與閒置睡眠
+    // 由 BigCat.ini [Safety] 控制：
+    //   BlockSystemShutdown=1（預設）      → 主視窗 WM_QUERYENDSESSION 回 FALSE，
+    //                                        系統取消關機/重新啟動/登出
+    //   KeepSystemAwake=1（預設）          → 防止系統閒置睡眠（螢幕仍可關閉）
+    //   BlockWindowsUpdateAutoReboot=0     → Windows Update 不因更新自動重新啟動
+    //                                        （需管理員權限，預設關閉）
+    // 註：使用者仍可在系統「正在封鎖關機」畫面選擇強制關機；critical shutdown
+    //     （ENDSESSION_CRITICAL）依 Windows 設計無法封鎖。
+    // ========================================================================
+    {
+        const bool blockShutdown = AppConfig::ReadBool(L"Safety", L"BlockSystemShutdown", true);
+        const bool keepSystemAwake = AppConfig::ReadBool(L"Safety", L"KeepSystemAwake", true);
+        const bool blockWuAutoReboot = AppConfig::ReadBool(L"Safety", L"BlockWindowsUpdateAutoReboot", false);
+
+        // 總開關須在視窗建立（MainWindow::Create → ShutdownGuard::Install）之前設定。
+        CoreHelpers::ShutdownGuard::SetEnabled(blockShutdown);
+        // 綁定主執行緒（訊息迴圈執行緒），程式結束即自動失效。
+        CoreHelpers::ShutdownGuard::SetKeepSystemAwake(keepSystemAwake);
+
+        std::string guardLog;
+        CoreHelpers::ShutdownGuard::ApplyUpdateNoAutoRebootPolicy(blockWuAutoReboot, guardLog);
+        if (!guardLog.empty()) {
+            OutputDebugStringA((guardLog + "\n").c_str());
+            printf("%s\n", guardLog.c_str());
+        }
+    }
 
     // 建立視窗
     MainWindow window;
@@ -426,6 +646,24 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     AppController::GetInstance().Initialize(&etherCATMaster, &window);
 
     window.PrependStatus(L"[Startup] 程式啟動流程開始\r\n");
+    {
+        // Report whether the process is running elevated (Administrator).
+        // Administrator is required for SetProcessAffinityMask on foreign
+        // processes and for IRQ/registry-based optimizations.
+        bool isAdmin = false;
+        HANDLE hToken = NULL;
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken)) {
+            TOKEN_ELEVATION elevation = {0};
+            DWORD size = sizeof(elevation);
+            if (GetTokenInformation(hToken, TokenElevation, &elevation, size, &size)) {
+                isAdmin = (elevation.TokenIsElevated != 0);
+            }
+            CloseHandle(hToken);
+        }
+        window.PrependStatus(isAdmin
+            ? L"[Startup] 權限等級：Administrator（可對外部 process 設定 CPU affinity / IRQ 優化）\r\n"
+            : L"[Startup] 權限等級：一般使用者（⚠ 無法驅離外部 process 的 CPU affinity，部分優化將跳過）\r\n");
+    }
     window.PrependStatus(httpEnabledOnStart
         ? L"[Startup] 已啟用 Web 伺服器，程式啟動時允許 HTTP server 啟動\r\n"
         : L"[Startup] 未啟用 Web 伺服器，程式啟動時略過 HTTP server\r\n");
@@ -435,6 +673,94 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     window.PrependStatus(autoTrigger
         ? L"[Startup] 自動啟動序列：已啟用\r\n"
         : L"[Startup] 自動啟動序列：未啟用\r\n");
+    window.PrependStatus(forceWin10Mode
+        ? L"[Compat] 強制使用 Windows 10 執行方式：已啟用（[Compat] ForceWin10Mode=1；週期等待改用 Win10 策略）\r\n"
+        : L"[Compat] 強制使用 Windows 10 執行方式：停用（[Compat] ForceWin10Mode=0；依作業系統自動判斷）\r\n");
+
+    // ── CPU 隔離狀態報告 ──
+    {
+        if (hardIsolationOk) {
+            DWORD_PTR threadMask = CoreHelpers::CpuIsolation::GetRtThreadMask();
+            DWORD_PTR coreMask  = CoreHelpers::CpuIsolation::GetRtCoreMask();
+            int physicalCore = CoreHelpers::CpuIsolation::GetRtPhysicalCoreIndex();
+
+            // Resolve logical CPU (Task Manager numbering) from topology
+            CoreHelpers::CpuTopology::EnsurePopulated();
+            const auto* ci = CoreHelpers::CpuTopology::FindCoreByPhysIdx(physicalCore);
+            int primaryLp = (ci && !ci->lps.empty()) ? ci->lps[0] : physicalCore;
+
+            wchar_t buf[256] = {0};
+            swprintf_s(buf, L"[CPU隔離] ✓ 硬隔離已啟用 — CPU %d (實體核心 #%d), 遮罩 0x%llX, 僅綁定 0x%llX",
+                       primaryLp, physicalCore,
+                       static_cast<unsigned long long>(coreMask),
+                       static_cast<unsigned long long>(threadMask));
+            if (ci && ci->lps.size() >= 2) {
+                wcscat_s(buf, L", SMT sibling 閒置");
+            }
+            wcscat_s(buf, L"\r\n");
+            window.PrependStatus(buf);
+
+            // ── Verify: check if any foreign process still overlaps RT core ──
+            {
+                std::string verifyLog = CoreHelpers::CpuIsolation::VerifyRtCoreIsolation();
+                // Convert to wide lines and prepend to status
+                std::istringstream vstream(verifyLog);
+                std::string vline;
+                bool first = true;
+                while (std::getline(vstream, vline)) {
+                    if (vline.empty()) continue;
+                    std::wstring wline = Utf8ToWide(vline);
+                    std::wstring statusLine;
+                    if (first) {
+                        statusLine = L"\r\n";  // blank separator line
+                        first = false;
+                    }
+                    statusLine += wline + L"\r\n";
+                    window.PrependStatus(statusLine.c_str());
+                }
+            }
+
+            // ── Diagnose: per-core DPC/IRQ counters + full topology proof ──
+            {
+                std::string diagLog = CoreHelpers::CpuIsolation::DiagnoseRtCoreState();
+                std::istringstream dstream(diagLog);
+                std::string dline;
+                while (std::getline(dstream, dline)) {
+                    if (dline.empty()) continue;
+                    std::wstring wline = Utf8ToWide(dline);
+                    window.PrependStatus((wline + L"\r\n").c_str());
+                }
+            }
+        } else {
+            DWORD activeCount = GetActiveProcessorCount(ALL_PROCESSOR_GROUPS);
+            wchar_t buf[256] = {0};
+            if (detectedPhysCores > 0) {
+                swprintf_s(buf, L"[CPU隔離] ⚠ 硬隔離未啟用 — 偵測到 %lu 個實體核心，嘗試從 #%lu 往下皆失敗（系統可見 %lu 個邏輯處理器）\r\n",
+                           detectedPhysCores,
+                           static_cast<unsigned long>(detectedPhysCores > 0 ? detectedPhysCores - 1 : 0),
+                           activeCount);
+            } else {
+                swprintf_s(buf, L"[CPU隔離] ⚠ 硬隔離未啟用 — 無法偵測 CPU 拓撲（系統可見 %lu 個邏輯處理器）\r\n", activeCount);
+            }
+            window.PrependStatus(buf);
+            window.PrependStatus(L"[CPU隔離]    可能原因: bcdedit numproc 限制 / Hyper-V 核心分割 / CPU 核心數不足\r\n");
+            window.PrependStatus(L"[CPU隔離]    檢查命令: bcdedit /deletevalue numproc ; 或以系統管理員執行\r\n");
+
+            // Include the detailed diagnostic log from InitializeHardIsolation
+            if (!hardIsolationLog.empty()) {
+                window.PrependStatus(L"[CPU隔離]    詳細診斷如下:\r\n");
+                // Convert multi-line ASCII log to individual status lines
+                std::istringstream logStream(hardIsolationLog);
+                std::string line;
+                while (std::getline(logStream, line)) {
+                    if (line.empty()) continue;
+                    std::wstring wline = Utf8ToWide(line);
+                    std::wstring statusLine = L"[CPU隔離]      " + wline + L"\r\n";
+                    window.PrependStatus(statusLine.c_str());
+                }
+            }
+        }
+    }
 
     if (showMainOnStart) {
         window.Show(nCmdShow);
@@ -445,25 +771,30 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         // Directly minimize to tray using the public method
         window.MinimizeToTray();
         window.PrependStatus(L"[Startup] 已最小化到系統匣\r\n");
+    }
 
-        // 程式啟動時根據 INI 決定是否自動執行連接與自動程序。
-        // Do not block startup waiting for the HTTP server: the browser is no longer
-        // auto-opened here, and delaying AutoStartup by the HTTP readiness poll adds
-        // several seconds of dead time before connection begins.
-        if (autoTrigger) {
-            window.PrependStatus(L"[Startup] 觸發自動啟動序列\r\n");
-            window.TriggerAutoStartupSequence(httpEnabledOnStart);
-        }
+    // 程式啟動時根據 INI 決定是否自動執行連接與自動程序。
+    // Do not block startup waiting for the HTTP server: the browser is no longer
+    // auto-opened here, and delaying AutoStartup by the HTTP readiness poll adds
+    // several seconds of dead time before connection begins.
+    if (autoTrigger) {
+        window.PrependStatus(L"[Startup] 觸發自動啟動序列\r\n");
+        window.TriggerAutoStartupSequence(httpEnabledOnStart);
     }
 
     // -----------------------------
     // 授權計時器：如果授權失敗，啟動背景執行緒在10分鐘後再次警告並停用 MMF 輸入和所有 UI
     // -----------------------------
+    std::atomic<bool> licenseTimerStop{false};
     std::thread* licenseTimerThread = nullptr;
     if (!licenseValid) {
-        licenseTimerThread = new std::thread([&etherCATMaster, &window]() {
-            // 等待 10 分鐘
-            Sleep(600000);
+        licenseTimerThread = new std::thread([&etherCATMaster, &window, &licenseTimerStop]() {
+            // 等待 10 分鐘，每秒檢查停止旗標以支援快速退出
+            for (int i = 0; i < 600; ++i) {
+                if (licenseTimerStop.load()) return;
+                Sleep(1000);
+            }
+            if (licenseTimerStop.load()) return;
             
             // 停用 MMF 輸入訊號
             etherCATMaster.StopMMF1In();
@@ -579,7 +910,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     
     // 清理授權計時器執行緒（如果存在）
     if (licenseTimerThread) {
-        // 注意：執行緒可能正在等待或已完成，直接等待其結束
+        // 設定停止旗標喚醒執行緒，避免 Sleep(600000) 阻塞 join
+        licenseTimerStop.store(true);
         if (licenseTimerThread->joinable()) {
             licenseTimerThread->join();
         }
@@ -590,5 +922,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     // 清理 Mutex: release ownership then close handle
     ReleaseMutex(hMutex);
     CloseHandle(hMutex);
-    return ret;
+    
+    // 確保 process 完全退出，避免 detached threads 或 pending cleanup 阻擋
+    ExitProcess(static_cast<UINT>(ret));
 }

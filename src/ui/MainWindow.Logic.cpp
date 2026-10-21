@@ -217,7 +217,7 @@ static std::string AddSimulationPrefixToStatusText(const std::string& text)
 static std::wstring GetAppIniPath()
 {
     wchar_t buf[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\WuBigCat.ini");
+    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\BigCat.ini");
     // strip extension
     wchar_t *p = wcsrchr(buf, L'\\');
     wchar_t *dot = wcsrchr(buf, L'.');
@@ -516,142 +516,133 @@ void MainWindow::UpdateSlaveList() {
                 }
             }
             
-            // Build PDO items dynamically from parsed ESI `currentPdos` and
-            // only show/rebuild the PDO area after successful connection.
+            // Build PDO items dynamically from driver SDO reads (0x1C12/0x1C13).
+            // Always use the driver's actual PDO mapping order, not ESI file order.
+            // ESI data is used only for metadata enrichment (names, types, access).
             if (isMasterInitialized) {
-                // If no ESI was loaded by the user, attempt to request the ESI
-                // from the slave via master->DumpESI and parse it. This allows
-                // dynamic population of PDOs immediately after connect.
-                if (currentPdos.empty()) {
-                    if (master) {
-                        // Attempt to discover PDOs directly via SDOs when no ESI is loaded.
-                        // Read RxPDO assignment (0x1C12) and TxPDO assignment (0x1C13)
-                        currentPdos.clear();
-                        // Helper lambda to read assignment and mappings
-                        auto readPdoAssignment = [&](uint16_t assignIndex, const char* pdoTypePrefix) {
-                            // read number of PDOs assigned (subindex 0)
-                                    uint8_t countBuf = 0;
-                                    int countBufLen = (int)sizeof(countBuf);
-                                    if (!master->ReadSDO(confirmedSlave, assignIndex, 0x00, (char*)&countBuf, countBufLen)) return;
-                                    int count = (int)countBuf;
-                            for (int p = 1; p <= count; ++p) {
-                                uint32_t pdoIdx = 0;
-                                int readSz = (int)sizeof(pdoIdx);
-                                if (!master->ReadSDO(confirmedSlave, assignIndex, (uint8_t)p, (char*)&pdoIdx, readSz)) continue;
-                                // pdoIdx may be little-endian on wire; ensure host order
-                                // Interpret as little-endian 32-bit
-                                // On little-endian hosts this is a no-op
-                                // Extract index (low 16 bits)
-                                uint16_t pdoIndex = (uint16_t)(pdoIdx & 0xFFFF);
+                std::vector<EsiPdoEntry> sdoPdos; // PDOs read from driver via SDO (driver order)
 
-                                // Build a Pdo entry by reading its mapping count and entries
-                                EsiPdoEntry pdoe;
-                                pdoe.pdoType = std::string(pdoTypePrefix);
-                                // create a simple name from index
-                                {
-                                    char buf[32]; sprintf_s(buf, sizeof(buf), "%s_0x%04X", pdoTypePrefix, pdoIndex);
-                                    pdoe.name = std::string(buf);
-                                }
+                if (master) {
+                    // Read PDO mapping from driver via SDO to get correct entry order
+                    auto readPdoAssignment = [&](uint16_t assignIndex, const char* pdoTypePrefix) {
+                        uint8_t countBuf = 0;
+                        int countBufLen = (int)sizeof(countBuf);
+                        if (!master->ReadSDO(confirmedSlave, assignIndex, 0x00, (char*)&countBuf, countBufLen)) return;
+                        int count = (int)countBuf;
+                        for (int p = 1; p <= count; ++p) {
+                            uint32_t pdoIdx = 0;
+                            int readSz = (int)sizeof(pdoIdx);
+                            if (!master->ReadSDO(confirmedSlave, assignIndex, (uint8_t)p, (char*)&pdoIdx, readSz)) continue;
+                            uint16_t pdoIndex = (uint16_t)(pdoIdx & 0xFFFF);
 
-                                // read mapping count at subindex 0 of the PDO index
-                                uint8_t mapCount = 0;
-                                int mapCountLen = (int)sizeof(mapCount);
-                                if (!master->ReadSDO(confirmedSlave, pdoIndex, 0x00, (char*)&mapCount, mapCountLen)) {
-                                    // fallback: try reading as 16-bit count
-                                    uint16_t mapCount16 = 0;
-                                    int mapCount16Len = (int)sizeof(mapCount16);
-                                    if (master->ReadSDO(confirmedSlave, pdoIndex, 0x00, (char*)&mapCount16, mapCount16Len)) mapCount = (uint8_t)mapCount16;
-                                }
-
-                                for (int me = 1; me <= (int)mapCount; ++me) {
-                                    uint32_t mapping = 0;
-                                    int mappingLen = (int)sizeof(mapping);
-                                    if (!master->ReadSDO(confirmedSlave, pdoIndex, (uint8_t)me, (char*)&mapping, mappingLen)) continue;
-                                    // mapping format: 0xIIIISSBB where IIII=index, SS=subindex, BB=bitlength
-                                    uint16_t objIdx = (uint16_t)((mapping >> 16) & 0xFFFF);
-                                    uint8_t objSub = (uint8_t)((mapping >> 8) & 0xFF);
-                                    uint8_t bitlen = (uint8_t)(mapping & 0xFF);
-                                    EsiObjectEntry oe;
-                                    oe.index = objIdx;
-                                    oe.subindex = objSub;
-                                    oe.bitlen = bitlen;
-                                    // name unknown without ESI; leave empty
-                                    oe.name = "";
-                                    pdoe.entries.push_back(oe);
-                                }
-
-                                currentPdos.push_back(pdoe);
+                            EsiPdoEntry pdoe;
+                            pdoe.pdoType = std::string(pdoTypePrefix);
+                            {
+                                char buf[32]; sprintf_s(buf, sizeof(buf), "%s_0x%04X", pdoTypePrefix, pdoIndex);
+                                pdoe.name = std::string(buf);
                             }
-                        };
 
-                        // Read RxPDOs (master->slave outputs)
-                        readPdoAssignment(0x1C12, "RxPdo");
-                        // Read TxPDOs (slave->master inputs)
-                        readPdoAssignment(0x1C13, "TxPdo");
-
-                        // If still empty, fall back to DumpESI attempt (legacy behaviour)
-                        if (currentPdos.empty()) {
-                            std::string dump;
-                            if (master->DumpESI(confirmedSlave, dump)) {
-                                // DumpESI prints EEPROM/ESI hex dump, not XML. Keep for diagnostics only.
-                                std::wstring w = CoreHelpers::Utf8ToWide(dump);
-                                PrependStatus(w.c_str());
+                            uint8_t mapCount = 0;
+                            int mapCountLen = (int)sizeof(mapCount);
+                            if (!master->ReadSDO(confirmedSlave, pdoIndex, 0x00, (char*)&mapCount, mapCountLen)) {
+                                uint16_t mapCount16 = 0;
+                                int mapCount16Len = (int)sizeof(mapCount16);
+                                if (master->ReadSDO(confirmedSlave, pdoIndex, 0x00, (char*)&mapCount16, mapCount16Len)) mapCount = (uint8_t)mapCount16;
                             }
+
+                            for (int me = 1; me <= (int)mapCount; ++me) {
+                                uint32_t mapping = 0;
+                                int mappingLen = (int)sizeof(mapping);
+                                if (!master->ReadSDO(confirmedSlave, pdoIndex, (uint8_t)me, (char*)&mapping, mappingLen)) continue;
+                                uint16_t objIdx = (uint16_t)((mapping >> 16) & 0xFFFF);
+                                uint8_t objSub = (uint8_t)((mapping >> 8) & 0xFF);
+                                uint8_t bitlen = (uint8_t)(mapping & 0xFF);
+                                EsiObjectEntry oe;
+                                oe.index = objIdx;
+                                oe.subindex = objSub;
+                                oe.bitlen = bitlen;
+                                oe.name = "";
+                                pdoe.entries.push_back(oe);
+                            }
+
+                            sdoPdos.push_back(pdoe);
                         }
+                    };
+
+                    // RxPDOs (master→slave outputs) first, then TxPDOs (slave→master inputs)
+                    readPdoAssignment(0x1C12, "RxPdo");
+                    readPdoAssignment(0x1C13, "TxPdo");
+                }
+
+                // Fall back to ESI-parsed PDOs only if SDO reads failed entirely
+                if (sdoPdos.empty() && !currentPdos.empty()) {
+                    sdoPdos = currentPdos;
+                }
+
+                // Build ESI metadata lookup: key = (index<<16)|subindex → EsiObjectEntry*
+                std::unordered_map<uint64_t, const EsiObjectEntry*> esiLookup;
+                // From ESI PDO entries (highest priority for PDO-specific metadata)
+                for (const auto& p : currentPdos) {
+                    for (const auto& e : p.entries) {
+                        uint64_t key = ((uint64_t)e.index << 16) | e.subindex;
+                        if (esiLookup.find(key) == esiLookup.end()) esiLookup[key] = &e;
                     }
                 }
-                // Clear any previous items
+                // From ESI object dictionary (fallback)
+                for (const auto& o : currentObjects) {
+                    uint64_t key = ((uint64_t)o.index << 16) | o.subindex;
+                    if (esiLookup.find(key) == esiLookup.end()) esiLookup[key] = &o;
+                }
+
+                // Clear any previous items and build in driver (SDO) order
                 pdoDisplay.Clear();
-                // Populate pdoDisplay.pdoItems from currentPdos (ESI parsed)
-                for (const auto &p : currentPdos) {
-                    for (const auto &e : p.entries) {
+                for (const auto& p : sdoPdos) {
+                    for (const auto& e : p.entries) {
                         PDOItem itm;
-                                // Determine item name: prefer ESI-provided name; if absent try currentObjects lookup; otherwise use address
-                                std::wstring name;
-                                if (!e.name.empty()) {
-                                    name = std::wstring(e.name.begin(), e.name.end());
-                                } else {
-                                    // try to find matching object entry parsed earlier
-                                    for (const auto &o : currentObjects) {
-                                        if (o.index == (uint16_t)e.index && o.subindex == (uint8_t)e.subindex) {
-                                            name = std::wstring(o.name.begin(), o.name.end());
-                                            break;
-                                        }
-                                    }
-                                }
-                                itm.name = name; // may be empty for now
-                                itm.index = (uint16_t)e.index;
-                                itm.subindex = (uint8_t)e.subindex;
+                        itm.index = (uint16_t)e.index;
+                        itm.subindex = (uint8_t)e.subindex;
                         itm.bitLength = (uint8_t)e.bitlen;
-                        itm.isOutput = (p.pdoType.find("Rx") != std::string::npos); // RxPDO -> outputs
-                        // editable if access contains 'w' (rw or wo)
-                        std::string acc = e.accessNormalized.empty() ? e.access : e.accessNormalized;
-                        for (auto &c : acc) c = (char)tolower((unsigned char)c);
-                        itm.isEditable = (acc.find('w') != std::string::npos);
-                        // Additionally, allow outputs (RxPDO) to be editable so user can write outputs
+                        itm.isOutput = (p.pdoType.find("Rx") != std::string::npos);
+
+                        // Enrich with ESI metadata if available
+                        uint64_t key = ((uint64_t)e.index << 16) | e.subindex;
+                        auto esiIt = esiLookup.find(key);
+                        if (esiIt != esiLookup.end()) {
+                            const EsiObjectEntry* esi = esiIt->second;
+                            if (!esi->name.empty())
+                                itm.name = std::wstring(esi->name.begin(), esi->name.end());
+                            itm.dataType = std::wstring(esi->dataType.begin(), esi->dataType.end());
+                            std::string acc = esi->accessNormalized.empty() ? esi->access : esi->accessNormalized;
+                            for (auto& c : acc) c = (char)tolower((unsigned char)c);
+                            itm.isEditable = (acc.find('w') != std::string::npos);
+                            itm.description = std::wstring(esi->description.begin(), esi->description.end());
+                        }
                         if (itm.isOutput) itm.isEditable = true;
-                        itm.byteOffset = 0; // will be set by RecalculateOffsetsFromSDO
+
+                        itm.byteOffset = 0;
                         itm.currentValue = L"";
                         itm.displayValue = L"";
                         itm.hLabel = itm.hValue = itm.hEdit = itm.hButton = NULL;
-                        itm.dataType = std::wstring(e.dataType.begin(), e.dataType.end());
                         itm.unit = L""; itm.minValue = L""; itm.maxValue = L""; itm.defaultValue = L"";
-                            // format address and description from ESI entry
-                            {
-                                wchar_t buf[32];
-                                swprintf_s(buf, L"0x%04X:%02X", itm.index, itm.subindex);
-                                itm.address = buf;
-                                // if name still empty, use address as visible name
-                                if (itm.name.empty()) itm.name = buf;
+
+                        // Format address and set display name
+                        {
+                            wchar_t buf[32];
+                            swprintf_s(buf, L"0x%04X:%02X", itm.index, itm.subindex);
+                            itm.address = buf;
+
+                            if (itm.name.empty()) {
+                                std::wstring desc = GetPdoAddressDescription(itm.index, itm.subindex);
+                                itm.name = desc.empty() ? buf : desc;
                             }
-                            itm.description = std::wstring(e.description.begin(), e.description.end());
+                        }
                         pdoDisplay.pdoItems.push_back(itm);
                     }
                 }
 
                 // Recalculate offsets using master-provided IO base and then rebuild UI
                 if (pdoDisplay.RecalculateOffsetsFromSDO(master, confirmedSlave)) {
-                    pdoDisplay.RebuildPDOControls();
+                    // RecalculateOffsetsFromSDO already calls RebuildPDOControls + ApplyCachedValues
                     // Restore any cached edit texts by name
                     RestorePDOInputsFromGlobal();
                 } else {
@@ -707,6 +698,27 @@ void MainWindow::UpdateSlaveList() {
                                 if (d.isOutput) { d.byteOffset = curOut - outBase; curOut += bytes; }
                                 else { d.byteOffset = curIn - inBase; curIn += bytes; }
                             }
+                            // Override with runtime offsets from actual driver SDO read when available
+                            int slaveIdx = s2.position;
+                            const auto& rtOffs = master->GetPdoRuntimeOffsets();
+                            if (slaveIdx < (int)rtOffs.size()) {
+                                const auto& rtOff = rtOffs[slaveIdx];
+                                if (!rtOff.empty()) {
+                                    int overridden = 0;
+                                    for (auto &d : descriptors) {
+                                        auto it = rtOff.find(d.index);
+                                        if (it != rtOff.end() && it->second.byteOffset >= 0) {
+                                            d.byteOffset = it->second.byteOffset;
+                                            ++overridden;
+                                        }
+                                    }
+                                    if (overridden > 0) {
+                                        std::string msg = "PDO descriptors for slave " + std::to_string(slaveIdx)
+                                            + ": " + std::to_string(overridden) + " offsets overridden by runtime driver read\n";
+                                        PostUTF8LogToUI(msg);
+                                    }
+                                }
+                            }
                             // register with master
                             if (!descriptors.empty()) master->RegisterPDODescriptors(s2.position, descriptors);
                         }
@@ -722,6 +734,7 @@ void MainWindow::UpdateSlaveList() {
                 ApplyStatuswordDisableToPDOControls(confirmedSlave);
             }
             UpdateSelectedSlaveStatus(pos);
+            RefreshPdoMappingDisplay();
         }
     }
     // Update thread-safe JSON cache for /slaves endpoint
@@ -1149,10 +1162,10 @@ std::string MainWindow::BuildEthercatErrorReasonSummary() {
     }
 
     if (IsExternalImmediateStopActive()) {
-        return "external immediate-stop input active (0x60FD bit0)";
+        return "external immediate-stop input active (0x60FD bit5)";
     }
     if (IsExternalEStopActive()) {
-        return "external emergency-stop input active (0x60FD bit5)";
+        return "external emergency-stop input active (0x60FD bit0)";
     }
     if (IsManualResetRequired()) {
         return "manual reset required after safety stop";

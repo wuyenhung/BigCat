@@ -828,7 +828,8 @@ std::string BuildStewartResultJson(
     const IKResult& result,
     const StewartResolvedPoseInput& resolvedPose,
     const StewartDiagnostics& diagnostics,
-    bool validOverride) {
+    bool validOverride,
+    const WuSOEM::Pose6DValidationResult* poseValidation = nullptr) {
     const std::vector<int> errorArms = ExtractErrorArmsFromErrorsImpl(result.errors);
     std::ostringstream response;
     response << "{";
@@ -867,6 +868,16 @@ std::string BuildStewartResultJson(
     response << ",\"singularityInfo\":";
     AppendJsonArmDiagnostics(response, diagnostics.singularityInfo);
     response << ",\"platformSingularity\":" << (diagnostics.platformSingularity ? "true" : "false");
+    // Pose6D 前置驗證層結果
+    if (poseValidation) {
+        response << ",\"poseValidation\":{";
+        response << "\"valid\":" << (poseValidation->valid ? "true" : "false");
+        response << ",\"violationKind\":\"" << static_cast<int>(poseValidation->violationKind) << "\"";
+        response << ",\"limitValue\":" << static_cast<double>(poseValidation->limitValue);
+        response << ",\"actualValue\":" << static_cast<double>(poseValidation->actualValue);
+        response << ",\"message\":\"" << CoreHelpers::EscapeJsonString(poseValidation->message) << "\"";
+        response << "}";
+    }
     response << "}";
     return response.str();
 }
@@ -880,6 +891,19 @@ std::string BuildInverseKinematicsJson(
         resolvedPose,
         diagnostics,
         result.valid && !diagnostics.platformSingularity);
+}
+
+std::string BuildInverseKinematicsJson(
+    const IKResult& result,
+    const StewartResolvedPoseInput& resolvedPose,
+    const StewartDiagnostics& diagnostics,
+    const WuSOEM::Pose6DValidationResult& poseValidation) {
+    return BuildStewartResultJson(
+        result,
+        resolvedPose,
+        diagnostics,
+        result.valid && !diagnostics.platformSingularity && poseValidation.valid,
+        &poseValidation);
 }
 
 std::string BuildForwardKinematicsJsonImpl(
@@ -970,6 +994,14 @@ std::string BuildForwardKinematicsJson(
 }
 
 }  // namespace HttpServerInternal
+
+void SetStewartPose6DLimits(const WuSOEM::Pose6DLimits& limits) {
+    HttpServerInternal::SetPose6DLimits(limits);
+}
+
+WuSOEM::Pose6DLimits GetStewartPose6DLimits() {
+    return HttpServerInternal::GetPose6DLimits();
+}
 
 void SetAdapterStatus(const std::string& s) {
     bool changed = false;
@@ -1090,6 +1122,14 @@ std::string GetUiStateJson() {
         GetHttpTargetSystemStateSnapshot(),
         GetHttpAutoActionButtonInputs());
 
+    // Resolve the selected-adapter snapshot BEFORE taking g_uiStateMutex.
+    // GetSelectedAdapterUiState() may call into MainWindow (GetSelectedAdapterUtf8)
+    // which performs a cross-thread SendMessageW to the adapter combobox. Holding
+    // g_uiStateMutex across that call deadlocks the UI thread during startup:
+    // MainWindow::Create() -> SetUiDisabled("adapter_select", ...) wants this same
+    // mutex while the HTTP worker waits for the (not yet pumping) UI thread.
+    const SelectedAdapterUiState selectedAdapter = GetSelectedAdapterUiState();
+
     std::lock_guard<std::mutex> lk(g_uiStateMutex);
     std::ostringstream ss;
     ss << "{";
@@ -1121,6 +1161,10 @@ std::string GetUiStateJson() {
         ss << ",\"commsTime\":" << g_commsTimeUs;
         ss << ",\"actualCycleTime\":" << g_actualCycleTimeUs;
         ss << ",\"maxObservedCycleTime\":" << g_maxObservedCycleTimeUs;
+        ss << ",\"spikePhase\":" << g_spikePhase;
+        ss << ",\"spikeCycleUs\":" << g_spikeCycleUs;
+        ss << ",\"spikeCommsUs\":" << g_spikeCommsUs;
+        ss << ",\"spikeCount\":" << g_spikeCount;
     }
 
     {
@@ -1136,7 +1180,6 @@ std::string GetUiStateJson() {
     }
 
     {
-        const SelectedAdapterUiState selectedAdapter = GetSelectedAdapterUiState();
         if (!selectedAdapter.value.empty()) {
             if (!first) {
                 ss << ",";
@@ -1168,6 +1211,14 @@ void SetCycleInfo(uint32_t desiredUs, uint32_t commsUs, uint32_t actualUs) {
 void SetMaxObservedCycleTime(uint32_t maxUs) {
     std::lock_guard<std::mutex> clk(g_cycleMutex);
     g_maxObservedCycleTimeUs = maxUs;
+}
+
+void SetSpikeDiagnostics(uint32_t phase, uint32_t cycleUs, uint32_t commsUs, uint32_t count) {
+    std::lock_guard<std::mutex> clk(g_cycleMutex);
+    g_spikePhase = phase;
+    g_spikeCycleUs = cycleUs;
+    g_spikeCommsUs = commsUs;
+    g_spikeCount = count;
 }
 
 void SetSlaveCacheJson(const std::string& json) {
@@ -1341,7 +1392,7 @@ RequestHandleResult TryHandleApiRequest(const HttpRequestContext& ctx) {
 
         std::ostringstream oss;
         oss << "{";
-        oss << "\"http_port\": " << g_httpPort << ", ";
+        oss << "\"http_port\": " << g_httpPort.load() << ", ";
         oss << "\"bind_addr\": \"" << g_httpBindAddr << "\", ";
         oss << "\"build\": \"\"";
         oss << "}";
@@ -1843,12 +1894,17 @@ RequestHandleResult TryHandleApiRequest(const HttpRequestContext& ctx) {
     }
 
     if (method == "GET" && path == "/api/mmf/status") {
-        std::string statusJson = "{\"enabled\":false}";
-        if (g_hwndHttpTarget && IsWindow(g_hwndHttpTarget)) {
-            LRESULT result = SendMessageW(g_hwndHttpTarget, WM_USER + 250, 0, 0);
-            statusJson = result ? "{\"enabled\":true}" : "{\"enabled\":false}";
+        // Polled by the web UI during page load. Read the master's atomic MMF-output
+        // state instead of sending WM_USER+250 to the main window: a blocking
+        // SendMessageW from this HTTP worker would stall (or deadlock) while the UI
+        // thread is not pumping messages, e.g. while MainWindow::Create() is still
+        // running (repo-facts 2026-10-03).
+        bool mmfOutputEnabled = false;
+        if (auto* master = AppController::GetInstance().GetMaster()) {
+            mmfOutputEnabled = master->IsMMFOutputEnabled();
         }
-        SendJsonResponse(client, "HTTP/1.1 200 OK", statusJson);
+        SendJsonResponse(client, "HTTP/1.1 200 OK",
+                         mmfOutputEnabled ? "{\"enabled\":true}" : "{\"enabled\":false}");
         return RequestHandleResult::kHandledClose;
     }
 
@@ -2034,12 +2090,16 @@ RequestHandleResult TryHandleApiRequest(const HttpRequestContext& ctx) {
             settings,
             ParseStewartInputCoordinateSystem(body),
             inputPose);
-        const IKResult result = StewartIK::CalculateInverse(params, resolvedPose.worldPose);
+        // Pose6D 前置驗證層：使用從 machine.xml 載入的全域硬限制值
+        const auto pose6dLimits = GetStewartPose6DLimits();
+        const auto poseValidation = StewartIK::ValidatePose6D(
+            resolvedPose.worldPose, resolvedPose.initialHeight, pose6dLimits);
+        const IKResult result = StewartIK::CalculateInverse(params, poseValidation.clampedPose);
         const StewartDiagnostics diagnostics = AnalyzeStewartResult(params, settings, result);
         SendJsonResponse(
             client,
             "HTTP/1.1 200 OK",
-            BuildInverseKinematicsJson(result, resolvedPose, diagnostics));
+            BuildInverseKinematicsJson(result, resolvedPose, diagnostics, poseValidation));
         return RequestHandleResult::kHandledClose;
     }
 

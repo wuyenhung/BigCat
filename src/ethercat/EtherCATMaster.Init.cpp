@@ -1,4 +1,6 @@
 #include "EtherCATMaster.h"
+#include "../include/core/CpuIsolation.h"
+#include "../include/core/CpuTopology.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -14,19 +16,21 @@
 #include <filesystem>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 #include "SafeMem.h"
 #include "EsiParser.h"
 #include "../include/core/CoreHelpers.h"
+#include "../include/core/CpuIsolation.h"
 
 namespace {
 
 constexpr int kStableProcessDataSleepUs = 5000;
-constexpr int kStableProcessDataMaxRounds = 20;
-constexpr int kStableProcessDataMinReadyRounds = 3;
-constexpr int kSafeOpPollRounds = 60;
+constexpr int kStableProcessDataMaxRounds = 10;
+constexpr int kStableProcessDataMinReadyRounds = 2;
+constexpr int kSafeOpPollRounds = 30;
 constexpr int kSafeOpPollTimeoutUs = 50000;
 constexpr int kSafeOpPollSleepUs = 5000;
-constexpr int kSafeOpFallbackTimeoutUs = EC_TIMEOUTSTATE * 2;
+constexpr int kSafeOpFallbackTimeoutUs = EC_TIMEOUTSTATE;
 constexpr int kOpPollRounds = 60;
 constexpr int kOpPollTimeoutUs = 10000;
 constexpr DWORD kOpMaxPollSleepMs = 5;
@@ -196,6 +200,20 @@ static uint16_t GetSmDefaultSize(const EsiSmDescriptor* desc, int smIndex)
     return 0;
 }
 
+// Check if the drive's SM can support a given PDO byte size.
+// Returns true if DefaultSize==0 (dynamic/auto-sized), or >= required bytes.
+static bool CanSmFitSize(const EsiSmDescriptor* desc, int smIndex, int requiredBytes)
+{
+    if (!desc) return false;
+    for (const auto& sm : desc->smList) {
+        if (sm.index != smIndex) continue;
+        // DefaultSize==0 means dynamic: SOEM computes from PDO mapping → any size OK
+        // DefaultSize>=required means fixed buffer is large enough
+        return (sm.defaultSize == 0 || sm.defaultSize >= requiredBytes);
+    }
+    return false;  // SM not found → assume safe (use small PDO)
+}
+
 } // anonymous namespace
 
 bool EtherCATMaster::Initialize(const char* ifname_param) {
@@ -267,6 +285,43 @@ bool EtherCATMaster::Initialize(const char* ifname_param) {
         return false;
     }
 
+    // Apply Npcap immediate-mode optimizations to the opened pcap handle
+    // to reduce kernel→userspace packet delivery latency (~1ms savings).
+    // Only applies to the user-selected EtherCAT NIC — never touches other NICs.
+    {
+        std::string npcapLog;
+        CoreHelpers::NpcapApplyImmediateMode(context.port.sockhandle, npcapLog);
+        (void)npcapLog; // logged via SetError / debug output in production builds
+    }
+
+    // Disable RSS on the selected EtherCAT adapter to eliminate cross-core
+    // interrupt jitter that degrades PDO cycle stability.
+    {
+        std::string rssLog;
+        // Resolve pcap ifname → Windows friendly name for RSS control
+        std::string adapterFriendlyName;
+        {
+            std::string enumErr;
+            auto adapters = CoreHelpers::EnumerateAdapters(enumErr);
+            for (const auto& ad : adapters) {
+                if (ad.pcapName == ifname) {
+                    if (!ad.friendlyName.empty()) {
+                        adapterFriendlyName = ad.friendlyName;
+                    } else if (!ad.description.empty()) {
+                        adapterFriendlyName = ad.description;
+                    }
+                    break;
+                }
+            }
+        }
+        if (!adapterFriendlyName.empty()) {
+            CoreHelpers::DisableAdapterRss(adapterFriendlyName, rssLog);
+        } else {
+            rssLog = "[RSS] Could not resolve adapter friendly name from pcap ifname — skipping RSS disable\n";
+        }
+        (void)rssLog; // logged via SetError in production builds
+    }
+
     // 尋找並配置從站
     // 同樣添加重試機制
     int configRetries = 2;
@@ -312,6 +367,22 @@ bool EtherCATMaster::Initialize(const char* ifname_param) {
     } catch (...) {
         // swallow - non-fatal
         softStartReadyCacheSize_ = 0;
+    }
+
+    // Allocate per-slave PDO caches (0x603F Error Code, 0x6061 Mode Display)
+    // Updated every cycle by CyclicTask; read lock-free from any thread.
+    // Set count=0 first so concurrent GetPdo603F/GetPdo6061 return false during allocation.
+    pdoCacheSlaveCount_.store(0, std::memory_order_release);
+    try {
+        pdo603FCache_.reset(new std::atomic<uint16_t>[slaveCount + 1]);
+        pdo6061Cache_.reset(new std::atomic<uint8_t>[slaveCount + 1]);
+        for (int i = 0; i <= slaveCount; ++i) {
+            pdo603FCache_[i].store(0, std::memory_order_relaxed);
+            pdo6061Cache_[i].store(0, std::memory_order_relaxed);
+        }
+        pdoCacheSlaveCount_.store(slaveCount, std::memory_order_release);
+    } catch (...) {
+        pdoCacheSlaveCount_.store(0, std::memory_order_release);
     }
     
     std::stringstream ss;
@@ -409,7 +480,28 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
         ShutdownSimulationLocked(logCallback);
         return;
     }
-    
+
+    // Check if the physical link is already down.  When the cable is
+    // unplugged every ecx_statecheck() blocks for EC_TIMEOUTSTATE (2 s);
+    // skipping futile state transitions shrinks shutdown from ~6 s to
+    // < 1 s and avoids the UI appearing hung during auto-disconnect.
+    bool linkIsDown = false;
+    {
+        EnterCriticalSection(&cs);
+        if (isInitialized && ifname[0] != '\0') {
+            LeaveCriticalSection(&cs);
+            try {
+                linkIsDown = !CoreHelpers::CheckLinkStatus(ifname);
+            } catch (...) {
+                linkIsDown = true;   // assume down on any error
+            }
+        } else {
+            LeaveCriticalSection(&cs);
+        }
+    }
+
+    if (!linkIsDown) {
+
     // Step 1: If cyclic is running, first request SAFE_OP while processdata still flowing
     EnterCriticalSection(&cs);
     if (isRunning && isInitialized) {
@@ -426,6 +518,10 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
         }
     }
     LeaveCriticalSection(&cs);
+
+    } else {
+        log("[退出流程] 實體鏈路已斷開，略過 OP→SAFE_OP 狀態轉換\n");
+    }
     
     // Step 2: Stop cyclic thread (no more processdata)
     log("[退出流程] 停止週期性資料交換...\n");
@@ -437,13 +533,32 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
     StopPDOProcessingThread();
     log("[退出流程] [OK] PDO 處理執行緒已停止\n");
 
+    // Step 2.55: Stop SDO reader (prevent background SDO access during teardown)
+    log("[退出流程] 停止 SDO 讀取器...\n");
+    StopSdoReader();
+    log("[退出流程] [OK] SDO 讀取器已停止\n");
+
+    // Step 2.56: Release EMCY cache and clear callbacks (no more mailbox activity)
+    emcyCache_.reset();
+    {
+        EnterCriticalSection(&emcyCS_);
+        emcyCallbacks_.clear();
+        globalEmcyCallback_ = nullptr;
+        LeaveCriticalSection(&emcyCS_);
+    }
+    log("[退出流程] [OK] EMCY 回呼已清除\n");
+
     // Step 2.6: Stop MMF reader/writer (ensure no MMF access while tearing down)
     log("[退出流程] 停止 MMF 輸出/輸入 (if enabled)...\n");
     try {
+        // Stop MMF receiver thread first (non-RT, polls MMF independently)
+        StopMMFReceiver();
         // Stop MMF input reader if running
         StopMMF1In();
         // Disable MMF output (will Close mapping under mmfOutputCS_)
         DisableMMFOutput();
+        // Disable IK actual pose MMF output (BigCat)
+        DisablePoseMMFOutput();
     } catch (...) {
         // Best-effort: do not let MMF cleanup failure prevent shutdown sequence
     }
@@ -451,6 +566,8 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
 
     // If caller provided a UI log callback, signal UI to stop timer
     if (logCallback) logCallback(std::string("STOP_TIMER\n"));
+
+    if (!linkIsDown) {
     
     // Step 3: Now safely transition slaves from SAFE_OP to INIT
     log("[退出流程] 開始狀態轉換: SAFE_OP → PRE_OP → INIT\n");
@@ -492,6 +609,10 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
         log("[退出流程] [OK] 所有裝置已回到 INIT 狀態\n");
     }
     LeaveCriticalSection(&cs);
+
+    } else {
+        log("[退出流程] 實體鏈路已斷開，略過 SAFE_OP→PRE_OP→INIT 狀態轉換\n");
+    }
     
     // Step 4: Close EtherCAT port
     EnterCriticalSection(&cs);
@@ -500,6 +621,11 @@ void EtherCATMaster::Shutdown(std::function<void(const std::string&)> logCallbac
     ecx_close(&context);
     isInitialized = false;
     slaveCount = 0;
+    // Reset PDO cache state to prevent stale access after disconnect
+    pdoCacheSlaveCount_.store(0, std::memory_order_release);
+    pdo603FCache_.reset();
+    pdo6061Cache_.reset();
+    pdo60FDValid_.store(false, std::memory_order_release);
     log("[退出流程] [OK] 連接埠已關閉\n");
     }
     LeaveCriticalSection(&cs);
@@ -570,10 +696,28 @@ bool EtherCATMaster::ConfigureSlaves() {
                 ECT_REG_ALCTL, sizeof(alControl), &alControl, EC_TIMEOUTRET);
     }
     
-    // 等待所有從站回到INIT狀態
+    // 等待所有從站回到INIT狀態（使用自訂輪詢替代阻塞 ecx_statecheck）
+    ss.str("");
+    ss << "等待所有從站回到 INIT...\n";
+    SetError(ss.str());
     context.slavelist[0].state = EC_STATE_INIT;
     ecx_writestate(&context, 0);
-    ecx_statecheck(&context, 0, EC_STATE_INIT, EC_TIMEOUTSTATE * 3);
+
+    LeaveCriticalSection(&cs);
+    {
+        const bool preInitStable = PumpProcessDataUntilStable(&context,
+            kStableProcessDataMaxRounds, kStableProcessDataSleepUs);
+        if (!preInitStable) {
+            SetError("Warning: processdata did not stabilize before INIT request");
+        }
+        int initChk = WaitForStateWithProcessData(&context,
+            EC_STATE_INIT, kSafeOpPollRounds, kSafeOpPollTimeoutUs,
+            kSafeOpPollSleepUs, kSafeOpFallbackTimeoutUs);
+        ss.str("");
+        ss << "INIT 檢查結果: 0x" << std::hex << initChk << std::dec << "\n";
+        SetError(ss.str());
+    }
+    EnterCriticalSection(&cs);
     
     // 2. 重新自動發現從站
     ss.str("");
@@ -614,13 +758,38 @@ bool EtherCATMaster::ConfigureSlaves() {
     
     for (int i = 1; i <= context.slavecount; i++) {
         // 對每個從站執行以下操作:
-        // 1. 先移動到PRE-OP狀態以允許SDO操作
+        // 1. 先移動到PRE-OP狀態以允許SDO操作（自訂輪詢替代阻塞 ecx_statecheck）
         context.slavelist[i].state = EC_STATE_PRE_OP;
         ecx_writestate(&context, i);
-        if (ecx_statecheck(&context, i, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 2) != EC_STATE_PRE_OP) {
-            configFailed = true;
-            configErrors << "從站 " << i << " 無法達到PRE-OP狀態\n";
-            continue;
+
+        // Release cs during state-polling to avoid blocking other threads
+        LeaveCriticalSection(&cs);
+        {
+            // Warm up processdata before checking state
+            for (int r = 0; r < 3; ++r) {
+                ecx_send_processdata(&context);
+                ecx_receive_processdata(&context, EC_TIMEOUTRET);
+                osal_usleep(3000);
+            }
+            // Poll for PRE_OP with short timeout (max ~150ms vs 2s)
+            int preopState = 0;
+            for (int r = 0; r < 20; ++r) {
+                ecx_send_processdata(&context);
+                ecx_receive_processdata(&context, EC_TIMEOUTRET);
+                preopState = ecx_statecheck(&context, i, EC_STATE_PRE_OP, 5000);
+                if ((preopState & EC_STATE_PRE_OP) == EC_STATE_PRE_OP) break;
+                osal_usleep(3000);
+            }
+            if ((preopState & EC_STATE_PRE_OP) != EC_STATE_PRE_OP) {
+                // Fallback: use original timeout
+                preopState = ecx_statecheck(&context, i, EC_STATE_PRE_OP, EC_TIMEOUTSTATE);
+            }
+            EnterCriticalSection(&cs);
+            if ((preopState & EC_STATE_PRE_OP) != EC_STATE_PRE_OP) {
+                configFailed = true;
+                configErrors << "從站 " << i << " 無法達到PRE-OP狀態\n";
+                continue;
+            }
         }
 
         // ---- ESI-aware PDO index selection ----
@@ -655,6 +824,15 @@ bool EtherCATMaster::ConfigureSlaves() {
         uint16_t sm2Size = GetSmDefaultSize(pEsi, 2);
         uint16_t sm3Size = GetSmDefaultSize(pEsi, 3);
 
+        // X1S (Renesas ESC, vid=0x766 pid=0x10000): TwinCAT uses 0x1600/0x1A00,
+        // not the ESI-preferred 0x1601/0x1A01.  Force the TwinCAT-compatible
+        // indices so the 7-entry PDO works correctly on this drive.
+        if (context.slavelist[i].eep_man == 0x766 &&
+            context.slavelist[i].eep_id  == 0x10000) {
+            rxPdoIndex = 0x1600;
+            txPdoIndex = 0x1A00;
+        }
+
         if (pEsi) {
             ss.str("");
             ss << "從站 " << i << ": RxPDO=0x" << std::hex << rxPdoIndex
@@ -684,16 +862,14 @@ bool EtherCATMaster::ConfigureSlaves() {
             // 非致命錯誤，繼續嘗試
         }
 
-        // 3. 設置伺服驅動器為預設 cyclic mode
-        int8_t opMode = CoreHelpers::kDefaultCyclicOperationMode;
-    if (!WriteSDO(i, 0x6060, 0, &opMode, sizeof(opMode))) {
-            ss.str("");
-            ss << "從站 " << i << ": 無法設置操作模式\n";
-            SetError(ss.str());
-            // 非致命錯誤，繼續嘗試
-        }
+        // 3. 設置 cyclic motion RxPDO 映射（固定 7-entry，與 Par/Startup.csv 一致）
+        constexpr int rxEntryCount = 7;
+        constexpr int txEntryCount = 7;
 
-        // 4. 設置基本的 cyclic motion RxPDO 映射 (ESI-aware index)
+        ss.str("");
+        ss << "從站 " << i << ": 使用 7-entry PDO (Rx=17B Tx=19B, Startup.csv)\n";
+        SetError(ss.str());
+
         // 清空舊映射
     if (!WriteSDO(i, rxPdoIndex, 0, &zero, sizeof(zero))) {
             ss.str("");
@@ -701,15 +877,21 @@ bool EtherCATMaster::ConfigureSlaves() {
             SetError(ss.str());
         }
 
-        // 添加標準 cyclic motion 對象到 RxPDO
-        uint32_t rxEntries[4] = {
-            0x60400010,  // 控制字 (16位)
-            0x607A0020,  // 目標位置 (32位)
-            0x60FF0020,  // 目標速度 (32位)
-            0x60710010   // 目標力矩 (16位)
-        };
+        // RxPDO entries: 7-entry (order matches Par/Startup.csv)
+        // X1S (Renesas ESC) uses 0x2019/0x201A for torque limits;
+        // DVS uses 0x60E0/0x60E1.  Byte layout is identical.
+        uint32_t rxEntries[7];
+        int rxIdx = 0;
+        rxEntries[rxIdx++] = 0x607A0020;  // 1. 目標位置 (32位)
+        rxEntries[rxIdx++] = 0x60FF0020;  // 2. 目標速度 (32位)
+        rxEntries[rxIdx++] = 0x60710010;  // 3. 目標力矩 (16位)
+        const bool isX1s = EtherCATMaster::IsX1sDrive(context.slavelist[i].eep_man);
+        rxEntries[rxIdx++] = isX1s ? 0x20190010 : 0x60E00010;  // 4. 正轉矩限制 (16位)
+        rxEntries[rxIdx++] = isX1s ? 0x201A0010 : 0x60E10010;  // 5. 負轉矩限制 (16位)
+        rxEntries[rxIdx++] = 0x60400010;  // 6. 控制字 (16位)
+        rxEntries[rxIdx++] = 0x60600008;  // 7. 操作模式 (8位)
 
-        for (int j = 0; j < 4; j++) {
+        for (int j = 0; j < rxEntryCount; j++) {
             if (!WriteSDO(i, rxPdoIndex, j+1, &rxEntries[j], sizeof(uint32_t))) {
                 ss.str("");
                 ss << "從站 " << i << ": 無法設置RxPDO映射項目 " << j+1 << "\n";
@@ -717,15 +899,14 @@ bool EtherCATMaster::ConfigureSlaves() {
             }
         }
 
-        // 啟用4個RxPDO項目
-        uint8_t rxCount = 4;
+        uint8_t rxCount = static_cast<uint8_t>(rxEntryCount);
     if (!WriteSDO(i, rxPdoIndex, 0, &rxCount, sizeof(rxCount))) {
             ss.str("");
             ss << "從站 " << i << ": 無法啟用RxPDO映射\n";
             SetError(ss.str());
         }
 
-        // 5. 設置基本的 cyclic motion TxPDO 映射 (ESI-aware index)
+        // 5. TxPDO 映射
         // 清空舊映射
     if (!WriteSDO(i, txPdoIndex, 0, &zero, sizeof(zero))) {
             ss.str("");
@@ -733,15 +914,18 @@ bool EtherCATMaster::ConfigureSlaves() {
             SetError(ss.str());
         }
 
-        // 添加標準 cyclic motion 對象到 TxPDO
-        uint32_t txEntries[4] = {
-            0x60410010,  // 狀態字 (16位)
-            0x60640020,  // 實際位置 (32位)
-            0x606C0020,  // 實際速度 (32位)
-            0x60770010   // 實際力矩 (16位)
-        };
+        // TxPDO entries: 7-entry (order matches Par/Startup.csv)
+        uint32_t txEntries[7];
+        int txIdx = 0;
+        txEntries[txIdx++] = 0x60640020;  // 1. 實際位置 (32位)
+        txEntries[txIdx++] = 0x606C0020;  // 2. 實際速度 (32位)
+        txEntries[txIdx++] = 0x60770010;  // 3. 實際力矩 (16位)
+        txEntries[txIdx++] = 0x60410010;  // 4. 狀態字 (16位)
+        txEntries[txIdx++] = 0x603F0010;  // 5. 錯誤碼 (16位)
+        txEntries[txIdx++] = 0x60610008;  // 6. 操作模式顯示 (8位)
+        txEntries[txIdx++] = 0x60FD0020;  // 7. 數位輸入 (32位)
 
-        for (int j = 0; j < 4; j++) {
+        for (int j = 0; j < txEntryCount; j++) {
             if (!WriteSDO(i, txPdoIndex, j+1, &txEntries[j], sizeof(uint32_t))) {
                 ss.str("");
                 ss << "從站 " << i << ": 無法設置TxPDO映射項目 " << j+1 << "\n";
@@ -749,8 +933,7 @@ bool EtherCATMaster::ConfigureSlaves() {
             }
         }
 
-        // 啟用4個TxPDO項目
-        uint8_t txCount = 4;
+        uint8_t txCount = static_cast<uint8_t>(txEntryCount);
     if (!WriteSDO(i, txPdoIndex, 0, &txCount, sizeof(txCount))) {
             ss.str("");
             ss << "從站 " << i << ": 無法啟用TxPDO映射\n";
@@ -789,10 +972,56 @@ bool EtherCATMaster::ConfigureSlaves() {
         ss.str("");
         ss << "從站 " << i << " PDO配置完成\n";
         SetError(ss.str());
+
+        // Quick count-only verification — per-entry readback skipped for speed.
+        // Per-entry integrity is guaranteed by WriteAndVerifySDO on the critical
+        // entries (controlword, op-mode) later in the connect flow.
+        {
+            ss.str("");
+            ss << "從站 " << i << " PDO驗證: ";
+            bool ok = true;
+
+            uint8_t rxCountVer = 0;
+            int sz = sizeof(rxCountVer);
+            if (ReadSDO((uint16_t)i, rxPdoIndex, 0x00, &rxCountVer, sz) && rxCountVer == rxEntryCount) {
+                ss << "Rx=" << (int)rxCountVer << " ";
+            } else {
+                ss << "Rx count=" << (int)rxCountVer << " (expected " << rxEntryCount << ") ";
+                ok = false;
+            }
+
+            uint8_t txCountVer = 0;
+            sz = sizeof(txCountVer);
+            if (ReadSDO((uint16_t)i, txPdoIndex, 0x00, &txCountVer, sz) && txCountVer == txEntryCount) {
+                ss << "Tx=" << (int)txCountVer << " ";
+            } else {
+                ss << "Tx count=" << (int)txCountVer << " (expected " << txEntryCount << ") ";
+                ok = false;
+            }
+
+            if (ok) ss << "OK";
+            SetError(ss.str());
+        }
     }
     if (configFailed) {
         // 彙總配置錯誤
         SetError(configErrors.str());
+    }
+    
+    // 4.5 修正 SM2/SM3 大小以符合 7-entry PDO 需求 (Rx=17B/Tx=19B)。
+    {
+        constexpr uint16_t kReqSM2 = 17;
+        constexpr uint16_t kReqSM3 = 19;
+        for (int i = 1; i <= context.slavecount; i++) {
+            uint16_t curSM2 = etohs(context.slavelist[i].SM[2].SMlength);
+            if (curSM2 < kReqSM2) {
+                context.slavelist[i].SM[2].SMlength = htoes(kReqSM2);
+            }
+            uint16_t curSM3 = etohs(context.slavelist[i].SM[3].SMlength);
+            if (curSM3 < kReqSM3) {
+                context.slavelist[i].SM[3].SMlength = htoes(kReqSM3);
+            }
+        }
     }
     
     // 5. 配置IOMap
@@ -803,6 +1032,45 @@ bool EtherCATMaster::ConfigureSlaves() {
     int ioMapResult = ecx_config_map_group(&context, IOmap, 0);
     ss.str("");
     ss << "映射結果: " << ioMapResult << " bytes\n";
+
+    // Dump per-slave IOmap/FMMU after mapping for diagnostics
+    {
+        std::stringstream fmmuLog;
+        fmmuLog << "[FMMU] IOmap/FMMU after ecx_config_map_group:\n";
+        for (int i = 1; i <= context.slavecount; i++) {
+            auto& sl = context.slavelist[i];
+            fmmuLog << "[FMMU]   Slave " << i << ": Obytes=" << sl.Obytes << " Ibytes=" << sl.Ibytes
+                    << " Obits=" << sl.Obits << " Ibits=" << sl.Ibits
+                    << " SM2=" << etohs(sl.SM[2].SMlength) << "B SM3=" << etohs(sl.SM[3].SMlength) << "B";
+            for (int f = 0; f < EC_MAXFMMU; f++) {
+                if (sl.FMMU[f].FMMUactive) {
+                    fmmuLog << " FMMU" << f << ":type=" << (int)sl.FMMU[f].FMMUtype
+                            << " Log=0x" << std::hex << etohl(sl.FMMU[f].LogStart)
+                            << "+" << std::dec << etohs(sl.FMMU[f].LogLength)
+                            << " Phys=0x" << std::hex << etohs(sl.FMMU[f].PhysStart) << std::dec;
+                }
+            }
+            fmmuLog << " out=" << (void*)sl.outputs << " in=" << (void*)sl.inputs << "\n";
+        }
+        OutputDebugStringA(fmmuLog.str().c_str());
+    }
+
+    // Sync slave count and re-allocate PDO caches after re-mapping.
+    // CRITICAL: set pdoCacheSlaveCount_=0 FIRST so concurrent GetPdo603F/GetPdo6061
+    // return false instead of accessing freed memory during the reset window.
+    slaveCount = context.slavecount;
+    pdoCacheSlaveCount_.store(0, std::memory_order_release);  // gate concurrent readers BEFORE freeing old arrays
+    try {
+        pdo603FCache_.reset(new std::atomic<uint16_t>[slaveCount + 1]);
+        pdo6061Cache_.reset(new std::atomic<uint8_t>[slaveCount + 1]);
+        for (int i = 0; i <= slaveCount; ++i) {
+            pdo603FCache_[i].store(0, std::memory_order_relaxed);
+            pdo6061Cache_[i].store(0, std::memory_order_relaxed);
+        }
+        pdoCacheSlaveCount_.store(slaveCount, std::memory_order_release);  // re-enable after arrays are ready
+    } catch (...) {
+        pdoCacheSlaveCount_.store(0, std::memory_order_release);
+    }
     
     // 檢查每個從站的映射結果
     ss << "從站映射結果:\n";
@@ -837,21 +1105,38 @@ bool EtherCATMaster::ConfigureSlaves() {
     
     ecx_configdc(&context);
 
+    // DC diagnostic
+    {
+        std::stringstream dclog;
+        for (int i = 1; i <= context.slavecount; ++i) {
+            dclog << "  Slave " << i << ": hasdc=" << (int)context.slavelist[i].hasdc
+                  << " vendor=0x" << std::hex << context.slavelist[i].eep_man << std::dec << "\n";
+        }
+        OutputDebugStringA(dclog.str().c_str());
+    }
+
     // 若從站支援 DC，預先啟用 SYNC0 以使其對齊總線時間
-    // 使用期望週期（us）轉 ns；相位採用可配置百分比（預設 15%，限制 10~20%）
+    // 使用期望週期（us）轉 ns；相位採用可配置百分比。
+    //
+    // BigCat.exe CyclicTask sends PDO mid-cycle (recv→work→send).  The frame
+    // reaches slaves at ~40-50% of the cycle.  SYNC0 must fire AFTER the frame
+    // arrives so slaves latch fresh outputs.  Default 60% leaves margin:
+    //   frame arrives ~850us → SYNC0 at 1200us (60%) → 350us safety.
+    // Win10 15% works because HR-timer jitter adds slack; Win11 TSC-spin is
+    // precise enough to expose the misalignment as AL=0x001A.
     {
         uint32_t cycletime_ns = (desiredCycleTime > 0 ? desiredCycleTime : 2000) * 1000u;
         int pct = dcSyncPhasePercent;
-        // 環境變數覆蓋：WUSOEM_SYNC0_PHASE_PCT（10..20）
+        // 環境變數覆蓋：WUSOEM_SYNC0_PHASE_PCT
         {
             wchar_t buf[32] = {0};
             DWORD n = GetEnvironmentVariableW(L"WUSOEM_SYNC0_PHASE_PCT", buf, _countof(buf));
             if (n > 0 && n < _countof(buf)) {
                 int v = _wtoi(buf);
-                if (v >= 10 && v <= 20) pct = v;
+                if (v >= 10 && v <= 90) pct = v;
             }
         }
-        if (pct < 10) pct = 10; if (pct > 20) pct = 20;
+        if (pct < 10) pct = 10; if (pct > 90) pct = 90;
         int32_t phaseShift = (int32_t)((cycletime_ns * (uint32_t)pct) / 100u);
         ecx_readstate(&context);
         for (int i = 1; i <= context.slavecount; ++i) {
@@ -862,6 +1147,48 @@ bool EtherCATMaster::ConfigureSlaves() {
         }
     }
     
+    // 6.5 X1S (Renesas ESC, vid=0x766) per-slave reconfig.
+    // TwinCAT uses <PS> transition-period SDO writes for this drive; SOEM's
+    // group broadcast ecx_writestate does not satisfy it.  ecx_reconfig_slave
+    // replays INIT → SM program → PREOP → PO2SOconfig → SAFE_OP → FMMU for
+    // each X1S, matching the TwinCAT behaviour that the ESC expects.
+    {
+        int x1sCount = 0;
+        for (int i = 1; i <= context.slavecount; ++i) {
+            if (context.slavelist[i].eep_man == 0x766 &&
+                context.slavelist[i].eep_id  == 0x10000) {
+                ++x1sCount;
+                ss.str("");
+                ss << "X1S slave " << i << ": per-slave reconfig INIT→SAFE_OP ...\n";
+                SetError(ss.str());
+
+                LeaveCriticalSection(&cs);
+                int state = ecx_reconfig_slave(&context, i, EC_TIMEOUTSTATE * 3);
+                EnterCriticalSection(&cs);
+
+                const char* al = ec_ALstatuscode2string(context.slavelist[i].ALstatuscode);
+                ss.str("");
+                ss << "X1S slave " << i << " reconfig result: state=0x" << std::hex << state
+                   << " AL=0x" << context.slavelist[i].ALstatuscode
+                   << (al ? " " : "") << (al ? al : "") << std::dec << "\n";
+                SetError(ss.str());
+
+                if (!((state & EC_STATE_SAFE_OP) == EC_STATE_SAFE_OP)) {
+                    ss.str("");
+                    ss << "FATAL: X1S slave " << i << " did not reach SAFE_OP after reconfig\n";
+                    SetError(ss.str());
+                    LeaveCriticalSection(&cs);
+                    return false;
+                }
+            }
+        }
+        if (x1sCount > 0) {
+            ss.str("");
+            ss << x1sCount << " X1S slave(s) reconfigured via per-slave path\n";
+            SetError(ss.str());
+        }
+    }
+
     // 發送一些處理數據，確保從站處於穩定狀態（釋放鎖以避免長持有）
     ss.str("");
     ss << "發送處理數據循環以穩定從站狀態...\n";
@@ -901,6 +1228,53 @@ bool EtherCATMaster::ConfigureSlaves() {
     EnterCriticalSection(&cs);
     if (!postSafeOpStable) {
         SetError("Warning: processdata did not stabilize after SAFE_OP request");
+    }
+    
+    // 8.5 在 SAFE_OP 狀態下設置各從站操作模式 (X5_7 startup order)
+    {
+        int8_t opMode = GetCyclicOperationMode();
+        ss.str("");
+        ss << "在 SAFE_OP 設置操作模式=" << static_cast<int>(opMode) << "...\n";
+        SetError(ss.str());
+        for (int i = 1; i <= context.slavecount; i++) {
+            if (!WriteSDO(i, 0x6060, 0, &opMode, sizeof(opMode))) {
+                ss.str("");
+                ss << "從站 " << i << ": 無法在 SAFE_OP 設置操作模式\n";
+                SetError(ss.str());
+            }
+        }
+    }
+
+    // 8.6 在 SAFE_OP 狀態下設置 Max Profile Velocity (0x607F)、
+    //     Profile Acceleration (0x6083)、Profile Deceleration (0x6084)
+    //     DVS/X1S 驅動器預設 0x607F=0，導致 CSV 模式所有速度命令被歸零。
+    //     寫入高上限值以解除箝位（與 test_Ethercat_jog 一致）。
+    {
+        uint32_t maxProfileVelocity = 1000000000u; // essentially unlimited
+        uint32_t profileAccel        = 10000000u;
+        uint32_t profileDecel        = 10000000u;
+
+        ss.str("");
+        ss << "在 SAFE_OP 設置 0x607F/0x6083/0x6084...\n";
+        SetError(ss.str());
+
+        for (int i = 1; i <= context.slavecount; i++) {
+            if (!WriteSDO(i, 0x607F, 0, &maxProfileVelocity, sizeof(maxProfileVelocity))) {
+                ss.str("");
+                ss << "從站 " << i << ": 無法在 SAFE_OP 設置 0x607F (Max Profile Velocity)\n";
+                SetError(ss.str());
+            }
+            if (!WriteSDO(i, 0x6083, 0, &profileAccel, sizeof(profileAccel))) {
+                ss.str("");
+                ss << "從站 " << i << ": 無法在 SAFE_OP 設置 0x6083 (Profile Acceleration)\n";
+                SetError(ss.str());
+            }
+            if (!WriteSDO(i, 0x6084, 0, &profileDecel, sizeof(profileDecel))) {
+                ss.str("");
+                ss << "從站 " << i << ": 無法在 SAFE_OP 設置 0x6084 (Profile Deceleration)\n";
+                SetError(ss.str());
+            }
+        }
     }
     
     // 9. 檢查所有從站是否已成功達到SAFE_OP
@@ -1006,35 +1380,21 @@ bool EtherCATMaster::StartCyclicOperation() {
     }
     
     // 提高 cyclic 執行緒與 process 優先級以改善 PDO 即時性
-    // ========================================================================
-    // 遊戲共存模式檢查：
-    // - 若啟用遊戲共存模式 (gameCoexistenceMode_)，使用 HIGH_PRIORITY_CLASS
-    // - 若停用（專用機模式），嘗試 REALTIME_PRIORITY_CLASS
-    // ========================================================================
-    // 注意: REALTIME_PRIORITY_CLASS 會導致與 DCS/MSFS 等遊戲嚴重競爭，造成遊戲卡頓
+    // 固定使用 REALTIME_PRIORITY_CLASS（等級 31），無管理員權限時降級至 HIGH_PRIORITY_CLASS（等級 13）。
     DWORD currentClass = GetPriorityClass(GetCurrentProcess());
     if (currentClass != 0) {
         prevProcessPriorityClass = currentClass;
         prevProcessPriorityClassSet = true;
     }
     
-    DWORD targetPriorityClass = gameCoexistenceMode_ ? HIGH_PRIORITY_CLASS : REALTIME_PRIORITY_CLASS;
-    const char* priorityName = gameCoexistenceMode_ ? "HIGH_PRIORITY (遊戲共存模式)" : "REALTIME_PRIORITY";
-    
-    if (SetPriorityClass(GetCurrentProcess(), targetPriorityClass)) {
-        std::stringstream ss; 
-        ss << "RT-Optimization: Process priority class elevated to " << priorityName;
-        printf("%s\n", ss.str().c_str());
+    if (SetPriorityClass(GetCurrentProcess(), REALTIME_PRIORITY_CLASS)) {
+        printf("RT-Optimization: Process priority class elevated to REALTIME_PRIORITY\n");
     } else {
         DWORD classErr = ::GetLastError(); (void)classErr;
-        // 若目標是 REALTIME 且失敗，回退到 HIGH_PRIORITY_CLASS
-        if (!gameCoexistenceMode_ && !SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
-            DWORD err = ::GetLastError(); (void)err;
-            std::stringstream ss; ss << "SetPriorityClass failed (fallback)";
-            printf("%s\n", ss.str().c_str());
-        } else if (!gameCoexistenceMode_) {
-            std::stringstream ss; ss << "RT-Optimization: Process priority class elevated to HIGH_PRIORITY (fallback)";
-            printf("%s\n", ss.str().c_str());
+        if (SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+            printf("RT-Optimization: Process priority class elevated to HIGH_PRIORITY (REALTIME denied)\n");
+        } else {
+            printf("RT-Optimization: SetPriorityClass failed (err=%lu)\n", ::GetLastError());
         }
     }
     if (!SetThreadPriority(cyclicThread, THREAD_PRIORITY_TIME_CRITICAL)) {
@@ -1047,19 +1407,54 @@ bool EtherCATMaster::StartCyclicOperation() {
     SetThreadPriorityBoost(cyclicThread, TRUE);
 
     // CPU 親和性設定
-    // Process 層級的 Affinity 已在 MainWindow 初始化時設定，不包含 Core 4。
-    // 因此我們在此將 Cyclic thread 明確綁定到 Core 4 (mask 0x10) 以實現真正的 CPU 隔離。
+    // 使用 CpuIsolation 的拓撲感知遮罩（而非手動計算 1 << rtCore），
+    // 避免實體核心索引 ≠ 邏輯 CPU 位元時 (AMD interleaved SMT / Intel hybrid) 綁錯核心。
     {
-        DWORD_PTR processMask = 0;
-        DWORD_PTR systemMask = 0;
-        if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
-            // Core 4 mask is 0x10
-            DWORD_PTR pick = (DWORD_PTR)1 << 4;
-            if (systemMask & pick) {
-                SetThreadAffinityMask(cyclicThread, pick);
-                std::stringstream ss; 
-                ss << "[Affinity] Cyclic thread pinned to isolated Core 4 (mask 0x10)";
-                printf("%s\n", ss.str().c_str());
+        if (CoreHelpers::CpuIsolation::IsHardIsolationActive()) {
+            DWORD_PTR threadMask = CoreHelpers::CpuIsolation::GetRtThreadMask();
+            if (threadMask != 0) {
+                DWORD_PTR prevMask = SetThreadAffinityMask(cyclicThread, threadMask);
+                if (prevMask != 0) {
+                    DWORD_PTR coreMask = CoreHelpers::CpuIsolation::GetRtCoreMask();
+                    int physCore = CoreHelpers::CpuIsolation::GetRtPhysicalCoreIndex();
+                    std::stringstream ss;
+                    ss << "[Affinity] Cyclic thread pinned to RT mask 0x"
+                       << std::hex << threadMask << std::dec
+                       << " (physical core " << physCore
+                       << ", full mask 0x" << std::hex << coreMask << std::dec << ")";
+                    printf("%s\n", ss.str().c_str());
+                } else {
+                    std::stringstream ess;
+                    ess << "[Affinity] SetThreadAffinityMask failed (err="
+                        << static_cast<unsigned long>(::GetLastError())
+                        << "), falling back";
+                    printf("%s\n", ess.str().c_str());
+                }
+            }
+        }
+        // Fallback: if hard isolation not active, use legacy affinity
+        if (!CoreHelpers::CpuIsolation::IsHardIsolationActive() ||
+            CoreHelpers::CpuIsolation::GetRtThreadMask() == 0) {
+            DWORD_PTR processMask = 0;
+            DWORD_PTR systemMask = 0;
+            if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
+                int rtCore = CoreHelpers::CpuIsolation::GetRtPhysicalCoreIndex();
+                DWORD_PTR pick = 0;
+                if (rtCore >= 0 && rtCore < 64) {
+                    // Prefer topology-aware mask (physical → logical CPU mapping)
+                    pick = CoreHelpers::CpuTopology::GetPrimaryLpMask(rtCore);
+                }
+                if (pick == 0 && rtCore >= 0 && rtCore < 64) {
+                    // Last resort: treat physIdx as logical CPU (works without SMT)
+                    pick = (DWORD_PTR)1 << rtCore;
+                }
+                if (pick != 0 && (systemMask & pick)) {
+                    SetThreadAffinityMask(cyclicThread, pick);
+                    std::stringstream ss;
+                    ss << "[Affinity] Cyclic thread pinned to Core " << rtCore
+                       << " (legacy, mask 0x" << std::hex << pick << std::dec << ")";
+                    printf("%s\n", ss.str().c_str());
+                }
             }
         }
     }
@@ -1071,11 +1466,15 @@ bool EtherCATMaster::StartCyclicOperation() {
     // removes arbitrary delays and makes the handshake deterministic.
     {
         int cycleMs = (int)((desiredCycleTime / 1000) > 0 ? (desiredCycleTime / 1000) : 1);
-        const uint32_t maxCycles = 10;
+        // Allow enough cycles for pipeline priming (5 blocking receives at
+        // ~2 ms each) plus a few extra for the first valid response.
+        const uint32_t maxCycles = 20;
         uint32_t waited = 0;
         LeaveCriticalSection(&cs);
         while (waited < maxCycles) {
-            if (workingCounter > 0 || pdosSentCount.load(std::memory_order_relaxed) > 0) {
+            // Require positive workingCounter (not just pdosSentCount) —
+            // pdosSentCount increments every cycle even when WKC=EC_NOFRAME.
+            if (workingCounter > 0) {
                 break;
             }
             Sleep(cycleMs);
@@ -1083,54 +1482,244 @@ bool EtherCATMaster::StartCyclicOperation() {
         }
         EnterCriticalSection(&cs);
         std::stringstream ss;
-        if (workingCounter > 0 || pdosSentCount.load(std::memory_order_relaxed) > 0) {
-            ss << "Cyclic thread active after " << waited << " cycles";
+        if (workingCounter > 0) {
+            ss << "Cyclic thread active after " << waited << " cycles (WKC=" << workingCounter << ")";
         } else {
-            ss << "[Warn] cyclic thread did not exchange PDOs after " << maxCycles << " cycles";
+            ss << "[Warn] cyclic thread WKC still <= 0 after " << maxCycles << " cycles"
+               << " (pdosSent=" << pdosSentCount.load(std::memory_order_relaxed) << ")";
         }
         SetError(ss.str());
     }
 
-    // All slaves should be in SAFE_OP (from ConfigureSlaveRuntime)
-    // Now request OP for all slaves together while cyclic thread continuously sends processdata
+    // All slaves should be in SAFE_OP (from ConfigureSlaves)
+    // ── DC SYNC0 pre-stabilization (Win11 fix) ──
+    // Let the CyclicTask pump PDO frames in SAFE_OP so slaves' distributed
+    // clocks can converge before requesting OP.  Without this, Win11 HR-timer
+    // jitter during initial DC convergence causes slaves to report AL=0x001A.
+    // Adaptive: minimum 2 s, then check AL status every 1 s; break early when
+    // no slave reports AL=0x001A (max 4 s).
+    {
+        constexpr int kDcMinSec = 2;
+        constexpr int kDcMaxSec = 4;
+        constexpr int kDcCheckIntervalSec = 1;
+        const DWORD kDcPollMs = 200;
+        std::stringstream ss;
+        ss << "DC SYNC0 pre-stabilization (" << kDcMinSec << "-" << kDcMaxSec
+           << " s adaptive, CyclicTask pumping in SAFE_OP)...";
+        SetError(ss.str());
+        LeaveCriticalSection(&cs);
+
+        int waitedSec = 0;
+        bool dcStable = false;
+        while (waitedSec < kDcMaxSec) {
+            int slicesUntilCheck = kDcCheckIntervalSec * (1000 / (int)kDcPollMs);
+            for (int s = 0; s < slicesUntilCheck && waitedSec < kDcMaxSec; ++s) {
+                Sleep(kDcPollMs);
+                if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+            }
+            waitedSec += kDcCheckIntervalSec;
+            if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+
+            if (waitedSec >= kDcMinSec) {
+                ecx_readstate(&context);
+                dcStable = true;
+                for (int i = 1; i <= slaveCount; ++i) {
+                    if (context.slavelist[i].ALstatuscode == 0x001A) {
+                        dcStable = false;
+                        break;
+                    }
+                }
+                if (dcStable) break;
+            }
+        }
+        EnterCriticalSection(&cs);
+        if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) {
+            SetError("DC stabilization interrupted (stop event)");
+            LeaveCriticalSection(&cs);
+            return false;
+        }
+        ss.str("");
+        ss << "DC SYNC0 pre-stabilization complete (" << waitedSec << " s)";
+        SetError(ss.str());
+    }
+    
+    // Now request OP.  Hold pdoExchangeCS so the CyclicTask cannot send/receive
+    // PDO frames during the writestate — prevents SOEM port race corruption
+    // that causes WKC=0 / EC_NOFRAME.
     printf("Requesting OP state for all slaves (cyclic thread priority=TIME_CRITICAL)...\n");
+    LeaveCriticalSection(&cs);
+    EnterCriticalSection(&pdoExchangeCS);
     context.slavelist[0].state = EC_STATE_OPERATIONAL;
     ecx_writestate(&context, 0);
+    LeaveCriticalSection(&pdoExchangeCS);
+    EnterCriticalSection(&cs);
 
-    DWORD opPollSleepMs = (DWORD)((desiredCycleTime / 1000) > 0 ? (desiredCycleTime / 1000) : 1);
-    if (opPollSleepMs > kOpMaxPollSleepMs) {
-        opPollSleepMs = kOpMaxPollSleepMs;
-    }
-    const int opState = WaitForStateWithPolling(
-        &context,
-        EC_STATE_OPERATIONAL,
-        kOpPollRounds,
-        opPollSleepMs,
-        kOpPollTimeoutUs,
-        kOpFallbackTimeoutUs);
+    // OP wait with periodic early-exit: ecx_readstate sends broadcast frames
+    // that can interfere with CyclicTask PDO timing, so we only check every
+    // 1 s instead of every 200 ms.  Once all slaves report OP, break immediately
+    // instead of waiting the full timeout.
+    // CyclicTask's CheckSlaveStates monitors and recovers slave states during
+    // normal operation — the main thread only needs to confirm initial OP.
+    {
+        constexpr int kOpWaitSec = 8;  // upper bound — early exit when all slaves OP
+        constexpr int kCheckIntervalSec = 1;  // check all-slaves-OP every 1 s
+        std::stringstream ss2;
+        ss2 << "Waiting up to " << kOpWaitSec << " s for DC SYNC0 stabilisation + OP transition...";
+        SetError(ss2.str());
+        LeaveCriticalSection(&cs);
 
-    if (!HasReachedState(opState, EC_STATE_OPERATIONAL)) {
-        // collect detailed per-slave information for diagnosis
+        bool allOp = false;
+        int waitedSec = 0;
+        while (waitedSec < kOpWaitSec) {
+            // Sleep in 200 ms slices until next check point
+            int slicesUntilCheck = kCheckIntervalSec * 5;
+            for (int s = 0; s < slicesUntilCheck && waitedSec < kOpWaitSec; ++s) {
+                Sleep(200);
+                if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+            }
+            waitedSec += kCheckIntervalSec;
+            if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+
+            // Periodic state check — minimal interference at 1 s intervals
+            EnterCriticalSection(&pdoExchangeCS);
+            ecx_readstate(&context);
+            allOp = true;
+            for (int i = 1; i <= slaveCount; ++i) {
+                if ((context.slavelist[i].state & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL) {
+                    allOp = false;
+                    break;
+                }
+            }
+            LeaveCriticalSection(&pdoExchangeCS);
+            if (allOp) break;
+        }
+        EnterCriticalSection(&cs);
+        if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) {
+            SetError("OP wait interrupted (stop event)");
+            LeaveCriticalSection(&cs);
+            return false;
+        }
+
+        // Final readstate to verify and collect per-slave diagnostics
         ecx_readstate(&context);
-        std::stringstream badop;
-        badop << "Failed to reach OP state. Group state=0x" << std::hex << opState << std::dec << "\n";
+        allOp = true;
+        std::vector<int> failedSlaves;
+        for (int i = 1; i <= slaveCount; ++i) {
+            if ((context.slavelist[i].state & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL) {
+                allOp = false;
+                failedSlaves.push_back(i);
+            }
+        }
+
+        // Retry OP with a single broadcast — individual per-slave writestate
+        // blocks the CyclicTask for 6 ms × N slaves and inflates the observed
+        // max cycle to ~75 ms.  A broadcast is one 6 ms block.
+        if (!allOp && !failedSlaves.empty()) {
+            std::stringstream retryMsg;
+            retryMsg << failedSlaves.size() << " slave(s) not yet in OP — retrying broadcast...";
+            SetError(retryMsg.str());
+
+            LeaveCriticalSection(&cs);
+            EnterCriticalSection(&pdoExchangeCS);
+            context.slavelist[0].state = EC_STATE_OPERATIONAL;
+            ecx_writestate(&context, 0);
+            LeaveCriticalSection(&pdoExchangeCS);
+
+            // Wait up to 3 more seconds for DC convergence after retry — early exit
+            // when all slaves reach OP (check every 1 s, same as primary loop).
+            constexpr int kRetryWaitSec = 3;
+            constexpr int kRetryCheckIntervalSec = 1;
+            int retryWaitedSec = 0;
+            bool retryAllOp = false;
+            while (retryWaitedSec < kRetryWaitSec) {
+                int slicesUntilCheck = kRetryCheckIntervalSec * 5;
+                for (int s = 0; s < slicesUntilCheck && retryWaitedSec < kRetryWaitSec; ++s) {
+                    Sleep(200);
+                    if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+                }
+                retryWaitedSec += kRetryCheckIntervalSec;
+                if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) break;
+
+                EnterCriticalSection(&pdoExchangeCS);
+                ecx_readstate(&context);
+                retryAllOp = true;
+                for (int i = 1; i <= slaveCount; ++i) {
+                    if ((context.slavelist[i].state & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL) {
+                        retryAllOp = false;
+                        break;
+                    }
+                }
+                LeaveCriticalSection(&pdoExchangeCS);
+                if (retryAllOp) break;
+            }
+            EnterCriticalSection(&cs);
+            if (WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0) {
+                SetError("OP retry wait interrupted (stop event)");
+                LeaveCriticalSection(&cs);
+                return false;
+            }
+
+            // Recheck
+            ecx_readstate(&context);
+            allOp = true;
+            failedSlaves.clear();
+            for (int i = 1; i <= slaveCount; ++i) {
+                if ((context.slavelist[i].state & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL) {
+                    allOp = false;
+                    failedSlaves.push_back(i);
+                }
+            }
+        }
+
+        // Build per-slave diagnostic log
+        std::stringstream opDiag;
+        opDiag << "OP verification complete:\n";
+        bool anyFailed = false;
         for (int i = 1; i <= slaveCount; ++i) {
             int st = context.slavelist[i].state;
-            const char* alstr = ec_ALstatuscode2string(context.slavelist[i].ALstatuscode);
-            badop << "Slave " << i << ": state=0x" << std::hex << st << std::dec;
-            badop << " ALstatuscode=0x" << std::hex << context.slavelist[i].ALstatuscode << std::dec;
-            if (alstr) badop << " (" << alstr << ")";
-            if ((st & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL) {
-                badop << " [NOT OP]";
+            bool inOp = ((st & EC_STATE_OPERATIONAL) == EC_STATE_OPERATIONAL);
+            if (!inOp) anyFailed = true;
+            opDiag << "  Slave " << i << ": state=0x" << std::hex << st << std::dec;
+            if (!inOp) {
+                opDiag << " [NOT OP!]";
+                const char* alstr = ec_ALstatuscode2string(context.slavelist[i].ALstatuscode);
+                if (alstr) opDiag << " AL=" << alstr;
+                opDiag << " code=0x" << std::hex << context.slavelist[i].ALstatuscode << std::dec;
             }
-            badop << "\n";
+            opDiag << " Obits=" << context.slavelist[i].Obits
+                   << " Ibits=" << context.slavelist[i].Ibits
+                   << " SM2=" << etohs(context.slavelist[i].SM[2].SMlength)
+                   << "B SM3=" << etohs(context.slavelist[i].SM[3].SMlength) << "B";
+            // FMMU diagnostics (for SM watchdog debugging)
+            for (int f = 0; f < EC_MAXFMMU; f++) {
+                auto& fm = context.slavelist[i].FMMU[f];
+                if (fm.FMMUactive) {
+                    opDiag << " FMMU" << f << ":t" << (int)fm.FMMUtype
+                           << " L=0x" << std::hex << etohl(fm.LogStart)
+                           << "+" << std::dec << etohs(fm.LogLength)
+                           << " P=0x" << std::hex << etohs(fm.PhysStart) << std::dec;
+                }
+            }
+            opDiag << " out=" << (void*)context.slavelist[i].outputs
+                   << " in=" << (void*)context.slavelist[i].inputs
+                   << " hasdc=" << (int)context.slavelist[i].hasdc << "\n";
         }
-        SetError(badop.str());
-        LeaveCriticalSection(&cs);
-        return false;
-    }
 
-    SetError("Cyclic operation started");
+        if (anyFailed) {
+            opDiag << "OP FAILED for some slaves (see above)\n";
+            SetError(opDiag.str());
+            LeaveCriticalSection(&cs);
+            return false;
+        }
+        SetError(std::string("Cyclic operation started — all slaves in OP\n") + opDiag.str());
+
+        // Reset cycle-time max counters so the UI shows post-OP jitter,
+        // not the one-time 70 ms spike from pdoDataCS contention during
+        // the OP transition (broadcast + individual retries).
+        maxObservedCommsTime.store(0, std::memory_order_relaxed);
+        maxObservedCycleMicros_.store(0, std::memory_order_relaxed);
+        maxRecvTimeUs_.store(0, std::memory_order_relaxed);
+    }
 
     // Start PDO processing thread for real-time data handling
     StartPDOProcessingThread();
@@ -1159,6 +1748,7 @@ void EtherCATMaster::StopCyclicOperation() {
     stopEvent = NULL;
     
     isRunning = false;
+    pdoPipelinePrimed_.store(false, std::memory_order_release);
     SetError("Cyclic operation stopped");
     // Restore timer resolution if we changed it
     if (timePeriodActive) {

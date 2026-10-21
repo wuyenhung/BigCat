@@ -163,6 +163,7 @@ BigCat 會在執行檔同目錄讀取同名 `.ini`（例如 `BigCat.ini`）。�
 - [Startup] ShowMainWindow — 啟動時是否顯示主視窗（0/1） — 預設：0（關）
 - [Startup] AutoTrigger — 啟動時是否自動觸發自動序列（0/1） — 預設：1（開）
 - [Startup] TriggerTestCrash — 啟動時是否觸發測試當機（0/1） — 預設：0（關）
+- [Compat] ForceWin10Mode — 強制使用 Windows 10 的週期等待策略（0/1） — 預設：0（關，依作業系統自動判斷）
 - [Logging] EnableStatusLog — 是否將狀態訊息寫入 `logs/status.log`（0/1） — 預設：1（開）
 
 範例 `BigCat.ini`（可另存為 `BigCat.ini` 放在執行檔同目錄）：

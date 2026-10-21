@@ -124,6 +124,53 @@ int main() {
         return EXIT_FAILURE;
     }
 
+    // --- Test LoadMachineConfigXmlWithDefaults: missing file → rebuild ---
+    std::filesystem::remove(targetFile, ec);
+    {
+        std::string xmlContent;
+        bool restartRequired = false;
+        std::string rebuildError;
+        bool ok = MachineConfigIO::LoadMachineConfigXmlWithDefaults(targetFile.string(), xmlContent, restartRequired, &rebuildError);
+        if (!Check(!ok, "missing machine.xml should return false for LoadMachineConfigXmlWithDefaults") ||
+            !Check(restartRequired, "missing machine.xml should set restartRequired") ||
+            !Check(std::filesystem::exists(targetFile), "missing machine.xml should be rebuilt on disk") ||
+            !Check(xmlContent.find("<MachineParameters>") != std::string::npos, "rebuilt XML should have MachineParameters root") ||
+            !Check(xmlContent.find("<RodLength>490</RodLength>") != std::string::npos, "rebuilt XML should contain default RodLength")) {
+            std::filesystem::remove_all(tempRoot, ec);
+            return EXIT_FAILURE;
+        }
+    }
+
+    // --- Test LoadMachineConfigXmlWithDefaults: corrupt file → rebuild ---
+    WriteUtf8File(targetFile, "<MachineParameters>");
+    {
+        std::string xmlContent;
+        bool restartRequired = false;
+        std::string rebuildError;
+        bool ok = MachineConfigIO::LoadMachineConfigXmlWithDefaults(targetFile.string(), xmlContent, restartRequired, &rebuildError);
+        if (!Check(!ok, "corrupt machine.xml should return false for LoadMachineConfigXmlWithDefaults") ||
+            !Check(restartRequired, "corrupt machine.xml should set restartRequired") ||
+            !Check(xmlContent.find("<RodLength>490</RodLength>") != std::string::npos, "rebuilt from corrupt should contain default values")) {
+            std::filesystem::remove_all(tempRoot, ec);
+            return EXIT_FAILURE;
+        }
+    }
+
+    // --- Test LoadMachineConfigXmlWithDefaults: valid file → normal load ---
+    WriteUtf8File(targetFile, expectedXml);
+    {
+        std::string xmlContent;
+        bool restartRequired = true;  // Start true to verify it's cleared
+        std::string rebuildError;
+        bool ok = MachineConfigIO::LoadMachineConfigXmlWithDefaults(targetFile.string(), xmlContent, restartRequired, &rebuildError);
+        if (!Check(ok, "valid machine.xml should return true for LoadMachineConfigXmlWithDefaults") ||
+            !Check(!restartRequired, "valid machine.xml should clear restartRequired") ||
+            !Check(xmlContent == expectedXml, "valid machine.xml should return original content unchanged")) {
+            std::filesystem::remove_all(tempRoot, ec);
+            return EXIT_FAILURE;
+        }
+    }
+
     std::filesystem::remove_all(tempRoot, ec);
     return EXIT_SUCCESS;
 }

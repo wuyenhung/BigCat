@@ -86,6 +86,123 @@ bool LoadMachineConfigXml(const std::string& xmlPath,
     return true;
 }
 
+// Built-in default machine.xml content (factory defaults for DS_P100E-7 platform).
+// Used when the file is missing or corrupt — the rebuilt file will match this template.
+std::string BuildHardcodedDefaultMachineXml() {
+    return R"(<?xml version="1.0" encoding="UTF-8"?>
+<MachineParameters>
+  <Platform>
+    <EdgeA>620</EdgeA>
+    <EdgeB>100</EdgeB>
+  </Platform>
+  <Base>
+    <EdgeA>620</EdgeA>
+    <EdgeB>100</EdgeB>
+  </Base>
+  <Actuators>
+    <RodLength>490</RodLength>
+    <ServoArmLength>300</ServoArmLength>
+    <ServoInitialAngle>10</ServoInitialAngle>
+    <ServoAngleLimit>65</ServoAngleLimit>
+    <ServoAxisAngles>
+      <Servo1>120</Servo1>
+      <Servo2>300</Servo2>
+      <Servo3>0</Servo3>
+      <Servo4>180</Servo4>
+      <Servo5>240</Servo5>
+      <Servo6>60</Servo6>
+    </ServoAxisAngles>
+    <ServoPointMap>
+      <Servo1>2</Servo1>
+      <Servo2>1</Servo2>
+      <Servo3>0</Servo3>
+      <Servo4>5</Servo4>
+      <Servo5>4</Servo5>
+      <Servo6>3</Servo6>
+    </ServoPointMap>
+  </Actuators>
+  <Limits>
+    <FisheyeAngleLimit>35</FisheyeAngleLimit>
+    <Singularity>
+      <VerticalAngle>18</VerticalAngle>
+      <HorizontalAngle>87</HorizontalAngle>
+      <ExtendRatio>95</ExtendRatio>
+      <ContractRatio>105</ContractRatio>
+    </Singularity>
+    <MaxPoseLimits>
+      <X>150</X>
+      <Y>150</Y>
+      <Z>150</Z>
+      <Roll>25</Roll>
+      <Pitch>25</Pitch>
+      <Yaw>10</Yaw>
+      <DynamicLimitStartRatio>0.50</DynamicLimitStartRatio>
+      <DynamicLimitMinScale>0.50</DynamicLimitMinScale>
+    </MaxPoseLimits>
+  </Limits>
+  <InverseInput>
+    <CoordinateSystem>platform</CoordinateSystem>
+  </InverseInput>
+  <MMF1>
+    <InputMode>Pose6D</InputMode>
+  </MMF1>
+</MachineParameters>
+)";
+}
+
+bool LoadMachineConfigXmlWithDefaults(const std::string& xmlPath,
+                                      std::string& xmlContent,
+                                      bool& restartRequired,
+                                      std::string* errorMessage) {
+    restartRequired = false;
+
+    // Try loading the existing file
+    std::string loadError;
+    if (LoadMachineConfigXml(xmlPath, xmlContent, &loadError)) {
+        return true;  // File exists and is valid — nothing to do
+    }
+
+    // File is missing or corrupt — rebuild from built-in defaults
+    const std::string defaultXml = BuildHardcodedDefaultMachineXml();
+    xmlContent = defaultXml;
+
+    // Ensure parent directory exists
+    std::error_code ec;
+    const auto parentPath = std::filesystem::path(xmlPath).parent_path();
+    if (!parentPath.empty()) {
+        std::filesystem::create_directories(parentPath, ec);
+        if (ec) {
+            if (errorMessage) {
+                *errorMessage = "failed to create machine.xml directory for rebuild";
+            }
+            return false;
+        }
+    }
+
+    // Write the rebuilt file
+    std::ofstream output(xmlPath, std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        if (errorMessage) {
+            *errorMessage = "failed to write rebuilt machine.xml";
+        }
+        return false;
+    }
+    output << defaultXml;
+    output.flush();
+    if (!output.good()) {
+        if (errorMessage) {
+            *errorMessage = "failed to flush rebuilt machine.xml";
+        }
+        return false;
+    }
+
+    restartRequired = true;
+    if (errorMessage) {
+        errorMessage->clear();
+    }
+    return false;  // Caller must prompt restart
+}
+
 bool SaveMachineConfigXml(const std::string& xmlPath,
                           const std::string& xmlContent,
                           std::string* errorMessage) {
@@ -143,7 +260,8 @@ static bool TryDouble(const tinyxml2::XMLElement* parent, const char* name, long
 bool LoadMachineParams(const std::string& xmlPath,
                        WuSOEM::StewartParams& out,
                        Mmf1InputMode& mode,
-                       Mmf1PoseCoordinateSystem* coordinateSystem) {
+                       Mmf1PoseCoordinateSystem* coordinateSystem,
+                       WuSOEM::Pose6DLimits* pose6dLimits) {
     tinyxml2::XMLDocument doc;
     if (doc.LoadFile(xmlPath.c_str()) != tinyxml2::XML_SUCCESS)
         return false;
@@ -193,6 +311,19 @@ bool LoadMachineParams(const std::string& xmlPath,
     // Limits
     if (const auto* limits = root->FirstChildElement("Limits")) {
         TryDouble(limits, "FisheyeAngleLimit", out.fisheyeAngleLimit);
+        // Parse MaxPoseLimits (硬限制值)
+        if (const auto* maxPose = limits->FirstChildElement("MaxPoseLimits")) {
+            if (pose6dLimits) {
+                TryDouble(maxPose, "X", pose6dLimits->maxX);
+                TryDouble(maxPose, "Y", pose6dLimits->maxY);
+                TryDouble(maxPose, "Z", pose6dLimits->maxZ);
+                TryDouble(maxPose, "Roll", pose6dLimits->maxRoll);
+                TryDouble(maxPose, "Pitch", pose6dLimits->maxPitch);
+                TryDouble(maxPose, "Yaw", pose6dLimits->maxYaw);
+                TryDouble(maxPose, "DynamicLimitStartRatio", pose6dLimits->dynamicLimitStartRatio);
+                TryDouble(maxPose, "DynamicLimitMinScale", pose6dLimits->dynamicLimitMinScale);
+            }
+        }
     }
 
     if (coordinateSystem) {

@@ -1,4 +1,4 @@
-#ifndef UI_CONSTANTS_H
+﻿#ifndef UI_CONSTANTS_H
 #define UI_CONSTANTS_H
 
 // Centralized custom window messages (WM_USER + offset).
@@ -28,6 +28,13 @@
 #define WM_USER_AUTO_DISABLE_ALL (WM_USER + 212)
 #define WM_USER_AUTO_SET_OWNER_STATE (WM_USER + 213)
 #define WM_USER_AUTO_REPORT_UI_STATE (WM_USER + 214)
+#define WM_USER_AUTO_SOFT_START_SUCCEEDED (WM_USER + 215)
+#define WM_USER_REFRESH_IRQ_DISPLAY (WM_USER + 216)
+#define WM_USER_CLEANUP_COMPLETE (WM_USER + 217)
+// Worker (HTTP/SSE) -> UI: re-apply the current adapter selection to the native
+// controls (combobox/connect button/IRQ display). Native controls and registry
+// work must only run on the UI thread; see repo-facts 2026-10-03.
+#define WM_USER_APPLY_SELECTED_ADAPTER_UI (WM_USER + 218)
 
 // WM_USER_AUTO_IMMEDIATE_STOP_REQUEST lParam flags.
 #define AUTO_IMMEDIATE_STOP_FLAG_PDO_ERROR 0x1
@@ -91,6 +98,8 @@
 #define IDC_STATIC_CYCLE_ACTUAL_LABEL 1080
 #define IDC_STATIC_CYCLE_WKC_LABEL 1081
 #define IDC_STATIC_PDO_SENT_LABEL 1082
+#define IDC_STATIC_PDO_PROC_LABEL 1083
+#define IDC_EDIT_PDO_PROC_FREQ 1084
 
 // Motion controls.
 #define IDC_STATIC_MOTION_CONTROL 1100
@@ -111,6 +120,13 @@
 #define IDC_CHK_STARTUP_SHOWMAIN 1116
 #define IDC_CHK_STARTUP_AUTOSEQ 1117
 #define IDC_CHK_STATUS_LOG 1118
+#define IDC_CHK_LOW_LATENCY_MMF 1120
+#define IDC_CHK_MMF_POSE_OUTPUT 1121
+
+// Adapter IRQ display
+#define IDC_STATIC_ADAPTER_IRQ 1200
+#define IDC_STATIC_OTHER_IRQS 1201
+#define IDC_STATIC_RT_CORE   1202
 
 // Auto window controls.
 #define IDC_LIST_MMF 2070

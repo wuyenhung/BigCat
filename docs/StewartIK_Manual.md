@@ -133,6 +133,50 @@ struct ForwardResult {
 };
 ```
 
+### Pose6DLimits - 姿態限制設定
+
+```cpp
+struct Pose6DLimits {
+    // 硬限制（世界座標系）
+    long double maxX = 150.0L;       // X 平移 (mm)
+    long double maxY = 150.0L;       // Y 平移 (mm)
+    long double maxZ = 150.0L;       // Z 平移 (mm)
+    long double maxRoll = 25.0L;     // Roll 旋轉 (°)
+    long double maxPitch = 25.0L;    // Pitch 旋轉 (°)
+    long double maxYaw = 10.0L;      // Yaw 旋轉 (°)
+    // 機構限制（供參考）
+    long double fisheyeAngleLimit = 35.0L;
+    long double servoAngleLimit = 65.0L;
+    // 奇點門檻（供未來使用）
+    long double singularityVerticalAngle = 18.0L;
+    long double singularityHorizontalAngle = 87.0L;
+    long double singularityExtendRatio = 95.0L;
+    long double singularityContractRatio = 105.0L;
+    // 動態 Z 觸發縮放參數（預設值集中定義於 include/StewartIK.h: Pose6DDynamicDefaults）
+    long double dynamicLimitStartRatio = Pose6DDynamicDefaults::kStartRatio;   // 預設 0.50（50%）
+    long double dynamicLimitMinScale   = Pose6DDynamicDefaults::kMinScale;     // 預設 0.50（50%）
+};
+```
+
+**說明**: `Pose6DLimits` 可從 `Par/machine.xml` 的 `<Limits><MaxPoseLimits>` 區段載入。
+
+### Pose6DValidationResult - 姿態驗證結果
+
+```cpp
+struct Pose6DValidationResult {
+    bool valid = true;                        // 是否在硬限制內
+    Pose6DViolationKind violationKind;        // 違規軸
+    long double limitValue;                   // 限制值
+    long double actualValue;                  // 實際值
+    std::string message;                      // UTF-8 錯誤訊息
+    std::wstring messageW;                    // UTF-16 錯誤訊息 (UI)
+    bool dynamicScalingActive = false;        // 動態縮放是否啟用中
+    Pose6D clampedPose;                       // 飽和後的姿態（供 IK 使用）
+};
+```
+
+**重要**: `clampedPose` 是經過動態縮放飽和的安全姿態，應傳入 `CalculateInverse` 而非原始 `pose`。無縮放時 `clampedPose` 等同輸入。
+
 ---
 
 ## API 參考
@@ -292,6 +336,70 @@ static long double NormalizeAngleDeg(long double a);
 ```
 
 **功能**: 將角度正規化到 [-180°, 180°] 範圍。
+
+---
+
+#### ValidatePose6D - 姿態前置驗證
+
+```cpp
+static Pose6DValidationResult ValidatePose6D(
+    const Pose6D& pose,
+    long double initialHeight,
+    const Pose6DLimits& limits
+);
+```
+
+**功能**: 在 IK 計算前驗證姿態是否在安全範圍內，並進行動態行程縮放。
+
+**雙層保護機制**:
+
+| 層級 | 檢查對象 | 違規行為 |
+|------|---------|---------|
+| **硬限制** | 原始 `maxX/Y/Z/Roll/Pitch/Yaw` | **凍結運動**（valid=false） |
+| **動態縮放** | Z 位置 ≥ 50% maxZ 時，septic S-curve 縮小 X/Y/Roll/Pitch/Yaw | **飽和 clamp**（不凍結） |
+
+**動態縮放公式**（Z 觸發，septic S-curve / 7 階 smoothstep）:
+```
+zRatio = |pose.z - initialHeight| / maxZ
+if zRatio >= kStartRatio (預設 0.50):
+    t   = (zRatio - 0.50) / 0.50                     // 正規化 0→1
+    st  = −20t⁷ + 70t⁶ − 84t⁵ + 35t⁴                  // septic smoothstep
+    scale = 1.0 − st × 0.50                           // 輸出 1.0 → 0.50
+    effMaxX = maxX × scale
+    effMaxRoll = maxRoll × scale
+    ... (Y, Pitch, Yaw 同理；Z 本身不縮放)
+```
+
+> **為何使用 septic S-curve？** 線性縮放在啟動／結束點有導數不連續，
+> 造成縮放速度突變 → 瞬間加速度過大。cosine easing 僅保證一階導數連續；
+> quintic 保證到二階（加速度連續）。septic (7 階) smoothstep
+> `s(t)=−20t⁷+70t⁶−84t⁵+35t⁴` 的一階/二階/三階導數在 t=0 和 t=1 皆為零，
+> 確保 jerk 在縮放轉折點也連續，S 曲線特性加倍。
+
+**參數**:
+- `pose`: 世界座標系姿態（z 為絕對值）
+- `initialHeight`: 初始高度（home position Z）
+- `limits`: 限制設定（從 machine.xml 載入）
+
+**返回**: `Pose6DValidationResult`
+- `valid`: 是否在硬限制內
+- `dynamicScalingActive`: Z 是否在縮放區域
+- `clampedPose`: 飽和後的安全姿態，應傳入 `CalculateInverse`
+
+**範例**:
+```cpp
+Pose6DLimits limits;
+Pose6D targetPose;
+targetPose.z = 550.0L;  // Z 位移 = 100mm (67% of 150mm)
+
+auto valid = StewartIK::ValidatePose6D(targetPose, 450.0L, limits);
+if (!valid.valid) {
+    // 超出硬限制：凍結
+} else {
+    // 使用 clampedPose 做 IK
+    auto ik = StewartIK::CalculateInverse(params, valid.clampedPose);
+}
+```
 
 ---
 
@@ -465,6 +573,35 @@ bool verifyKinematics(const StewartParams& params, const Pose6D& targetPose) {
 
 ---
 
+## 動態行程縮放
+
+### 目的
+
+Stewart 平台在中間位置時 6-DOF 行程最大，但上下到極限 Z 高度時因機構干涉不能移動大角度或大位移。動態縮放根據 Z 位置自動調整其他軸的允許範圍。
+
+### 行為表（maxZ=150mm, initialHeight=450mm, cosine easing）
+
+| Z 位置 | Z 比例 | 縮放係數 | X/Y 有效限制 | Roll 有效限制 | Yaw 有效限制 |
+|--------|--------|---------|-------------|--------------|-------------|
+| 450mm (±0mm) | 0% | 1.00 | ±150mm | ±25° | ±10° |
+| 495mm (±45mm) | 30% | 1.00（未啟動） | ±150mm | ±25° | ±10° |
+| 525mm (±75mm) | 50% | 1.00 → 開始縮放 | ±150mm | ±25° | ±10° |
+| 540mm (±90mm) | 60% | 0.95 | ±143mm | ±23.8° | ±9.5° |
+| 555mm (±105mm) | 70% | 0.83 | ±124mm | ±20.7° | ±8.3° |
+| 570mm (±120mm) | 80% | 0.67 | ±101mm | ±16.8° | ±6.7° |
+| 585mm (±135mm) | 90% | 0.55 | ±82mm | ±13.7° | ±5.5° |
+| 600mm (±150mm) | 100% | 0.50 | ±75mm | ±12.5° | ±5° |
+
+### 重要行為
+
+- **非線性 cosine easing 曲線**：縮放過程平滑，兩端導數為零，避免線性縮放造成的瞬間加速度過大
+- **縮放是軟限制（clamp），不是硬限制（freeze）**：當姿態超出縮放後的有效範圍時，會被飽和到邊界值，平台仍可繼續動作
+- **硬限制（maxX/Y/Z/Roll/Pitch/Yaw）超出時才會凍結**
+- 縮放啟用/關閉時會觸發單次 UI 警報聲與 log 訊息
+- 參數可透過 `Par/machine.xml` 的 `<DynamicLimitStartRatio>` 和 `<DynamicLimitMinScale>` 調整
+
+---
+
 ## 錯誤處理
 
 ### 常見錯誤類型
@@ -475,6 +612,7 @@ bool verifyKinematics(const StewartParams& params, const Pose6D& targetPose) {
 | `腿X: 力臂角度超出限制` | 力臂需要超過 ±75° | 調整姿態或增大限制 |
 | `腿X: 連桿長度誤差` | 迭代未收斂 | 檢查機構參數 |
 | `姿態求解失敗` | 正運動學無法收斂 | 提供更好的初始猜測 |
+| `Pose6D 限制違規` | 超出硬限制（maxX/Y/Z/Roll/Pitch/Yaw） | 調整姿態至安全範圍 |
 
 ### 錯誤處理範例
 
@@ -538,7 +676,15 @@ if (!result.valid) {
 
 **A**: 可以，修改 `params.servoAngleLimit`。但請確保實際機構能達到該角度。
 
-### Q5: 如何驗證我的機構參數是否正確？
+### Q5: 動態縮放何時觸發？如何調整門檻？
+
+**A**: 當平台 Z 位置達 maxZ 的 50% 時自動啟動，使用 cosine easing 非線性曲線平滑縮小。預設常數集中定義於 `include/StewartIK.h` 的 `Pose6DDynamicDefaults`，runtime 可透過 `Par/machine.xml` `<MaxPoseLimits>` 覆寫。
+
+### Q6: 動態縮放會讓平台卡住嗎？
+
+**A**: 不會。縮放是**軟限制（clamp/飽和）**，超出時會將姿態飽和到有效邊界值繼續動作，不會凍結。只有超出原始硬限制（maxX=±150mm 等）才會真正凍結。
+
+### Q7: 如何驗證我的機構參數是否正確？
 
 **A**: 
 1. 使用中立位置測試：Z=450, 其他為 0
@@ -551,6 +697,7 @@ if (!result.valid) {
 
 | 版本 | 日期 | 變更內容 |
 |-----|------|---------|
+| 2.1 | 2026-05-28 | 新增 Pose6DLimits / ValidatePose6D；Z 觸發動態行程縮放（clamp 軟限制）；PDO filter 追蹤誤差雙向卡住修正 |
 | 2.0 | 2026-01-30 | 修正逆運動學角度輸出 bug；正運動學改用解析雅可比矩陣 |
 | 1.0 | 2025-xx-xx | 初始版本 |
 

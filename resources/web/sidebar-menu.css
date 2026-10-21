@@ -221,7 +221,8 @@
 .status-header {
   margin: 0 0 12px 0;
   font-size: 1.5rem;
-  color: #333;
+  /* 狀態頁已改為暗黑底色佈局：標題改用全站文字變數（原本寫死 #333 會與深底融在一起） */
+  color: var(--text-color);
   text-align: center;
 }
 
@@ -235,4 +236,46 @@
   border-radius: 6px;
   font-size: 0.9em;
   display: none; /* JS will toggle display:block when showing messages */
+}
+
+/* ---------------- 語言切換（i18n，由 sidebar-menu.js 產生） ---------------- */
+.lang-switcher {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  padding: 4px 2px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+.lang-switcher-label {
+  color: #bbb;
+  font-size: 0.85rem;
+  flex: 0 0 auto;
+}
+
+.sidebar-buttons .lang-btn {
+  width: auto !important;
+  flex: 1 1 auto;
+  min-height: 30px !important;
+  height: auto !important;
+  padding: 4px 10px !important;
+  font-size: 0.9rem !important;
+  justify-content: center !important;
+  background: #3a3a3a !important;
+  color: #eee;
+  cursor: pointer;
+}
+
+.sidebar-buttons .lang-btn:hover {
+  background: #555 !important;
+  transform: none !important;
+}
+
+.sidebar-buttons .lang-btn[aria-pressed="true"] {
+  background: linear-gradient(180deg, #3b8bff, #276bd6) !important;
+  border-color: #1a5ab8 !important;
+  color: #fff;
 }

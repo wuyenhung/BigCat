@@ -4,6 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
     <title>說明 — BigCat 運動控制系統</title>
     <meta name="description" content="BigCat 運動控制系統操作說明與版權宣告" />
     <link rel="icon" href="ka52.ico" type="image/x-icon">
@@ -60,16 +61,39 @@
 
         /* ─── Main Content Area ─── */
         .help-container {
-            max-width: 860px;
+            max-width: 1040px;
             margin: 0 auto;
             padding: 24px 18px 60px;
+        }
+
+        .quick-nav {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+            margin-bottom: 18px;
+        }
+
+        .quick-nav a {
+            color: #dcefff;
+            text-decoration: none;
+            border: 1px solid rgba(79, 172, 254, 0.22);
+            background: rgba(79, 172, 254, 0.08);
+            border-radius: 8px;
+            padding: 9px 10px;
+            text-align: center;
+            font-size: 0.88rem;
+        }
+
+        .quick-nav a:hover {
+            border-color: rgba(79, 172, 254, 0.52);
+            background: rgba(79, 172, 254, 0.14);
         }
 
         /* ─── Section Cards ─── */
         .help-section {
             background: rgba(255, 255, 255, 0.04);
             border: 1px solid rgba(255, 255, 255, 0.08);
-            border-radius: 12px;
+            border-radius: 8px;
             padding: 24px 22px;
             margin-bottom: 22px;
             transition: border-color 0.3s, box-shadow 0.3s;
@@ -124,6 +148,21 @@
             color: #e0e0e0;
         }
 
+        .note-line {
+            color: rgba(255, 255, 255, 0.58);
+            font-size: 0.86rem;
+            margin: -4px 0 10px;
+        }
+
+        .compact-list {
+            columns: 2;
+            column-gap: 28px;
+        }
+
+        .compact-list li {
+            break-inside: avoid;
+        }
+
         /* Warning / safety callout */
         .callout-warning {
             background: rgba(255, 193, 7, 0.08);
@@ -139,6 +178,69 @@
 
         .callout-warning strong {
             color: #ffecb3;
+        }
+
+        /* ─── Safety section (top-priority) ─── */
+        .safety-section {
+            border-color: rgba(239, 68, 68, 0.4) !important;
+            background: rgba(239, 68, 68, 0.04) !important;
+        }
+        .safety-section h2 {
+            color: #f87171 !important;
+            border-bottom-color: rgba(239, 68, 68, 0.2) !important;
+        }
+        .callout-danger {
+            background: rgba(220, 38, 38, 0.12);
+            border-left: 4px solid #ef4444;
+            border-radius: 6px;
+            padding: 14px 16px;
+            margin: 14px 0;
+            font-size: 1.02rem;
+        }
+        .callout-danger p {
+            color: #fca5a5;
+            margin: 0;
+        }
+        .callout-danger strong {
+            color: #fecaca;
+        }
+
+        .safety-rules {
+            list-style: none;
+            padding-left: 0;
+            margin: 10px 0 18px;
+        }
+        .safety-rules li {
+            padding: 8px 12px 8px 32px;
+            margin-bottom: 6px;
+            border-left: 3px solid #f87171;
+            background: rgba(239, 68, 68, 0.04);
+            border-radius: 0 6px 6px 0;
+            line-height: 1.7;
+            position: relative;
+        }
+        .safety-rules li::before {
+            content: "🚫";
+            position: absolute;
+            left: 8px;
+            top: 8px;
+            font-size: 0.85rem;
+        }
+
+        .legal-block {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            border-radius: 6px;
+            padding: 12px 16px;
+            margin: 10px 0;
+            font-size: 0.88rem;
+            line-height: 1.7;
+            color: rgba(255, 255, 255, 0.65);
+        }
+        .legal-block p:first-child {
+            color: #4facfe;
+            font-weight: 600;
+            margin-bottom: 4px;
         }
 
         /* ─── Copyright block ─── */
@@ -207,6 +309,35 @@
             flex: 1;
         }
 
+        /* ─── Param table ─── */
+        .param-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0 16px;
+            font-size: 0.9rem;
+        }
+        .param-table th {
+            text-align: left;
+            color: #4facfe;
+            font-weight: 600;
+            padding: 6px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.12);
+            background: rgba(79,172,254,0.06);
+        }
+        .param-table td {
+            padding: 6px 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            color: rgba(255,255,255,0.8);
+        }
+        .param-table td:first-child { color: #e0e0e0; font-weight: 500; min-width: 7.5em; overflow-wrap: anywhere; }
+        .param-table td:last-child { color: rgba(255,255,255,0.6); }
+
+        .param-table code {
+            color: #b7e6ff;
+            font-family: Consolas, monospace;
+            font-size: 0.92em;
+        }
+
         /* ─── Version / footer ─── */
         .help-footer {
             text-align: center;
@@ -228,6 +359,10 @@
             .help-section {
                 padding: 18px 14px;
             }
+
+            .compact-list {
+                columns: 1;
+            }
         }
     </style>
     <script src="auth.js"></script>
@@ -238,77 +373,345 @@
 
     <div class="help-header">
         <h1>📖 操作說明 / Help</h1>
-        <div class="subtitle">BigCat 運動控制系統 — Operation Guide &amp; Copyright</div>
+        <div class="subtitle">BigCat 運動控制系統 — 各網頁操作與設定重點</div>
     </div>
 
     <div class="help-container">
 
         <!-- ════════════════════════════════════════════ -->
-        <!-- Section 1: 基本操作說明                       -->
+        <!--  ⚠️ 安全警告與免責聲明（置頂，符合中美歐法規） -->
         <!-- ════════════════════════════════════════════ -->
-        <div class="help-section" id="section-guide">
-            <h2><span class="icon">🎮</span> 基本操作說明</h2>
+        <div class="help-section safety-section" id="section-safety">
+            <h2><span class="icon">⚠️</span> 安全警告與免責聲明 / Safety Warning &amp; Disclaimer</h2>
 
-            <h3>1. 系統啟動流程</h3>
-            <ol class="step-list">
-                <li>
-                    <span class="step-badge">1</span>
-                    <span class="step-text">確認所有伺服驅動器已上電，EtherCAT 通訊線纜連接正常。</span>
-                </li>
-                <li>
-                    <span class="step-badge">2</span>
-                    <span class="step-text">啟動 BigCat 應用程式，程式將自動掃描可用的網路介面卡。</span>
-                </li>
-                <li>
-                    <span class="step-badge">3</span>
-                    <span class="step-text">在<strong>主頁</strong>選擇正確的網路介面卡，並設定通訊週期（預設 1.00 ms）。</span>
-                </li>
-                <li>
-                    <span class="step-badge">4</span>
-                    <span class="step-text">點擊 <strong>「連接」</strong> 按鈕，系統將建立 EtherCAT 主站連線並掃描從站。</span>
-                </li>
-                <li>
-                    <span class="step-badge">5</span>
-                    <span class="step-text">連線成功後，可使用 <strong>「自動程序啟動」</strong> 進入自動控制畫面。</span>
-                </li>
-            </ol>
+            <div class="callout-danger">
+                <p><strong>本設備為動力機械，運作期間存在擠壓、撞擊、纏繞等致命風險。操作前務必詳讀並遵守下列安全規範。</strong></p>
+            </div>
 
-            <h3>2. 自動畫面操作</h3>
-            <ul>
-                <li><strong>連線運轉</strong> — 啟動伺服馬達連線運轉模式（需 EtherCAT 已連線、原點設定完成、系統就緒）。</li>
-                <li><strong>到下原點</strong> — 驅動所有軸返回原點位置。</li>
-                <li><strong>異常重置</strong> — 清除驅動器異常狀態（伺服 Fault Reset）。</li>
-                <li><strong>立即停止</strong> — 立即停止所有軸運動。</li>
-                <li><strong>緊急停止</strong> — 觸發緊急停止功能，立即切斷馬達動力。</li>
-                <li><strong>狀態訊息</strong> — 查看系統日誌與狀態資訊。</li>
+            <!-- ── 強制安全規範 ── -->
+            <h3>🚧 強制安全規範 (Mandatory Safety Rules)</h3>
+            <ul class="safety-rules">
+                <li><strong>安全護欄：</strong>平台運動範圍外圍<strong>必須</strong>安裝實體安全護欄或光柵，將所有人員隔離於危險區域之外。護欄高度不低於 1.4 m，與運動邊界保持 ≥ 0.5 m 安全距離。</li>
+                <li><strong>禁止幼童接近：</strong>運作期間<strong>嚴禁</strong>任何幼童（14 歲以下）出現在設備 5 m 範圍內。未經訓練之未成年人不得操作或靠近。</li>
+                <li><strong>人員隔離：</strong>平台通電或運動期間，所有人員<strong>必須</strong>站立於護欄之外。進入護欄內部前須先執行緊急停止並確認馬達斷電。</li>
+                <li><strong>緊急停止：</strong>操作區域內須設置 ≥ 2 個明顯標示且易於觸及的緊急停止按鈕，每月測試功能正常。</li>
+                <li><strong>操作訓練：</strong>所有操作人員須接受完整安全操作訓練，了解平台運動範圍、緊急程序及潛在危險。</li>
+                <li><strong>個人防護裝備 (PPE)：</strong>進入護欄內部進行維護時，須穿戴安全帽、安全鞋及防護手套。</li>
+                <li><strong>定期檢查：</strong>每日開機前檢查護欄完整性、緊急停止功能及機構異常（異音、鬆動、漏油）。</li>
             </ul>
 
-            <h3>3. 狀態指示燈說明</h3>
-            <ul>
-                <li><strong>oEtherCatOk</strong> — EtherCAT 主站通訊正常（綠燈）。</li>
-                <li><strong>oBusy</strong> — 系統正在執行運動指令（藍燈）。</li>
-                <li><strong>oError</strong> — 系統偵測到錯誤（紅燈）。</li>
-                <li><strong>oReady</strong> — 系統就緒，可接受指令（綠燈）。</li>
-                <li><strong>oHomeDone</strong> — 所有軸已完成原點復歸（綠燈）。</li>
-                <li><strong>oOnline</strong> — 伺服馬達已上線運轉中（綠燈）。</li>
-            </ul>
+            <!-- ── 中美歐法規免責聲明 ── -->
+            <h3>📜 法規遵循與免責聲明 (Regulatory Compliance &amp; Limitation of Liability)</h3>
 
-            <h3>4. 其他功能頁面</h3>
-            <ul>
-                <li><strong>示波器</strong> — 即時顯示軸角度波形（RT Scope）。</li>
-                <li><strong>姿態顯示</strong> — 3D 視覺化平台姿態（6DoF Viewer）。</li>
-                <li><strong>機構設定</strong> — Stewart 平台幾何參數設定。</li>
-            </ul>
+            <div class="legal-block">
+                <p><strong>中華民國 (臺灣) — ROC</strong></p>
+                <p>本設備符合《職業安全衛生法》及 CNS 機械安全相關標準。使用者應依《機械設備器具安全標準》設置安全防護。製造商／軟體作者對因下列原因造成之損害不負任何責任：未依規範設置安全護欄、未經訓練之人員操作、擅自改裝或移除安全裝置、未執行定期維護檢查。</p>
+            </div>
 
-            <div class="callout-warning">
-                <p>
-                    <strong>⚠️ 安全警告：</strong>本系統控制之運動平台涉及機械運動，具有造成人員傷亡及設備損壞之潛在風險。操作前請確保：操作區域淨空、緊急停止裝置可用、操作人員受過適當訓練。
-                </p>
+            <div class="legal-block">
+                <p><strong>中華人民共和國 (China) — PRC</strong></p>
+                <p>本設備參照 GB/T 15706《機械安全 基本概念與設計通則》、GB/T 16855.1《機械安全 控制系統安全相關部件》設計。使用者須遵守《安全生產法》於設備周邊設置防護隔離。軟體提供方對非授權操作、安全裝置缺失或不當使用所導致之人身傷害或財產損失概不負責。</p>
+            </div>
+
+            <div class="legal-block">
+                <p><strong>美國 (United States) — USA</strong></p>
+                <p>This equipment is intended for industrial use. Users must comply with OSHA 29 CFR 1910 (Occupational Safety and Health Standards) and ANSI B11 series (Machine Tools Safety). Proper machine guarding and lockout/tagout (LOTO) procedures per OSHA 1910.147 must be implemented. THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES, OR LIABILITY ARISING FROM THE USE OR INABILITY TO USE THE SOFTWARE. Users assume all responsibility for safe operation, guarding, and personnel training.</p>
+            </div>
+
+            <div class="legal-block">
+                <p><strong>歐盟 (European Union) — EU</strong></p>
+                <p>This equipment falls within the scope of Directive 2006/42/EC (Machinery Directive). The integrator is responsible for CE marking, risk assessment per EN ISO 12100, and providing a Declaration of Conformity. Safety-related parts of control systems must comply with EN ISO 13849. THE SOFTWARE AUTHOR DISCLAIMS ALL LIABILITY FOR PERSONAL INJURY OR PROPERTY DAMAGE. The end user must ensure proper safeguarding per EN ISO 13857 (Safety distances) and EN ISO 13855 (Positioning of safeguards).</p>
+            </div>
+
+            <div class="legal-block">
+                <p><strong>一般免責聲明 / General Disclaimer</strong></p>
+                <p>本軟體及硬體平台之作者、開發者、經銷商及相關方，對因使用或無法使用本系統所造成之任何直接、間接、附帶、特殊或衍生性損害（包括但不限於人身傷亡、財產損失、業務中斷），不承擔任何法律或財務責任。使用者（個人或組織）自行承擔安裝、設定、操作及維護本系統之全部風險。作者不保證本軟體適用於任何特定用途、不保證無錯誤或不中斷運作。操作即表示使用者已閱讀、理解並同意上述所有安全規範與免責條款。</p>
             </div>
         </div>
 
+        <nav class="quick-nav" aria-label="說明章節">
+            <a href="#section-safety" data-login-exempt="true">⚠️ 安全</a>
+            <a href="#section-common" data-login-exempt="true">共用操作</a>
+            <a href="#section-main" data-login-exempt="true">主頁</a>
+            <a href="#section-auto" data-login-exempt="true">自動畫面</a>
+            <a href="#section-scope" data-login-exempt="true">示波器</a>
+            <a href="#section-viewer" data-login-exempt="true">姿態顯示</a>
+            <a href="#section-stewart" data-login-exempt="true">機構設定</a>
+            <a href="#section-status" data-login-exempt="true">狀態訊息</a>
+            <a href="#section-help" data-login-exempt="true">說明頁</a>
+        </nav>
+
+        <div class="help-section" id="section-common">
+            <h2><span class="icon">☰</span> 共用操作 — 側邊選單與登入</h2>
+
+            <h3>操作提示</h3>
+            <ul class="compact-list">
+                <li><strong>☰</strong> 開啟側邊選單，切換各功能頁。</li>
+                <li><strong>登入</strong> 輸入 API Key / 密碼後啟用控制項。</li>
+                <li><strong>登出</strong> 停止本瀏覽器的操作權限。</li>
+                <li><strong>未登入</strong> 多數按鈕、輸入框會鎖定。</li>
+                <li><strong>連線狀態燈</strong> 顯示目前伺服器 / EtherCAT 通訊狀態。</li>
+                <li><strong>Help</strong> 可未登入閱讀。</li>
+            </ul>
+
+            <h3>狀態判讀</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>說明</th><th>操作</th></tr>
+                <tr><td>API Key / 密碼</td><td>取得網頁操作權限</td><td>側邊選單按登入</td></tr>
+                <tr><td>頁面鎖定</td><td>未登入或伺服器拒絕操作</td><td>先登入，再確認主頁連線</td></tr>
+                <tr><td>SSE</td><td>即時資料推送</td><td>斷線時重新整理頁面</td></tr>
+            </table>
+        </div>
+
         <!-- ════════════════════════════════════════════ -->
-        <!-- Section 2: 版權宣告（中文）                    -->
+        <!--  主頁 (index.html)                            -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-main">
+            <h2><span class="icon">🏠</span> 主頁 index.html — 連線與從站管理</h2>
+
+            <h3>操作提示</h3>
+            <ol class="step-list">
+                <li><span class="step-badge">1</span><span class="step-text">登入後選擇<strong>網路介面卡</strong>。</span></li>
+                <li><span class="step-badge">2</span><span class="step-text">點擊<strong>設定週期</strong>數字，輸入 EtherCAT 週期。</span></li>
+                <li><span class="step-badge">3</span><span class="step-text">按 <strong>[連接]</strong> 掃描從站；需要停用時按 <strong>[斷開]</strong>。</span></li>
+                <li><span class="step-badge">4</span><span class="step-text">選定從站後使用 SDO 讀寫，必要時載入 ESI。</span></li>
+            </ol>
+
+            <h3>設定項目</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>說明</th><th>值 / 範圍</th></tr>
+                <tr><td>網路介面卡</td><td>EtherCAT 主站使用的實體網卡</td><td>由 <code>/adapters</code> 載入</td></tr>
+                <tr><td>設定週期</td><td>送到後端的 EtherCAT 週期</td><td>0.5–10 ms，常用 1.00 ms</td></tr>
+                <tr><td>實際週期</td><td>量測到的實際週期 (ms)</td><td>唯讀顯示</td></tr>
+                <tr><td>最大週期</td><td>尖峰週期時間 (ms)</td><td>唯讀顯示</td></tr>
+                <tr><td>選定從站</td><td>目前要操作的 EtherCAT slave</td><td>連線後由從站列表帶入</td></tr>
+            </table>
+
+            <h3>按鈕說明</h3>
+            <ul>
+                <li><strong>[連接] / [斷開]</strong> 建立或停止 EtherCAT 主站連線。</li>
+                <li><strong>[自動程序啟動] / [自動程序停止]</strong> 啟停背景自動控制流程。</li>
+                <li><strong>[讀取] / [寫入]</strong> 對選定 SDO 項目操作。</li>
+                <li><strong>[全部讀取] / [全部寫入]</strong> 批次處理目前從站 SDO。</li>
+                <li><strong>[ESI 檔案讀取]</strong> 載入 ESI XML，更新 SDO 定義。</li>
+                <li><strong>[機構設定]、[狀態訊息]</strong> 直接開啟對應頁面。</li>
+            </ul>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  自動控制 (auto.html)                         -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-auto">
+            <h2><span class="icon">⚙️</span> 自動畫面 auto.html — 運動指令與軸狀態</h2>
+
+            <h3>操作提示</h3>
+            <ul>
+                <li>先在主頁完成連線，再進入自動畫面。</li>
+                <li>按鈕是否可用由後端狀態控制；灰色表示目前條件不允許。</li>
+                <li>表格即時顯示 1–6 軸實際角度、輸入角度、0x603F 異常碼。</li>
+            </ul>
+
+            <h3>操作按鈕</h3>
+            <table class="param-table">
+                <tr><th>按鈕</th><th>功能</th><th>前置條件</th></tr>
+                <tr><td>連線運轉</td><td>讓伺服進入可運轉狀態</td><td>已登入、EtherCAT 正常</td></tr>
+                <tr><td>到下原點</td><td>執行下原點 / Home 流程</td><td>伺服可動作</td></tr>
+                <tr><td>異常重置</td><td>清除驅動器 Fault</td><td>異常發生且後端允許</td></tr>
+                <tr><td>立即停止</td><td>立即停止所有軸運動</td><td>任何狀態</td></tr>
+                <tr><td>緊急停止</td><td>送出 E-Stop 指令</td><td>任何狀態</td></tr>
+                <tr><td>狀態訊息</td><td>開啟 log 頁</td><td>無</td></tr>
+            </table>
+
+            <h3>狀態指示燈</h3>
+            <table class="param-table">
+                <tr><th>燈號</th><th>含義</th></tr>
+                <tr><td>🟢 <span>EtherCAT 正常</span></td><td>EtherCAT 通訊正常</td></tr>
+                <tr><td>🔵 <span>忙碌</span></td><td>系統正在執行運動中</td></tr>
+                <tr><td>🔴 <span>錯誤</span></td><td>偵測到錯誤，需檢查日誌</td></tr>
+                <tr><td>🟢 <span>就緒</span></td><td>系統就緒可接受指令</td></tr>
+                <tr><td>🟢 <span>原點完成</span></td><td>所有軸已完成原點復歸</td></tr>
+                <tr><td>🟢 <span>上線</span></td><td>伺服馬達已上線運轉中</td></tr>
+            </table>
+
+            <h3>欄位說明</h3>
+            <table class="param-table">
+                <tr><th>欄位</th><th>說明</th><th>來源</th></tr>
+                <tr><td>實際角度</td><td>每軸目前回授角度</td><td><code>/pdo_sse</code></td></tr>
+                <tr><td>輸入角度</td><td>目前命令或 MMF 輸入角度</td><td>後端狀態</td></tr>
+                <tr><td>0x603F 異常碼</td><td>驅動器錯誤碼</td><td>PDO / SDO 狀態</td></tr>
+            </table>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  示波器 (RT_scope.html)                       -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-scope">
+            <h2><span class="icon">📊</span> 示波器 RT_scope.html — 即時波形監控</h2>
+
+            <h3>操作提示</h3>
+            <ul class="compact-list">
+                <li>選擇<strong>從軸</strong>或所有從軸。</li>
+                <li>勾選要顯示的<strong>數據類型</strong>。</li>
+                <li>用滑鼠滾輪縮放，拖曳平移。</li>
+                <li><strong>Shift + 拖曳</strong> 框選放大。</li>
+                <li>按 <strong>[暫停]</strong> 凍結畫面。</li>
+                <li>按 <strong>[清除]</strong> 清空目前曲線。</li>
+                <li>按 <strong>[重置縮放]</strong> 回到即時跟隨。</li>
+            </ul>
+
+            <h3>設定項目</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>說明</th><th>值 / 範圍</th></tr>
+                <tr><td>PDO即時記錄與MMF輸出</td><td>啟用 PDO log 與 MMF 輸出</td><td>需登入；log 在 <code>logs\PDO.log</code></td></tr>
+                <tr><td>從軸選擇</td><td>選軸 1–6 或全部軸</td><td>從軸 1–6 / 所有從軸</td></tr>
+                <tr><td>顯示點數</td><td>時間視窗長度</td><td>200–50000 點，預設 5000 點</td></tr>
+                <tr><td>MMF 輸入軸</td><td>控制 MMF 1–6 是否顯示</td><td>1–6 可獨立開關</td></tr>
+                <tr><td>Filter 輸入軸</td><td>控制 Filter 角度輸入軸</td><td>1–6 可獨立開關</td></tr>
+            </table>
+
+            <h3>數據類型</h3>
+            <table class="param-table">
+                <tr><th>類型</th><th>用途</th><th>單位 / 來源</th></tr>
+                <tr><td>實際位置 0x6064</td><td>馬達實際位置</td><td>deg</td></tr>
+                <tr><td>邏輯目標位置 0x607A</td><td>控制器目標位置</td><td>deg</td></tr>
+                <tr><td>實際速度 0x606C</td><td>馬達速度回授</td><td>deg/s</td></tr>
+                <tr><td>CSV 命令速度 0x60FF</td><td>CSV 模式速度命令</td><td>deg/s</td></tr>
+                <tr><td>MMF 輸入 / 輸入速度</td><td>外部共享記憶體輸入</td><td>角度 / 速度</td></tr>
+                <tr><td>Filter 輸出 / 速度 / 加速度</td><td>濾波器命令與導數</td><td>deg、deg/s、deg/s²</td></tr>
+                <tr><td>EtherCAT 通訊週期</td><td>主站週期抖動觀察</td><td>ms</td></tr>
+            </table>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  姿態顯示 (viewer_6dof.html)                  -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-viewer">
+            <h2><span class="icon">🎥</span> 姿態顯示 viewer_6dof.html — 3D 平台視覺化</h2>
+
+            <h3>操作提示</h3>
+            <ul>
+                <li><strong>左鍵拖曳</strong> 旋轉視角；<strong>滾輪</strong> 縮放。</li>
+                <li>手動模式可調整 X/Y/Z 與 Pitch/Yaw/Roll 滑桿。</li>
+                <li>勾選<strong>外部 MMF 輸入</strong>後，由 <code>/pdo_sse</code> 即時同步姿態。</li>
+                <li><strong>[姿態重置]</strong> 清空 6DoF 值；<strong>[視野重置]</strong> 回復相機視角。</li>
+            </ul>
+
+            <h3>設定項目</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>說明</th><th>範圍 / 預設</th></tr>
+                <tr><td>外部 MMF 輸入</td><td>切換手動滑桿或外部資料</td><td>未勾選 = UI 手動輸入</td></tr>
+                <tr><td>X / Y / Z</td><td>平台平移量</td><td>-200 至 200 mm，步進 0.001</td></tr>
+                <tr><td>Pitch / Yaw / Roll</td><td>平台旋轉量</td><td>-30 至 30°，步進 0.001</td></tr>
+                <tr><td>inputSourceStatus</td><td>目前資料來源</td><td>UI 手動輸入 / 外部 MMF</td></tr>
+            </table>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  機構設定 (stewart_platform.html)             -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-stewart">
+            <h2><span class="icon">📐</span> 機構設定 stewart_platform.html — Stewart 參數、IK/FK、Planner</h2>
+
+            <h3>操作提示</h3>
+            <ul>
+                <li>修改機構參數後，畫面會重新計算 IK/FK 與圖形。</li>
+                <li>拖曳 3D 視圖目標時會自動同步 Native Planner；放開後自動停止。</li>
+                <li>需保存到設備設定時，按 <strong>[匯出到 machine.xml]</strong>。</li>
+                <li>要載入目前設備設定，按 <strong>[從 machine.xml 匯入]</strong>。</li>
+            </ul>
+
+            <h3>Native Planner</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>說明</th><th>預設 / 狀態</th></tr>
+                <tr><td>線速</td><td>平台平移速度</td><td>600 mm/s，最小 1</td></tr>
+                <tr><td>角速</td><td>平台旋轉速度</td><td>120 deg/s，最小 1</td></tr>
+                <tr><td>SSE</td><td>planner 即時連線狀態</td><td>離線 / 連線中</td></tr>
+                <tr><td>動作 / IK</td><td>目前動作與 IK 有效性</td><td>唯讀</td></tr>
+                <tr><td>週期 / 速率</td><td>後端計算節拍</td><td>唯讀</td></tr>
+            </table>
+
+            <h3>機構參數</h3>
+            <table class="param-table">
+                <tr><th>參數</th><th>說明</th><th>預設 / 範圍</th></tr>
+                <tr><td>平台長/短邊</td><td>上平台六邊形尺寸</td><td>A=620, B=100 mm，最小 10</td></tr>
+                <tr><td>基座長/短邊</td><td>下基座六邊形尺寸</td><td>A=620, B=100 mm，最小 10</td></tr>
+                <tr><td>連接桿長度</td><td>魚眼中心距</td><td>490 mm</td></tr>
+                <tr><td>力臂長度</td><td>伺服力臂長</td><td>300 mm</td></tr>
+                <tr><td>力臂初始角度</td><td>Home 位置角度</td><td>10°，範圍 0–45°</td></tr>
+                <tr><td>力臂安裝角度 1–6</td><td>各軸安裝方位</td><td>0–360°</td></tr>
+            </table>
+
+            <h3>限制與奇點</h3>
+            <table class="param-table">
+                <tr><th>項目</th><th>用途</th><th>預設 / 範圍</th></tr>
+                <tr><td>最大姿態限制</td><td>X/Y/Z、Roll/Pitch/Yaw 硬限制</td><td>X/Y/Z=100 mm，Roll/Pitch=30°，Yaw=15°</td></tr>
+                <tr><td>魚眼軸承最大角度</td><td>保護魚眼軸承</td><td>30°，範圍 15–60°</td></tr>
+                <tr><td>力臂擺動範圍</td><td>限制伺服力臂角度</td><td>75°，範圍 30–180°</td></tr>
+                <tr><td>奇點垂直 / 水平角度</td><td>連桿接近 Z 軸或水平時警告</td><td>18° / 87°</td></tr>
+                <tr><td>伸展 / 收縮比例</td><td>接近可達邊界時警告</td><td>95% / 105%</td></tr>
+            </table>
+
+            <h3>IK / FK 輸入</h3>
+            <table class="param-table">
+                <tr><th>區塊</th><th>操作</th><th>設定值</th></tr>
+                <tr><td>MMF1 輸入模式</td><td>選擇外部輸入格式</td><td>伺服角度值 / 6DOF 座標值</td></tr>
+                <tr><td>逆運動學座標系</td><td>設定 XYZ 移動基準</td><td>世界座標系 / 平台座標系</td></tr>
+                <tr><td>6DoF 姿態輸入</td><td>輸入 X/Y/Z/Roll/Pitch/Yaw</td><td>單位 mm / deg</td></tr>
+                <tr><td>力臂角度輸出</td><td>IK 計算後的 1–6 軸角度</td><td>唯讀</td></tr>
+                <tr><td>力臂角度輸入</td><td>FK 輸入 1–6 軸角度</td><td>-180 至 180°</td></tr>
+                <tr><td>6DoF 姿態輸出</td><td>FK 計算結果</td><td>唯讀</td></tr>
+            </table>
+
+            <h3>視圖控制</h3>
+            <ul class="compact-list">
+                <li><strong>[後俯視圖] [側面視圖] [頂部視圖]</strong> 切換相機方向。</li>
+                <li><strong>X/Y/Z ↑↓</strong> 旋轉視圖。</li>
+                <li><strong>顯示軌跡</strong> 顯示目標運動路徑。</li>
+                <li><strong>開啟景深</strong> 使用透視效果。</li>
+                <li><strong>⤢</strong> 切換畫布全螢幕。</li>
+            </ul>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  狀態訊息 (status.html)                       -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-status">
+            <h2><span class="icon">📋</span> 狀態訊息 status.html — 系統日誌</h2>
+
+            <h3>操作提示</h3>
+            <ul>
+                <li><strong>自動刷新</strong> 勾選後每 5 秒重新讀取 <code>/status</code>。</li>
+                <li><strong>[清除訊息]</strong> 呼叫 <code>/clear_status</code> 清除伺服器日誌。</li>
+                <li>最新訊息顯示在上方；手動查看歷史訊息時可取消自動刷新。</li>
+                <li>清除需要登入；未授權會顯示提示訊息。</li>
+            </ul>
+
+            <h3>日誌內容</h3>
+            <table class="param-table">
+                <tr><th>類型</th><th>用途</th><th>處理建議</th></tr>
+                <tr><td>EtherCAT 狀態</td><td>連線、從站、週期變化</td><td>異常時回主頁確認連線</td></tr>
+                <tr><td>運動指令</td><td>啟動、停止、Home、Planner 指令</td><td>確認指令是否被後端接受</td></tr>
+                <tr><td>錯誤 / 警告</td><td>驅動器 Fault、限制違規、通訊錯誤</td><td>先停機，再依訊息排除</td></tr>
+                <tr><td>Pose6D 限制</td><td>姿態超出安全範圍</td><td>回到限制內再繼續操作</td></tr>
+            </table>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  說明頁 (help.html)                           -->
+        <!-- ════════════════════════════════════════════ -->
+        <div class="help-section" id="section-help">
+            <h2><span class="icon">📖</span> 說明頁 help.html — 操作索引</h2>
+
+            <h3>使用方式</h3>
+            <ul>
+                <li>上方章節索引可快速跳到每個網頁說明。</li>
+                <li>每章只列操作提示、設定值與狀態判讀。</li>
+                <li>若畫面項目與說明不同，優先依實際頁面與後端狀態操作。</li>
+            </ul>
+        </div>
+
+        <!-- ════════════════════════════════════════════ -->
+        <!--  版權宣告                                     -->
         <!-- ════════════════════════════════════════════ -->
         <div class="help-section" id="section-copyright">
             <h2><span class="icon">©</span> 版權宣告 / Copyright</h2>

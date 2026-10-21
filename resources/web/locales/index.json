@@ -1,0 +1,20 @@
+{
+  "_comment": "語系註冊表。新增語系＝在本目錄放 <code>.json，並在 supported 增加一項（順序＝選單顯示順序）。file 相對於本目錄。",
+  "source": "zh-Hant",
+  "supported": [
+    {
+      "code": "zh-Hant",
+      "name": "Chinese (Traditional)",
+      "nativeName": "繁體中文",
+      "file": "zh-Hant.json",
+      "htmlLang": "zh-Hant"
+    },
+    {
+      "code": "en",
+      "name": "English",
+      "nativeName": "English",
+      "file": "en.json",
+      "htmlLang": "en"
+    }
+  ]
+}

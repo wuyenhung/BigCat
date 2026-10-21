@@ -684,6 +684,7 @@ void StartSseBroadcaster() {
             WakeGeneralSseBroadcaster();
         });
     g_sseBroadcaster = std::thread([]() {
+        try {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
         {
@@ -797,9 +798,11 @@ void StartSseBroadcaster() {
 
                 uint32_t observedCycleUs = 0;
                 std::array<double, 6> filterInputAngles = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+                std::array<double, 6> filterInputVels = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
                 if (auto* master = AppController::GetInstance().GetMaster()) {
                     observedCycleUs = master->GetObservedCycleTimeUs();
                     filterInputAngles = master->GetPDOFilterInputAngles();
+                    filterInputVels = master->GetPDOFilterInputVelocities();  // precise, cyclic-computed
                 }
 
                 const uint64_t seqOut = ++seqCounter;
@@ -899,12 +902,14 @@ void StartSseBroadcaster() {
                         ",\"tVelText\":\"%s\",\"aVelText\":\"%s\""
                         ",\"tPos\":%g,\"tVel\":%g,\"aPos\":%g,\"aVel\":%g"
                         ",\"filterInput\":%g,\"filter\":%g,\"filterVel\":%g,\"filterAcc\":%g"
+                        ",\"filterInputVel\":%g"
                         ",\"mmfIn\":%g,\"mmfInVel\":%g"
                         ",\"errorCode603F\":%s,\"errorCode603FValid\":%s,\"errorCode603FReadFailed\":%s"
                         ",\"cw\":%u,\"sw\":%u}",
                         tPosText, aPosText, tVelText, aVelText,
                         tPosNum, tVelNum, aPosNum, aVelNum,
                         filterInputAngles[i], filterOut, filterVel, filterAcc,
+                        filterInputVels[i],
                         mmfIn, mmfInVel,
                         errorCodeValid ? std::to_string(errorCode603F).c_str() : "null",
                         errorCodeValid ? "true" : "false",
@@ -913,7 +918,38 @@ void StartSseBroadcaster() {
                     json.append(numbuf, (n > 0 && n < (int)sizeof(numbuf)) ? (size_t)n : strlen(numbuf));
                 }
 
-                json += "]}";
+                json += "]";
+
+                // ---- PDO actual-angle → 6-DOF forward kinematics ----
+                // Emit at JSON top level so RT_scope.html can read data.fwdKin.
+                // Roll/Pitch swapped to match MMF convention: pose.roll(前後)→"pitch", pose.pitch(左右)→"roll".
+                // Z emitted as relative height (world Z − initialHeight).
+                {
+                    bool fwdValid = false;
+                    WuSOEM::Pose6D fwdPose;
+                    long double fwdInitH = 450.0L;
+                    if (auto* master = AppController::GetInstance().GetMaster()) {
+                        master->GetForwardKinematicsResult(fwdPose, fwdValid, fwdInitH);
+                    }
+                    char fwdBuf[512];
+                    int fwdN = snprintf(fwdBuf, sizeof(fwdBuf),
+                        ",\"fwdKin\":{"
+                        "\"valid\":%s"
+                        ",\"x\":%.4f,\"y\":%.4f,\"z\":%.4f"
+                        ",\"roll\":%.4f,\"pitch\":%.4f,\"yaw\":%.4f}",
+                        fwdValid ? "true" : "false",
+                        static_cast<double>(fwdPose.x),
+                        static_cast<double>(fwdPose.y),
+                        static_cast<double>(fwdPose.z - fwdInitH),
+                        static_cast<double>(fwdPose.pitch),
+                        static_cast<double>(fwdPose.roll),
+                        static_cast<double>(fwdPose.yaw));
+                    if (fwdN > 0 && fwdN < (int)sizeof(fwdBuf)) {
+                        json.append(fwdBuf, static_cast<size_t>(fwdN));
+                    }
+                }
+
+                json += "}";
                 payload = json;
                 ::BroadcastSSE(payload);
 
@@ -932,6 +968,11 @@ void StartSseBroadcaster() {
             const int waitMs = fastPolling ? activeIntervalMs : kSseConnectedIdleWaitMs;
             std::unique_lock<std::mutex> waitLock(g_sseWakeMutex);
             g_sseWakeCv.wait_for(waitLock, milliseconds(waitMs));
+        }
+        } catch (const std::exception& e) {
+            OutputDebugStringA((std::string("[SSE Broadcaster] exception: ") + e.what() + "\n").c_str());
+        } catch (...) {
+            OutputDebugStringA("[SSE Broadcaster] unknown exception\n");
         }
     });
 }
@@ -1071,15 +1112,26 @@ void StartStewartNativePlanner() {
 
     g_stewartNativePlannerRun.store(true);
     g_stewartNativePlannerThread = std::thread([]() {
+        try {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
         using clock = std::chrono::steady_clock;
         auto nextWake = clock::now();
-        constexpr uint32_t kNativePeriodUs = 2000;
         constexpr uint64_t kBroadcastEveryCycles = 5;
+        uint32_t prevPeriodUs = 0;
 
         while (g_stewartNativePlannerRun.load()) {
-            nextWake += std::chrono::microseconds(kNativePeriodUs);
+            // Read desired PDO cycle time dynamically (set via UI/API, 500-10000 us)
+            uint32_t periodUs = g_desiredCycleTimeUs;
+            if (periodUs == 0) periodUs = 2000;  // fallback default
+
+            // Re-baseline nextWake when period changes to avoid accumulation error
+            if (periodUs != prevPeriodUs) {
+                nextWake = clock::now() + std::chrono::microseconds(periodUs);
+                prevPeriodUs = periodUs;
+            } else {
+                nextWake += std::chrono::microseconds(periodUs);
+            }
 
             StewartNativeTargetRequest target;
             StewartNativePlannerState state;
@@ -1091,7 +1143,7 @@ void StartStewartNativePlanner() {
 
             bool shouldBroadcast = false;
             if (target.valid) {
-                state.updatePeriodUs = kNativePeriodUs;
+                state.updatePeriodUs = periodUs;
                 state.lastCycleEpochMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 state.cycleCounter += 1;
@@ -1121,7 +1173,7 @@ void StartStewartNativePlanner() {
                     if (target.snapToTarget) {
                         state.currentPose = target.targetPose;
                     } else {
-                        const long double dtSec = static_cast<long double>(kNativePeriodUs) / 1000000.0L;
+                        const long double dtSec = static_cast<long double>(periodUs) / 1000000.0L;
                         const long double linearStep = state.linearSpeedMmPerSec * dtSec;
                         const long double angularStep = state.angularSpeedDegPerSec * dtSec;
                         state.currentPose = AdvancePoseToward(
@@ -1151,6 +1203,11 @@ void StartStewartNativePlanner() {
 
             std::this_thread::sleep_until(nextWake);
         }
+        } catch (const std::exception& e) {
+            OutputDebugStringA((std::string("[StewartNativePlanner] exception: ") + e.what() + "\n").c_str());
+        } catch (...) {
+            OutputDebugStringA("[StewartNativePlanner] unknown exception\n");
+        }
     });
 }
 
@@ -1176,6 +1233,7 @@ void StartStewartSseBroadcaster() {
     ::StartStewartNativePlanner();
     g_stewartSseBroadcastRun.store(true);
     g_stewartSseBroadcaster = std::thread([]() {
+        try {
         SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
         uint64_t lastProcessedInverseSeq = 0;
@@ -1220,6 +1278,11 @@ void StartStewartSseBroadcaster() {
                 ::BroadcastStewartSSE(BuildStewartForwardStreamPayload(forwardRequest));
                 lastProcessedForwardSeq = forwardRequest.seq;
             }
+        }
+        } catch (const std::exception& e) {
+            OutputDebugStringA((std::string("[StewartSSE] exception: ") + e.what() + "\n").c_str());
+        } catch (...) {
+            OutputDebugStringA("[StewartSSE] unknown exception\n");
         }
     });
 }

@@ -1,0 +1,273 @@
+{
+  "currentTier": "T3",
+  "threshold": 0.8,
+  "entries": [
+    {
+      "at": "2026-10-20T20:53:00+08:00",
+      "tier": "T2",
+      "task": "驗證 resources/web/ka-52.glb 可否用 Blender 編輯（匯入＋截圖確認）",
+      "outcome": "success",
+      "note": "驗收依據：匯入成功22物件/17萬面，截圖模型完整"
+    },
+    {
+      "at": "2026-10-20T20:59:30+08:00",
+      "tier": "T3",
+      "task": "ka-52.glb 主旋翼動畫：建 keyframe、保留 Web 節點名、匯出 ka-52-animated.glb",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：GLB解析2條rotation動畫+頂視圖逐格驗證"
+    },
+    {
+      "at": "2026-10-20T21:09:00+08:00",
+      "tier": "T2",
+      "task": "在 Blender 啟動主旋翼動畫播放（版面無 Timeline，轉 Dope Sheet TIMELINE 模式）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：影格2→13持續前進+視口截圖"
+    },
+    {
+      "at": "2026-10-20T21:21:00+08:00",
+      "tier": "T3",
+      "task": "ka-52 主軸不轉修正：從機身 mesh 分離主軸幾何(含UV)、掛旋翼子節點、重匯 GLB",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：逐格截圖主軸隨轉+GLB樹Mast掛Rotor下"
+    },
+    {
+      "at": "2026-10-20T21:34:30+08:00",
+      "tier": "T3",
+      "task": "ka-52 不同心+槳夾不轉修正：槳夾環帶搬入主軸件、槳葉PCA交點對軸、全部齊軸後重匯",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：四件off<1.3cm+逐格頂視圖+GLB樹Mast掛Rotor下"
+    },
+    {
+      "at": "2026-10-20T21:54:30+08:00",
+      "tier": "T3",
+      "task": "ka-52 依使用者指示重做：原始檔重匯、以轉盤(z≈2.2)為界分上/下旋翼組、不修幾何、反向旋轉",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：逐格/側視截圖+GLB樹Mast掛Rotor+2動畫"
+    },
+    {
+      "at": "2026-10-20T21:58:00+08:00",
+      "tier": "T2",
+      "task": "ka-52 轉動偏心修正：槳尖圓擬合定真軸、移動物件原點(不動頂點)、重匯",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：三格槳心偏軸≤2.1mm(原167mm)+世界座標誤差0"
+    },
+    {
+      "at": "2026-10-20T22:05:00+08:00",
+      "tier": "T2",
+      "task": "查證 Ka-52 旋翼頭/斜盤/連桿構造，評估下旋翼連桿是否能依資料修正",
+      "outcome": "success",
+      "note": "主模型直跑；查 Wikipedia 確認共軸3槳、雙斜盤；未改幾何，維持現版定案"
+    },
+    {
+      "at": "2026-10-20T22:09:00+08:00",
+      "tier": "T2",
+      "task": "ka-52 轉速恢復 0.5 秒/圈並覆寫存回 resources/web/ka-52.glb（先備份原檔）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：GLB 2動畫0.5s+Mast掛Rotor+備份SHA256留存"
+    },
+    {
+      "at": "2026-10-20T22:12:00+08:00",
+      "tier": "T1",
+      "task": "ka-52 上下旋翼旋轉方向對調（GLB 重匯＋viewer dir 同步）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：frame8 上-168°/下+168°，GLB/viewer 方向一致"
+    },
+    {
+      "at": "2026-10-20T22:25:00+08:00",
+      "tier": "T4",
+      "task": "BigCat HTTP 自動跳埠（8080被佔用→8081..8089）＋bind失敗回報",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：建置OK+httpserver測試3/3+用戶實跑正常"
+    },
+    {
+      "at": "2026-10-20T22:33:00+08:00",
+      "tier": "T1",
+      "task": "刪除中間檔 ka-52-animated.glb",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：Test-Path False、無程式引用、備份相符"
+    },
+    {
+      "at": "2026-10-20T23:05:00+08:00",
+      "tier": "T3",
+      "task": "AH-64.glb 注入主旋翼繞本地Z旋轉動畫（0.5s/rev、16鍵、LINEAR）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：BIN前綴位元組相同、q讀回=[0,0,sin,cos]、時間0→0.5s、名稱保留"
+    },
+    {
+      "at": "2026-10-20T23:30:00+08:00",
+      "tier": "T3",
+      "task": "Blender GUI 實測 AH-64 動畫＋渲染 GIF",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：tilt=0全程、24.0°/格×15段均勻、f16回f1、GIF已渲染檢視"
+    },
+    {
+      "at": "2026-10-20T23:24:00+08:00",
+      "tier": "T3",
+      "task": "AH-64 Blender動畫遭使用者打回重修",
+      "outcome": "failure",
+      "note": "verify:只驗鍵值角度未驗畫面同軸；盤面直立＋主軸不轉未察覺"
+    },
+    {
+      "at": "2026-10-20T23:24:30+08:00",
+      "tier": "T4",
+      "task": "修Blender場景：盤面扶正＋主軸/槳毂掛MainRotor同轉＋重打鍵值並播放",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：dotUP=0.997、tilt=0全程、24°/格、主軸飄移<1mm、影格9確認播放中"
+    },
+    {
+      "at": "2026-10-20T23:38:00+08:00",
+      "tier": "T3",
+      "task": "AH-64 Blender 主軸/雷達失蹤搶修",
+      "outcome": "failure",
+      "note": "env:手算parent_inverse把scale連乘成2e-6；零件縮成不可見"
+    },
+    {
+      "at": "2026-10-20T23:42:00+08:00",
+      "tier": "T3",
+      "task": "重建乾淨場景：原始GLB重匯＋正確keep-transform掛主軸",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：scale 0.035201不變、tilt=0、24°/格、徑向頂點角度有變(在轉)、frame9播放"
+    },
+    {
+      "at": "2026-10-20T23:44:00+08:00",
+      "tier": "T3",
+      "task": "旋翼夾與旋翼相位錯位(24°)",
+      "outcome": "failure",
+      "note": "verify:在frame1掛接、槳葉已轉24°；夾具凍在rest造成固定錯位"
+    },
+    {
+      "at": "2026-10-20T23:47:00+08:00",
+      "tier": "T3",
+      "task": "改0–15格＋在frame0(rest)重掛旋翼夾",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：標記剛體距離0.22591恆定、scale不變、frame13播放中"
+    },
+    {
+      "at": "2026-10-20T23:52:00+08:00",
+      "tier": "T3",
+      "task": "旋翼夾仍差旋轉角度(實測-60.3°)",
+      "outcome": "failure",
+      "note": "verify:只驗剛體距離未驗方位角；夾具整體被轉掉60.3°"
+    },
+    {
+      "at": "2026-10-20T23:55:00+08:00",
+      "tier": "T3",
+      "task": "以純匯入臂尖方位角為基準，繞主軸迴轉+60.3°",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：臂90.0/180.1/270.2對槳根91.9/181.9/271.7、剛體距0.25798、播放中"
+    },
+    {
+      "at": "2026-10-20T23:46:00+08:00",
+      "tier": "T2",
+      "task": "尾旋翼旋轉動畫(本地X、4倍速96°/格)",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：PCA法線=本地X、tilt=0、96.0°/格、f15回f0、scale不變"
+    },
+    {
+      "at": "2026-10-20T23:48:00+08:00",
+      "tier": "T2",
+      "task": "尾旋翼轂/軸(node_id63)掛上TailRotor同轉",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：轂頂點96.0°/格與尾槳同步、r/ax恆定、scale 0.035201、播放中"
+    },
+    {
+      "at": "2026-10-20T23:50:00+08:00",
+      "tier": "T4",
+      "task": "更新AH-64.glb：注入主旋翼夾/尾旋翼/尾槳轂頻道＋viewer設定＋清理測試檔",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：BIN前綴位元組相同、原accessors/bufferViews不變、4頻道16鍵、測試檔全清"
+    },
+    {
+      "at": "2026-10-20T23:54:00+08:00",
+      "tier": "T2",
+      "task": "移除尾槳轂旋轉(web+GLB)：樞軸離軸0.327造成公轉雜物",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：node_id63原點離軸0.327、移除後3頻道、幾何前綴相同"
+    },
+    {
+      "at": "2026-10-21T00:02:00+08:00",
+      "tier": "T3",
+      "task": "找出web雜物=除錯AxesHelper並關閉",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：隱藏法排除模型、關閉後截圖紅綠軸消失、槳仍轉"
+    },
+    {
+      "at": "2026-10-21T00:05:00+08:00",
+      "tier": "T3",
+      "task": "尾槳轂改attach到TailRotor底下原地旋轉",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：parent=TailRotor、世界四元數與尾槳相同、中心固定在±0.01"
+    },
+    {
+      "at": "2026-10-21T21:45:00+08:00",
+      "tier": "T5",
+      "task": "Web UI 多語系：中英即時切換＋可擴充語系（i18n 引擎、813 條 en 目錄、7 頁接入、側選單切換器）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：7 頁 en 殘留中文0、缺譯0、覆蓋率100%"
+    },
+    {
+      "at": "2026-10-21T22:05:00+08:00",
+      "tier": "T4",
+      "task": "修正英文模式 auto.html 按鈕跑出容器（使用者回報版面跑掉）＋全站同類 grid 隱患",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：7 頁×5 寬 zh/en 並排量測 0 差異"
+    },
+    {
+      "at": "2026-10-21T22:15:00+08:00",
+      "tier": "T2",
+      "task": "auto.html 燈號標籤改中文原文、英文去 o 前綴（含 help.html 燈號表同步）",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：zh/en 燈號 6/6 正確、版面 0 差異"
+    },
+    {
+      "at": "2026-10-21T22:30:00+08:00",
+      "tier": "T3",
+      "task": "status.html 改暗黑底色佈局（共用色彩變數）＋補 pre/toast 動態訊息翻譯缺口",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：7 組對比全過 AA、版面 0 差異"
+    },
+    {
+      "at": "2026-10-21T22:47:00+08:00",
+      "tier": "T4",
+      "task": "主頁下拉選單多語系：補 3 條動態/後端來源 key、引擎 fillSegment、報表抓幽靈 key",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：820 條/100%、4 組合選項正確、缺譯0"
+    },
+    {
+      "at": "2026-10-21T23:05:00+08:00",
+      "tier": "T2",
+      "task": "承接專案記憶：讀 repo-facts 全文、copilot-instructions、stats lessons，回報專案現況",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：正確覆述慣例與20條lessons、發現大量未提交變更"
+    },
+    {
+      "at": "2026-10-21T23:10:00+08:00",
+      "tier": "T3",
+      "task": "git 檢查點：334檔未提交變更入檔＋SOEM本地修補匯出patch＋補.gitmodules",
+      "outcome": "success",
+      "note": "主模型直跑；驗收：334檔檢查點入檔（amend後license.txt移出版控）、reverse-check exit0、dirty仅剩submodule"
+    }
+  ],
+  "lessons": [
+    "Blender5.x glTF匯出前必設 rotation_mode=XYZ，否則 euler 動畫被靜默跳過",
+    "改 GLB 節點名前先查 web 端 getObjectByName 依賴，名稱必須精確保留",
+    "blender-mcp look()會清除選取；use_selection匯出前須重選並驗檔案大小",
+    "bmesh手動拆面必複製UV(dl[uv].uv=)，否則貼圖遺失變純灰",
+    "GUI執行緒內sleep抓不到播放前進，影格驗證要跨兩次呼叫",
+    "播放中做測量會拿到公轉舊影格座標；量測平移前必暫停+frame_set(1)",
+    "找旋轉軸用槳葉PCA線交點或純管段；全頂點平均會被非對稱件偏權",
+    "模型幾何別預設有誤：先確認分組(轉盤上下)正確，再談對軸；對稱擬合會被連桿帶偏",
+    "旋轉偏心先查樞軸：槳尖圓擬合定真軸(16.5cm)，移物件原點不動頂點",
+    "文獻只有文字沒有圖，細節零件別硬修；讓使用者圈範圍再動",
+    "Blender5.x匯出会改寫euler軸且拆頂點變more；純加動畫改走GLB直接注入保幾何",
+    "動畫驗收必查畫面：盤面朝向＋與主軸同軸＋主軸是否同轉；只驗鍵值會漏匯入雙轉換",
+    "父層掛接用 obj.matrix_world=saved；手算 parent_inverse 會連乘 scale 使零件縮成不可見",
+    "glTF動畫key常從frame0起；在frame1掛接rest零件會差24°；時間軸用0–15",
+    "零件方位以純匯入量測為基準；掛接後要量臂尖方位角，剛體距離驗不出轉錯",
+    "旋轉節點前先算原點到軸距離；離軸節點一轉就繞遠點公轉（雜物）",
+    "web雜物先用隱藏法排除模型；查檢視器除錯物件(AxesHelper)再改模型",
+    "Web 翻譯查表前必正規化空白；目錄 key 要等於執行期文字（HTML entity 解碼、JS \\ 還原）",
+    "CSS grid 欄位用 minmax(0,1fr)：裸 1fr 的下限是 min-content，會被英文單字撐爆版面",
+    "後端/動態字串要靠 missingKeys() 或 route stub 驗；括號變體是不同 key"
+  ]
+}

@@ -1,9 +1,10 @@
-// AutoWindow.cpp - 簡要說明:
+﻿// AutoWindow.cpp - 簡要說明:
 // 自主操作視窗 UI 與狀態顯示邏輯，包含急停/啟動/原點設定等按鈕狀態、MMF 監測與背景更新執行緒。
 
 #include "../include/AutoWindow.h"
 #include "../include/MainWindow.h"
 #include "../include/EtherCATMaster.h"
+#include "../include/HttpServer.h"
 #include "../include/MmfPose6DOrder.h"
 #include "../include/core/SystemState.h"
 #include "../include/core/CpuIsolation.h"
@@ -22,10 +23,25 @@
 #include <thread>
 // NOTE: avoid using std::max when windows.h may define max macro; use ternary.
 
+namespace {
+
+// Resolve the application's INI file path (same pattern as MainWindow).
+static std::wstring GetIniPath()
+{
+    wchar_t buf[MAX_PATH] = {0};
+    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\BigCat.ini");
+    wchar_t* p = wcsrchr(buf, L'\\');
+    wchar_t* dot = wcsrchr(buf, L'.');
+    if (dot && (!p || dot > p)) *dot = L'\0';
+    return std::wstring(buf) + L".ini";
+}
+
+} // namespace
+
 static const wchar_t AUTO_WINDOW_CLASS[] = L"AutoWindowClass_v1";
 
-// Custom colors for emergency stop button depending on bit5 of SDO 0x60FD
-// Bright red when bit5 == 0, dark red when bit5 == 1.
+// Custom colors for emergency stop button depending on bit0 of SDO 0x60FD
+// Bright red when bit0 == 0, dark red when bit0 == 1.
 static HBRUSH g_brushBrightRed = NULL;
 static HBRUSH g_brushDarkRed = NULL;
 static HBRUSH g_brushBrightYellow = NULL;
@@ -39,8 +55,8 @@ static HBRUSH g_brushDarkGreen = NULL;
 static bool g_faultResetOverrideActive = false;
 static bool g_autoConnectOverrideActive = false;
 // Cache last observed bit to avoid unnecessary repaints
-static int g_lastEmergBit5 = -1;
-static int g_lastBit0 = 0; // Immediate Stop - 初始為0（暗紅色），避免程式啟動時亮紅色
+static int g_lastEmergBit0 = -1;
+static int g_lastBit5 = 0; // Immediate Stop - 初始為0（暗紅色），避免程式啟動時亮紅色
 static int g_lastBit1 = -1; // Connect/Run
 static int g_lastBit3 = -1; // Home
 static int g_lastBit6 = -1; // Fault Reset
@@ -254,8 +270,8 @@ static void ResetAutoWindowStopState()
 {
     g_faultResetOverrideActive = false;
     g_autoConnectOverrideActive = false;
-    g_lastEmergBit5 = -1;
-    g_lastBit0 = 0;
+    g_lastEmergBit0 = -1;
+    g_lastBit5 = 0;
     g_lastBit1 = -1;
     g_lastBit3 = -1;
     g_lastBit6 = -1;
@@ -299,7 +315,7 @@ static bool GetLast60FDLastByte(HWND hwnd, uint8_t &outLast) {
     if (!hOwner) return false;
     auto* win = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hOwner, GWLP_USERDATA));
     if (!win) return false;
-    return win->TryGetLastSdo60FDLowByte(outLast);
+    return win->TryGetPdo60FDLowByte(outLast);
 }
 
 static void LogAutoWindowStopState(HWND hwnd, const char* prefix)
@@ -309,8 +325,8 @@ static void LogAutoWindowStopState(HWND hwnd, const char* prefix)
 
     uint8_t last = 0;
     const bool have60FD = GetLast60FDLastByte(hwnd, last);
-    const int extBit0 = have60FD ? (((last & 0x01) != 0) ? 1 : 0) : -1;
-    const int extBit5 = have60FD ? (((last & 0x20) == 0) ? 1 : 0) : -1;
+    const int extBit0 = have60FD ? (((last & 0x01) == 0) ? 1 : 0) : -1;
+    const int extBit5 = have60FD ? (((last & 0x20) != 0) ? 1 : 0) : -1;
 
     std::ostringstream oss;
     oss << prefix
@@ -324,10 +340,10 @@ static void LogAutoWindowStopState(HWND hwnd, const char* prefix)
         << " ext_bit0=" << extBit0
         << " ext_bit5=" << extBit5;
     if (have60FD) {
-        oss << " sdo60FD_last=0x" << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+        oss << " pdo60FD_last=0x" << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
             << static_cast<int>(last) << std::dec;
     } else {
-        oss << " sdo60FD_last=<none>";
+        oss << " pdo60FD_last=<none>";
     }
     oss << "\n";
 
@@ -342,10 +358,16 @@ struct AutoWindowStopInputState {
 static AutoWindowStopInputState ReadAutoWindowStopInputState(HWND hwnd)
 {
     AutoWindowStopInputState state;
-    uint8_t sdo60FD = 0;
-    if (GetLast60FDLastByte(hwnd, sdo60FD)) {
-        state.external_immediate_stop = (sdo60FD & 0x01) != 0;
-        state.external_emergency_stop = (sdo60FD & 0x20) == 0;
+    uint8_t pdo60FD = 0;
+    if (GetLast60FDLastByte(hwnd, pdo60FD)) {
+        state.external_immediate_stop = (pdo60FD & 0x20) != 0;
+        HWND hOwner = GetAutoWindowOwner(hwnd);
+        if (hOwner && IsWindow(hOwner)) {
+            auto* win = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hOwner, GWLP_USERDATA));
+            if (win && win->IsExternalEstopEnabled()) {
+                state.external_emergency_stop = (pdo60FD & 0x01) == 0;
+            }
+        }
     }
     return state;
 }
@@ -368,8 +390,8 @@ static void ClearAutoWindowLatchedStopState(HWND hwnd)
     g_emergencyStopPressed = false;
     g_stopInProgress = false;
     g_pendingDownToOriginAfterStop = false;
-    g_lastBit0 = 0;
-    g_lastEmergBit5 = 1;
+    g_lastBit5 = 0;
+    g_lastEmergBit0 = 1;
 
     HWND hBtn = GetDlgItem(hwnd, IDC_BTN_AUTO_IMMEDIATE_STOP);
     if (hBtn && IsWindow(hBtn)) {
@@ -416,8 +438,8 @@ static CoreHelpers::AutoActionButtonInputs BuildAutoWindowActionButtonInputs(HWN
     inputs.auto_connect_signal_active = (g_lastBit1 == 1);
     inputs.down_to_origin_signal_active = (g_lastBit3 == 1);
     inputs.fault_reset_signal_active = (g_lastBit6 == 1);
-    inputs.immediate_stop_signal_active = (g_lastBit0 == 1);
-    inputs.emergency_stop_signal_active = (g_lastEmergBit5 == 0);
+    inputs.immediate_stop_signal_active = (g_lastBit5 == 1);
+    inputs.emergency_stop_signal_active = (g_lastEmergBit0 == 0);
     inputs.immediate_stop_latched = g_immediateStopPressed ||
                                     g_localImmediateStopLatched ||
                                     g_immediateStopOverrideActive;
@@ -614,9 +636,6 @@ static void StartAutoWindowDownToOriginRequest(HWND hwnd,
     if (clearBusyState && g_oBusy) {
         g_oBusy = false;
     }
-    if (g_oHomeDone) {
-        g_oHomeDone = false;
-    }
     if (g_oOnline) {
         g_oOnline = false;
     }
@@ -647,9 +666,9 @@ static void UpdateAllAutoButtons(HWND hwnd) {
     int b5 = (last & 0x20) ? 1 : 0;
     int b6 = (last & 0x40) ? 1 : 0;
 
-    // Immediate Stop (bit0): 1=bright red, 0=dark red
-    if (b0 != g_lastBit0) {
-        g_lastBit0 = b0;
+    // Immediate Stop (bit5): 1=bright red, 0=dark red
+    if (b5 != g_lastBit5) {
+        g_lastBit5 = b5;
         HWND hBtn = GetDlgItem(hwnd, IDC_BTN_AUTO_IMMEDIATE_STOP);
         if (hBtn) InvalidateRect(hBtn, NULL, FALSE);
     }
@@ -665,11 +684,22 @@ static void UpdateAllAutoButtons(HWND hwnd) {
         HWND hBtn = GetDlgItem(hwnd, IDC_BTN_AUTO_HOME);
         if (hBtn) InvalidateRect(hBtn, NULL, FALSE);
     }
-    // Emergency (bit5): 0=bright red, 1=dark red (note inverted logic)
-    if (b5 != g_lastEmergBit5) {
-        g_lastEmergBit5 = b5;
-        HWND hBtn = GetDlgItem(hwnd, IDC_BTN_AUTO_EMERGENCY_STOP);
-        if (hBtn) InvalidateRect(hBtn, NULL, FALSE);
+    // Emergency (bit0): 0=bright red, 1=dark red (note inverted logic)
+    // When ExternalEstopEnabled=0, force dark (bit0=1) so the button lamp
+    // does not falsely indicate an active emergency stop from the drive input.
+    {
+        bool estopEnabled = false;
+        HWND hOwnerLocal2 = GetAutoWindowOwner(hwnd);
+        if (hOwnerLocal2 && IsWindow(hOwnerLocal2)) {
+            auto* win2 = reinterpret_cast<MainWindow*>(GetWindowLongPtr(hOwnerLocal2, GWLP_USERDATA));
+            if (win2) estopEnabled = win2->IsExternalEstopEnabled();
+        }
+        int effectiveB0 = estopEnabled ? b0 : 1;
+        if (effectiveB0 != g_lastEmergBit0) {
+            g_lastEmergBit0 = effectiveB0;
+            HWND hBtn = GetDlgItem(hwnd, IDC_BTN_AUTO_EMERGENCY_STOP);
+            if (hBtn) InvalidateRect(hBtn, NULL, FALSE);
+        }
     }
     // Fault Reset (bit6): 1=bright yellow, 0=dark yellow
     if (b6 != g_lastBit6) {
@@ -904,7 +934,16 @@ static void UpdateGlobalStatusFlags(HWND hwnd)
     const bool prevHomeDone = g_oHomeDone;
     const bool prevOnline = g_oOnline;
 
-    const auto snapshot = win->GetSystemStateSnapshot();
+    // Guard: GetSystemStateSnapshot calls AreAllSlavesReadyByStatusword
+    // which enters pdoDataCS and reads IOmap.  A corrupted SOEM context
+    // can crash inside std::vector operations.  Catch and keep stale state.
+    CoreHelpers::SystemStateSnapshot snapshot;
+    try {
+        snapshot = win->GetSystemStateSnapshot();
+    } catch (...) {
+        // Keep previous flags; skip this update cycle
+        return;
+    }
 
     // Update cached flags (no UI calls here)
     g_oEtherCatOk = snapshot.ethercat_ok;
@@ -924,13 +963,48 @@ static void UpdateGlobalStatusFlags(HWND hwnd)
     // the AutoWindow lamps reflect the authoritative server state
     // (this ensures web-initiated flows immediately update the PC lamps).
     g_oHomeDone = snapshot.home_done;
+    if (g_oHomeDone && !prevHomeDone) {
+        OutputDebugStringA("[TRACE] g_oHomeDone set by snapshot.home_done sync (snapshot.home_done=true)\n");
+        if (auto* master = AppController::GetInstance().GetMaster()) {
+            master->SetForwardKinematicsEnabled(true);
+            // 自動啟用 6-DoF 姿態 MMF 輸出（若 INI 設為啟用）
+            wchar_t enabledBuf[8] = {0};
+            GetPrivateProfileStringW(L"MMF", L"EnablePoseOutput", L"0", enabledBuf, 8, GetIniPath().c_str());
+            if (enabledBuf[0] == L'1' && !master->IsPoseMMFOutputEnabled()) {
+                wchar_t nameBuf[256] = {0};
+                GetPrivateProfileStringW(L"MMF", L"PoseOutputName", L"motionRigPose", nameBuf, 256, GetIniPath().c_str());
+                std::wstring mmfName(nameBuf);
+                if (mmfName.empty()) mmfName = L"motionRigPose";
+                const std::wstring mappingName = L"Local\\" + mmfName;
+                master->EnablePoseMMFOutput(mappingName);
+                // Notify MainWindow and web UI that MMF pose output is now active
+                BroadcastSSE("{\"mmfPoseOutput\":true}");
+            }
+        }
+    } else if (!snapshot.home_done && prevHomeDone) {
+        OutputDebugStringA("[TRACE] g_oHomeDone cleared by snapshot.home_done sync (snapshot.home_done=false)\n");
+        if (auto* master = AppController::GetInstance().GetMaster()) {
+            master->SetForwardKinematicsEnabled(false);
+            // 歸原狀態消失時停用 MMF 輸出
+            master->DisablePoseMMFOutput();
+        }
+    }
     g_oOnline = snapshot.online;
     RecomputeOReadyFromPDO(hwnd);
 
-    // Ensure homing cleared on error or loss of EtherCAT (no UI calls)
-    if (g_oError || g_oManualResetRequired || !g_oEtherCatOk) {
-        if (g_oHomeDone) g_oHomeDone = false;
-        // Also clear online state when error or EtherCAT disconnected
+    // Ensure homing cleared on EtherCAT loss only.
+    // Do NOT clear on g_oError — autoDownToOriginLastSuccess is the sole
+    // authority for oHomeDone and is already updated by homing failures.
+    if (!g_oEtherCatOk) {
+        if (g_oHomeDone) {
+            OutputDebugStringA("[TRACE] g_oHomeDone->false in UpdateGlobalStatusFlags (!g_oEtherCatOk)\n");
+            g_oHomeDone = false;
+            // EtherCAT lost → disable forward kinematics
+            if (auto* master = AppController::GetInstance().GetMaster()) {
+                master->SetForwardKinematicsEnabled(false);
+            }
+        }
+        // Also clear online state when EtherCAT disconnected
         if (g_oOnline) g_oOnline = false;
     }
 
@@ -977,17 +1051,10 @@ static void StatusUpdateThreadFunc() {
     // Lower priority to avoid interfering with EtherCAT real-time threads
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     
-    // Explicitly avoid Core 4 (reserved for CyclicTask / CpuIsolation).
-    {
-        constexpr int    kEtherCATTargetCore = 4;
-        constexpr DWORD_PTR kEtherCATCoreMask = (DWORD_PTR)1 << kEtherCATTargetCore;
-        DWORD_PTR processMask = 0, systemMask = 0;
-        if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
-            DWORD_PTR available = processMask ? processMask : systemMask;
-            DWORD_PTR workerMask = available & ~kEtherCATCoreMask;
-            if (workerMask) SetThreadAffinityMask(GetCurrentThread(), workerMask);
-        }
-    }
+    // Exclude this status-update thread from ALL logical cores of the RT
+    // physical core (both primary and HT/SMT sibling) to prevent cache-line
+    // bouncing with the cyclic thread.
+    CoreHelpers::CpuIsolation::ExcludeCurrentThreadFromRtCores();
     
     while (!g_statusUpdateThreadStop.load()) {
         const DWORD waitMs = g_autoWindowIsMinimized.load(std::memory_order_relaxed)
@@ -1046,8 +1113,9 @@ static void StopStatusUpdateThread() {
 }
 
 // Recompute global oReady by reading PDO snapshot 0x6041 from all slaves.
-// If every readable slave reports 0x6041 == 0x1637 then set g_oReady = true,
-// otherwise set g_oReady = false. Missing/failed reads are treated as not-ready.
+// Uses a mask-based CiA402 Operation Enabled check (bits 0-6 + bit 9)
+// so manufacturer-specific bits (10, 12) do not block the ready lamp.
+// Missing/failed reads are treated as not-ready.
 static void RecomputeOReadyFromPDO(HWND hwnd)
 {
     // Safety: verify window is still valid
@@ -1064,7 +1132,15 @@ static void RecomputeOReadyFromPDO(HWND hwnd)
         return;
     }
 
-    g_oReady = win->AreAllSlavesReadyByStatusword();
+    // Guard: AreAllSlavesReadyByStatusword acquires pdoDataCS and reads
+    // IOmap via GetPDODataSnapshot.  A corrupted SOEM context (from NIC
+    // interrupt storms or driver-level races) can produce invalid Obytes/
+    // Ibytes that cause memmove crashes.  Catch and keep g_oReady = false.
+    try {
+        g_oReady = win->AreAllSlavesReadyByStatusword();
+    } catch (...) {
+        g_oReady = false;
+    }
 }
 
 // Force-hide scrollbars on MMF ListView (called repeatedly to override any system attempts to show them)
@@ -1257,6 +1333,32 @@ static LRESULT CALLBACK AutoWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
         // Ensure AutoWindow remains on top of other windows when Z-order changes.
         // SWP_NOACTIVATE to avoid stealing focus from the user.
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        break;
+    case WM_DISPLAYCHANGE:
+        {
+            // Screen resolution changed: reposition the AutoWindow proportionally
+            // so it stays at the top-right with margins scaled to the new resolution.
+            int newW = static_cast<int>(LOWORD(lParam));
+            int newH = static_cast<int>(HIWORD(lParam));
+            auto clampMarginDc = [](int raw) { return raw < 8 ? 8 : (raw > 40 ? 40 : raw); };
+            const int rightMargin = clampMarginDc(newW / 80);
+            const int topMargin   = clampMarginDc(newH / 80);
+            const int btnW = 105;
+            const int gap = 8;
+            const int sidePad = 2;
+            int threeBtnW = btnW * 3 + gap * 2;
+            int width = threeBtnW + sidePad * 2;
+            int maxAllowed = newW - rightMargin * 2;
+            if (width > maxAllowed) width = maxAllowed;
+            if (width < threeBtnW + sidePad * 2) width = threeBtnW + sidePad * 2;
+            int rawHDc = newH / 3;
+            int height = rawHDc < 300 ? 300 : (rawHDc > 500 ? 500 : rawHDc);
+            int x = newW - width - rightMargin;
+            if (x < 0) x = rightMargin;
+            int y = topMargin;
+            SetWindowPos(hwnd, NULL, x, y, width, height,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         break;
     case WM_SYSCOMMAND:
         {
@@ -1540,7 +1642,7 @@ static LRESULT CALLBACK AutoWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
             if (id == IDC_BTN_AUTO_EMERGENCY_STOP) {
                 // Decide brush based on last cached bit value
                 HDC hdc = (HDC)wParam;
-                if (g_lastEmergBit5 == 0) { SetBkColor(hdc, RGB(255,0,0)); return (INT_PTR)g_brushBrightRed; }
+                if (g_lastEmergBit0 == 0) { SetBkColor(hdc, RGB(255,0,0)); return (INT_PTR)g_brushBrightRed; }
                 else { SetBkColor(hdc, RGB(120,0,0)); return (INT_PTR)g_brushDarkRed; }
             }
         }
@@ -1804,6 +1906,23 @@ static LRESULT CALLBACK AutoWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
         UpdateAllAutoButtons(hwnd);
         InvalidateRect(hwnd, NULL, TRUE);
         return 0;
+    case WM_USER_AUTO_SOFT_START_SUCCEEDED:
+        // Soft-start finished cleanly: clear transient oError/stop latches from
+        // oscillation so [到下原點] is available without another stop + fault reset.
+        g_oError = false;
+        g_oManualResetRequired = false;
+        if (!g_immediateStopPressed && !g_emergencyStopPressed) {
+            g_stopInProgress = false;
+            g_immediateStopOverrideActive = false;
+            g_localImmediateStopLatched = false;
+            g_localEmergencyStopLatched = false;
+            g_emergencyStopOverrideActive = false;
+            g_pendingDownToOriginAfterStop = false;
+        }
+        SyncAutoWindowActionButtons(hwnd);
+        UpdateAllAutoButtons(hwnd);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
     case WM_USER_AUTO_DISABLE_ALL:
         // Owner requests AutoWindow to disable all actionable child buttons
         // 注意：立即停止和緊急停止按鈕永遠保持啟用，以便緊急情況下使用
@@ -1911,12 +2030,38 @@ static LRESULT CALLBACK AutoWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
                 // If EtherCAT is not OK, consider homing failed regardless of reported success
                 if (!g_oEtherCatOk) {
                     if (g_oHomeDone) {
+                        OutputDebugStringA("[TRACE] g_oHomeDone->false in WM_USER_AUTO_DOWN_TO_ORIGIN_DONE (!g_oEtherCatOk)\n");
                         g_oHomeDone = false;
+                        if (auto* master = AppController::GetInstance().GetMaster()) {
+                            master->SetForwardKinematicsEnabled(false);
+                        }
                     }
                 } else {
                     bool newHomeDone = (success == 1);
                     if (g_oHomeDone != newHomeDone) {
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "[TRACE] g_oHomeDone=%d (was %d) in WM_USER_AUTO_DOWN_TO_ORIGIN_DONE wParam=%d lParam=%d\n",
+                                 (int)newHomeDone, (int)g_oHomeDone, (int)wParam, (int)lParam);
+                        OutputDebugStringA(buf);
                         g_oHomeDone = newHomeDone;
+                        // 6-axis homing complete → enable per-cycle forward kinematics
+                        if (g_oHomeDone) {
+                            if (auto* master = AppController::GetInstance().GetMaster()) {
+                                master->SetForwardKinematicsEnabled(true);
+                                // 自動啟用 6-DoF 姿態 MMF 輸出（若 INI 設為啟用）
+                                wchar_t enabledBuf[8] = {0};
+                                GetPrivateProfileStringW(L"MMF", L"EnablePoseOutput", L"0", enabledBuf, 8, GetIniPath().c_str());
+                                if (enabledBuf[0] == L'1' && !master->IsPoseMMFOutputEnabled()) {
+                                    wchar_t nameBuf[256] = {0};
+                                    GetPrivateProfileStringW(L"MMF", L"PoseOutputName", L"motionRigPose", nameBuf, 256, GetIniPath().c_str());
+                                    std::wstring mmfName(nameBuf);
+                                    if (mmfName.empty()) mmfName = L"motionRigPose";
+                                    const std::wstring mappingName = L"Local\\" + mmfName;
+                                    master->EnablePoseMMFOutput(mappingName);
+                                    BroadcastSSE("{\"mmfPoseOutput\":true}");
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -1949,14 +2094,6 @@ static LRESULT CALLBACK AutoWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPAR
             g_oOnline = setOnline;
             UpdateAllAutoButtons(hwnd);
             InvalidateRect(hwnd, NULL, FALSE);
-        }
-        return 0;
-    case WM_USER + 299:
-        // Web-originated down-to-origin start notification: clear g_oHomeDone before workflow begins
-        // This ensures PC AutoWindow state stays synchronized when Web initiates homing
-        if (g_oHomeDone) {
-            g_oHomeDone = false;
-            UpdateAllAutoButtons(hwnd);
         }
         return 0;
     default:
@@ -1993,15 +2130,16 @@ HWND CreateAutoWindow(HWND hOwner) {
         }
     }
 
-    // Default size: compute width based on three buttons' total width (+ side padding) and clamp to screen
-    // Reduce default AutoWindow height by 100 as requested
-    int height = 350;
-    int x = CW_USEDEFAULT;
-    int y = CW_USEDEFAULT;
-
-    // Position the AutoWindow at the top-right of the primary screen with a small margin
-    const int rightMargin = 8;
+    // Position and size the AutoWindow at the top-right of the primary screen.
+    // Use proportional margins based on screen dimensions (not absolute pixels)
+    // so the window stays correctly positioned across different resolutions.
     int screenW = GetSystemMetrics(SM_CXSCREEN);
+    int screenH = GetSystemMetrics(SM_CYSCREEN);
+
+    // Proportional margins: ~1.25% of screen dimension, clamped to [8, 40] px
+    auto clampMargin = [](int raw) { return raw < 8 ? 8 : (raw > 40 ? 40 : raw); };
+    const int rightMargin = clampMargin(screenW / 80);
+    const int topMargin   = clampMargin(screenH / 80);
 
     // 左右各預留 2px，讓視窗寬度等於三個按鈕跨距總寬 + 左右預留
     const int btnW = 105;
@@ -2010,13 +2148,17 @@ HWND CreateAutoWindow(HWND hOwner) {
     int threeBtnW = btnW * 3 + gap * 2;
     int width = threeBtnW + sidePad * 2;
     // Ensure it doesn't exceed available screen width (leave rightMargin free)
-    int maxAllowed = screenW - rightMargin;
+    int maxAllowed = screenW - rightMargin * 2;
     if (width > maxAllowed) width = maxAllowed;
     if (width < threeBtnW + sidePad * 2) width = threeBtnW + sidePad * 2;
 
-    x = screenW - width - rightMargin;
+    // Height: proportional to screen height (~20-35%), clamped to [300, 500]
+    int rawH = screenH / 3;
+    int height = rawH < 300 ? 300 : (rawH > 500 ? 500 : rawH);
+
+    int x = screenW - width - rightMargin;
     if (x < 0) x = rightMargin;
-    y = rightMargin; // top with margin
+    int y = topMargin;
 
     // Create a fixed-size AutoWindow: remove sizing border and maximize box
     DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_VISIBLE | WS_CLIPCHILDREN;
@@ -2049,8 +2191,8 @@ HWND CreateAutoWindow(HWND hOwner) {
     };
 
     auto createStatusLamp = [&](int id, const wchar_t* name) {
-        CreateWindowExW(0, L"BUTTON", name,
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_OWNERDRAW,
+        CreateWindowExW(0, L"STATIC", name,
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_OWNERDRAW,
             0, 0, 0, 0, h, (HMENU)(INT_PTR)id, hInst, NULL);
     };
 

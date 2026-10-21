@@ -1,4 +1,5 @@
 #include "MainWindow.h"
+#include "../app/AppController.h"
 #include <windows.h>
 #include <commctrl.h>
 #include <windowsx.h>
@@ -193,7 +194,8 @@ void MainWindow::OnReadAllSDO()
             for (int attempt = 0; attempt < 500; ++attempt) {
                 if (MasterGetPDOSentCount() != startCount) return;
                 if (!readAllRunning.load() || disconnecting.load()) return;
-                Sleep(1);
+                // Win11: avoid Sleep(1) overshoot — use short TSC-spin wait
+                Sleep(0);  // yield timeslice (returns immediately on dedicated core)
             }
         };
 
@@ -390,6 +392,74 @@ void MainWindow::OnWriteSDO() {
         }
     }
 
+    // Determine if this object is in the RxPDO (master→slave outputs).
+    // If so, route through PDO staging to avoid being overwritten by cyclic PDO.
+    auto getRxPdoOffsetAndLen = [](uint16_t idx) -> std::pair<int,int> {
+        switch (idx) {
+        case 0x6040: return { EtherCATMaster::kPdoOutOff_Controlword,  2 };
+        case 0x607A: return { EtherCATMaster::kPdoOutOff_TargetPos,    4 };
+        case 0x60FF: return { EtherCATMaster::kPdoOutOff_TargetVel,    4 };
+        case 0x6071: return { EtherCATMaster::kPdoOutOff_TargetTorque, 2 };
+        case 0x6060: return { EtherCATMaster::kPdoOutOff_ModesOfOp,    1 };
+        case 0x60E0: return { EtherCATMaster::kPdoOutOff_PosTorqueLim, 2 };
+        case 0x60E1: return { EtherCATMaster::kPdoOutOff_NegTorqueLim, 2 };
+        case 0x2019: return { EtherCATMaster::kPdoOutOff_PosTorqueLim, 2 }; // X1S torque limit
+        case 0x201A: return { EtherCATMaster::kPdoOutOff_NegTorqueLim, 2 }; // X1S torque limit
+        default:     return { -1, 0 }; // not in RxPDO
+        }
+    };
+    auto [pdoOff, pdoLen] = getRxPdoOffsetAndLen(index);
+
+    if (pdoOff >= 0) {
+        // Route through PDO staging — ensures value persists across PDO cycles
+        auto* master = AppController::GetInstance().GetMaster();
+        if (!master) { PrependStatus(L"EtherCAT 主站不存在\r\n"); return; }
+        int outBase = 0, inBase = 0;
+        if (!master->GetSlaveIOBaseBytes(slave, outBase, inBase)) {
+            PrependStatus(L"無法取得從站 IO 基底位址\r\n"); return;
+        }
+        int absOff = outBase + pdoOff;
+        // Use only pdoLen bytes, zero-extend wbuf if caller provided fewer bytes
+        uint8_t pdoBuf[8] = {0};
+        int toCopy = (wlen < pdoLen) ? wlen : pdoLen;
+        for (int i = 0; i < toCopy; ++i) pdoBuf[i] = wbuf[i];
+        if (master->StageOutputBytes(absOff, pdoBuf, pdoLen)) {
+            std::wstringstream ss;
+            ss << L"[從站 " << slave << L"] PDO 分段寫入成功 - Index: 0x"
+               << std::hex << std::uppercase << index
+               << L" (RxPDO offset " << std::dec << pdoOff << L", " << pdoLen << L" bytes)"
+               << L"  值: ";
+            ss << std::hex << std::uppercase;
+            for (int i = 0; i < pdoLen; ++i) ss << L"0x" << std::setw(2) << std::setfill(L'0') << (int)pdoBuf[i] << L" ";
+            unsigned long long v64 = 0; for (int i = 0; i < pdoLen && i < 8; ++i) v64 |= (unsigned long long)pdoBuf[i] << (8*i);
+            ss << L"| LE=" << std::dec << v64 << L" (0x" << std::hex << std::uppercase << v64 << L")\r\n";
+            ss << L"  提示: PDO 寫入不需讀回驗證，下個週期即生效。\r\n";
+            PrependStatus(ss.str().c_str());
+            // Update Hex column from write buffer to keep UI consistent
+            {
+                std::wstringstream hexDisp; hexDisp << std::hex << std::uppercase;
+                for (int i = pdoLen - 1; i >= 0; --i) {
+                    hexDisp << L"0x" << std::setw(2) << std::setfill(L'0') << (int)pdoBuf[i];
+                    if (i > 0) hexDisp << L" ";
+                }
+                std::wstring hexStr = hexDisp.str();
+                auto &hexvec = savedSDOHexValues[slave];
+                if ((int)hexvec.size() < (int)currentObjects.size()) hexvec.resize(currentObjects.size());
+                hexvec[selItem] = hexStr;
+                if (hListSDOParams && IsWindow(hListSDOParams)) {
+                    ListView_SetItemText(hListSDOParams, selItem, 6, const_cast<LPWSTR>(hexStr.c_str()));
+                }
+            }
+            return;
+        } else {
+            std::wstringstream ss;
+            ss << L"[從站 " << slave << L"] PDO 分段寫入失敗 - offset=" << absOff << L"\r\n";
+            PrependStatus(ss.str().c_str());
+            return;
+        }
+    }
+
+    // NOT in RxPDO: use traditional SDO write + read-back verification
     // Write SDO
     if (MasterWriteSDO(slave, index, subindex, wbuf, wlen)) {
         // 在狀態欄顯示寫入成功信息
@@ -550,7 +620,7 @@ void MainWindow::OnWriteAllSDO()
             for (int attempt = 0; attempt < 500; ++attempt) {
                 if (MasterGetPDOSentCount() != startCount) return;
                 if (disconnecting.load()) return;
-                Sleep(1);
+                Sleep(0);  // Win11: yield instead of Sleep(1) overshoot
             }
         };
 

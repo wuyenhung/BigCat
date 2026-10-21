@@ -95,6 +95,9 @@ public:
 	// PDO mapping helpers
 	bool RecalculateOffsetsFromSDO(EtherCATMaster* master, int slaveIndex);
 	bool WriteToIOMap(EtherCATMaster* master, int slaveIndex, const std::wstring& itemName, int32_t value);
+	// Immediately populate all PDO controls with cached values from master.
+	// Must be called after RebuildPDOControls() to avoid empty display.
+	void ApplyCachedValues(EtherCATMaster* master, int slaveIndex);
 
 	// Accessors used by MainWindow and other modules
 	std::vector<PDOItem> pdoItems;
@@ -108,6 +111,11 @@ public:
 	void SetItemButtonText(size_t index, const std::wstring &btnText);
 	void SelectSlave(int slaveIndex);
 	void BuildPDOItemsFromSDO(const EtherCATPDOConfig &pdoConfig);
+	// Suppress RebuildPDOControls / ApplyCachedValues in RecalculateOffsetsFromSDO
+	// (e.g. during AutoDownToOrigin workflow to avoid HWND churn while keeping
+	// PDO visible and descriptor cache up to date).
+	void SetSuppressUIRebuild(bool suppress) { suppressUIRebuild_ = suppress; }
+	bool IsSuppressUIRebuild() const { return suppressUIRebuild_; }
 	void RefreshItemValues(const std::vector<std::wstring> &newValues);
 	void SetItemUnit(size_t index, const std::wstring &unit);
 	void SetItemMinMax(size_t index, const std::wstring &minVal, const std::wstring &maxVal);
@@ -157,4 +165,5 @@ private:
 	int groupWidth = 0;
 	int groupHeight = 0;
 	bool isRebuilding = false;
+	bool suppressUIRebuild_ = false;
 };

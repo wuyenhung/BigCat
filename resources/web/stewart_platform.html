@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
     <title>Stewart平台逆運動學計算器</title>
         <link rel="icon" href="ka52.ico" type="image/x-icon">
         <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
@@ -78,20 +79,20 @@
         }
 
         .grid-cols-1 {
-            grid-template-columns: 1fr;
+            grid-template-columns: minmax(0, 1fr);
         }
 
         .grid-cols-2 {
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .grid-cols-3 {
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
         }
 
         .main-grid {
             display: grid;
-            grid-template-columns: 1fr;
+            grid-template-columns: minmax(0, 1fr);
             gap: 8px;
             align-items: start;
             /* 移除固定高度，允許內容捲動 */
@@ -326,7 +327,7 @@
 
         .viz-header {
             display: flex;
-            justify-content: space-between;
+            justify-content: space-between; flex-wrap: wrap;
             align-items: center;
             gap: 8px;
             padding: 4px 6px;
@@ -337,7 +338,7 @@
             gap: 8px;
             align-items: center;
             justify-content: flex-end;
-            flex-wrap: wrap;
+            flex-wrap: wrap; min-width: 0;
         }
 
         .viz-controls-row {
@@ -535,7 +536,7 @@
 
         .result-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 8px;
             min-height: 0;
         }
@@ -555,6 +556,31 @@
             font-weight: 700;
             padding: 2px 6px;
             color: var(--text-primary);
+        }
+
+        .canvas-warning-overlay {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            z-index: 30;
+            max-width: 360px;
+            max-height: 45%;
+            overflow-y: auto;
+            background: rgba(10, 16, 26, 0.85);
+            border: 1px solid rgba(255, 80, 80, 0.3);
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 13px;
+            color: var(--danger);
+            line-height: 1.4;
+            pointer-events: auto;
+            display: none;
+        }
+        .canvas-warning-overlay:not(:empty) {
+            display: block;
+        }
+        .canvas-warning-overlay > div {
+            padding: 2px 0;
         }
 
         .error-list {
@@ -589,7 +615,7 @@
             }
 
             .grid-cols-2 {
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr);
             }
             
             /* 強制在手機版保持2欄佈局，但若寬度太窄（小於300px）則自動換行 */
@@ -895,7 +921,7 @@
 
         @media (max-width: 900px) {
             .native-planner-pose-row {
-                grid-template-columns: 1fr;
+                grid-template-columns: minmax(0, 1fr);
             }
         }
 
@@ -1380,6 +1406,9 @@
                         </div>
                         <canvas id="canvas"></canvas>
                         
+                        <!-- 警告訊息 Overlay -->
+                        <div class="canvas-warning-overlay" id="canvasWarningOverlay" aria-live="polite"></div>
+
                         <!-- Legend Overlay -->
                         <div class="canvas-legend-overlay">
                             <div class="canvas-legend-item">⚫基座力臂 🔴臂末端 🔵連接點</div>
@@ -1583,6 +1612,7 @@
                 this.forwardInteractiveMinIntervalMs = 16;
                 this.previewRenderMinArmCount = 6;
                 this.lastRenderableResult = null;
+                this.lastValidWorldPose = null; // 最後有效世界姿態，用於拖曳再開始時避免跳動
 
                 this.result = {
                     servoAngles: [0, 0, 0, 0, 0, 0],
@@ -2208,7 +2238,29 @@
             }
 
             syncPoseInputFromResolvedPose() {
-                this.poseInput = this.getCurrentDisplayPose();
+                // 使用最後有效世界姿態同步，避免從無效區域拖曳再開始時跳動
+                const src = this.lastValidWorldPose || this.pose;
+                const h = Number(this.initialHeight) || 0;
+                const input = {
+                    x: Number(src.x) || 0,
+                    y: Number(src.y) || 0,
+                    z: (Number(src.z) || 0) - h,
+                    roll: Number(src.roll) || 0,
+                    pitch: Number(src.pitch) || 0,
+                    yaw: Number(src.yaw) || 0
+                };
+                if (this.coordinateSystem === 'platform') {
+                    this.poseInput = {
+                        x: Number(this.platformPose.x) || 0,
+                        y: Number(this.platformPose.y) || 0,
+                        z: Number(this.platformPose.z) || 0,
+                        roll: input.roll,
+                        pitch: input.pitch,
+                        yaw: input.yaw
+                    };
+                } else {
+                    this.poseInput = input;
+                }
             }
 
             syncNativePlannerSpeedInputs() {
@@ -2310,6 +2362,17 @@
                 }
 
                 return points;
+            }
+
+            // 計算 A-B-A-B 交替六邊形頂點到中心的最大距離（真實半徑）
+            calculateHexagonRadius(edgeA, edgeB) {
+                const points = this.calculateSymmetricHexagonPoints(edgeA, edgeB, 0);
+                let maxR = 0;
+                for (const p of points) {
+                    const r = Math.hypot(p[0], p[1]);
+                    if (r > maxR) maxR = r;
+                }
+                return maxR;
             }
 
             setupCanvas() {
@@ -2669,8 +2732,7 @@
                 limitIds.forEach(id => {
                     const el = document.getElementById(id);
                     if (!el) return;
-                    el.addEventListener('change', (e) => {
-                        const v = Number(e.target.value);
+                    const updateLimit = (v) => {
                         switch (id) {
                             case 'limitPoseX': this.params.maxPoseLimits.x = v; break;
                             case 'limitPoseY': this.params.maxPoseLimits.y = v; break;
@@ -2679,6 +2741,14 @@
                             case 'limitPosePitch': this.params.maxPoseLimits.pitch = v; break;
                             case 'limitPoseYaw': this.params.maxPoseLimits.yaw = v; break;
                         }
+                    };
+                    el.addEventListener('input', (e) => {
+                        updateLimit(Number(e.target.value));
+                        this.requestInteractiveUpdateAndDraw(true);
+                    });
+                    el.addEventListener('change', (e) => {
+                        updateLimit(Number(e.target.value));
+                        this.updateAndDraw();
                     });
                 });
             }
@@ -3010,7 +3080,7 @@
                     const paramIndex = this.displayMap[displayIndex];
                     const input = document.getElementById(`inputServoAngle${i}`);
                     if (input) {
-                        input.value = activeServoAngles[paramIndex].toFixed(7);
+                        input.value = activeServoAngles[paramIndex].toFixed(4);
                     }
                 }
             }
@@ -3033,7 +3103,7 @@
                         if (err < 1e-9) {
                             errorStr = ` (誤差: ${err.toExponential(3)})`;
                         } else {
-                            errorStr = ` (誤差: ${err.toFixed(9)}mm)`;
+                            errorStr = ` (誤差: ${err.toFixed(4)}mm)`;
                         }
                     }
                     resultTitle.innerHTML = `6DoF姿態輸出 (正運動學) <span class="status-icon ${this.forwardResult.valid ? 'status-ok' : 'status-error'}">${this.forwardResult.valid ? '✓' : '✗'}</span> ${errorStr}`;
@@ -3067,9 +3137,9 @@
                     }
                     
                     // Roll, Pitch, Yaw 兩種座標系都一樣
-                    safeSetValue('calcPoseRoll', pose.roll.toFixed(7));
-                    safeSetValue('calcPosePitch', pose.pitch.toFixed(7));
-                    safeSetValue('calcPoseYaw', pose.yaw.toFixed(7));
+                    safeSetValue('calcPoseRoll', pose.roll.toFixed(4));
+                    safeSetValue('calcPosePitch', pose.pitch.toFixed(4));
+                    safeSetValue('calcPoseYaw', pose.yaw.toFixed(4));
                 } else {
                     ['calcPoseX','calcPoseY','calcPoseZ','calcPoseRoll','calcPosePitch','calcPoseYaw']
                         .forEach(id => safeSetValue(id, '---'));
@@ -3338,7 +3408,12 @@
                     const worldPose = this.resolveWorldPoseFromInput();
                     const localResult = this.calculateLocalInverse(worldPose);
                     if (localResult.armEndPoints.length === 6 && localResult.platformPoints.length === 6) {
+                        // 始終更新 pose 以跟隨滑鼠，不因警告/無效而限制拖曳
                         this.pose = worldPose;
+                        // 記錄最後有效姿態，供拖曳再開始時同步（避免跳動）
+                        if (localResult.valid) {
+                            this.lastValidWorldPose = { ...worldPose };
+                        }
                         this.initialHeight = this.calculateLocalInitialHeight();
                         this.result = localResult;
                         this.rememberRenderableResult(this.result);
@@ -3519,12 +3594,25 @@
 
                 const fisheyeDiag = this.computeStewartStreamFisheyeDiagnostics(basePoints, armEndPoints, platformPoints);
 
+                // 檢查最大姿態限制（警告，不影響有效性）
+                const poseWarnings = [];
+                const limits = this.params.maxPoseLimits;
+                if (limits) {
+                    const relZ = pose.z - this.initialHeight;
+                    if (Math.abs(pose.x) > limits.x) poseWarnings.push(`X位移 ${pose.x.toFixed(2)} mm 超出 ±${limits.x} mm 限制`);
+                    if (Math.abs(pose.y) > limits.y) poseWarnings.push(`Y位移 ${pose.y.toFixed(2)} mm 超出 ±${limits.y} mm 限制`);
+                    if (Math.abs(relZ) > limits.z) poseWarnings.push(`Z位移 ${relZ.toFixed(2)} mm 超出 ±${limits.z} mm 限制`);
+                    if (Math.abs(pose.roll) > limits.roll) poseWarnings.push(`Roll ${pose.roll.toFixed(2)}° 超出 ±${limits.roll}° 限制`);
+                    if (Math.abs(pose.pitch) > limits.pitch) poseWarnings.push(`Pitch ${pose.pitch.toFixed(2)}° 超出 ±${limits.pitch}° 限制`);
+                    if (Math.abs(pose.yaw) > limits.yaw) poseWarnings.push(`Yaw ${pose.yaw.toFixed(2)}° 超出 ±${limits.yaw}° 限制`);
+                }
+
                 return {
                     basePoints, platformPoints, armEndPoints, servoAngles, rodLengths,
                     servoPointMap: pm,
                     valid: valid && fisheyeDiag.fisheyeWarningArms.length === 0,
                     errors: [...errors, ...fisheyeDiag.warnings],
-                    warnings: fisheyeDiag.warnings,
+                    warnings: [...fisheyeDiag.warnings, ...poseWarnings],
                     singularArms: [], singularityInfo: {},
                     errorArms: valid ? [] : errors.map((_, idx) => idx),
                     warningArms: fisheyeDiag.warningArms,
@@ -3794,9 +3882,8 @@
                 const speed = document.getElementById('nativePlannerSpeed');
                 const currentPose = document.getElementById('nativePlannerCurrentPose');
                 const targetPose = document.getElementById('nativePlannerTargetPose');
-                const errorList = document.getElementById('nativePlannerErrorList');
 
-                if (!lamp || !summary || !streamState || !motionState || !validity || !seq || !cycle || !speed || !currentPose || !targetPose || !errorList) {
+                if (!lamp || !summary || !streamState || !motionState || !validity || !seq || !cycle || !speed || !currentPose || !targetPose) {
                     return;
                 }
 
@@ -3845,13 +3932,8 @@
                 currentPose.textContent = `目前 ${plannerInitialized ? this.formatPlannerPose(state.currentPose) : '-'}`;
                 targetPose.textContent = `目標 ${plannerInitialized ? this.formatPlannerPose(state.targetPose) : '-'}`;
 
-                if (state.errors.length > 0) {
-                    errorList.style.display = 'block';
-                    errorList.innerHTML = state.errors.map(error => `<div>${error}</div>`).join('');
-                } else {
-                    errorList.style.display = 'none';
-                    errorList.innerHTML = '';
-                }
+                // Planner 錯誤改繪製到 canvas overlay（與 IK 訊息合併），避免版面重排
+                this.renderCanvasWarningOverlay();
             }
 
             setupStewartInverseStream() {
@@ -4137,7 +4219,7 @@
             applyStewartResult(response) {
                 this.updateNativePlannerState(response);
 
-                if (response.worldPose) {
+                if (response.worldPose && response.valid) {
                     this.pose = this.normalizePoseValues(response.worldPose);
                 }
                 if (response.platformPose) {
@@ -4147,23 +4229,68 @@
                     this.initialHeight = Number(response.initialHeight);
                 }
 
-                this.result = {
-                    servoAngles: Array.isArray(response.servoAngles) ? response.servoAngles.map(Number) : [0, 0, 0, 0, 0, 0],
-                    armEndPoints: this.normalizePointArray(response.armEndPoints),
-                    platformPoints: this.normalizePointArray(response.platformPoints),
-                    basePoints: this.normalizePointArray(response.basePoints),
-                    servoPointMap: Array.isArray(response.servoPointMap) ? response.servoPointMap.map(Number) : this.params.servoPointMap,
-                    rodLengths: Array.isArray(response.rodLengths) ? response.rodLengths.map(Number) : [0, 0, 0, 0, 0, 0],
-                    fisheyeAngles: Array.isArray(response.fisheyeAngles) ? response.fisheyeAngles.map(Number) : [0, 0, 0, 0, 0, 0],
-                    valid: !!response.valid,
-                    errors: Array.isArray(response.errors) ? response.errors.map(String) : [],
-                    warnings: Array.isArray(response.warnings) ? response.warnings.map(String) : [],
-                    singularArms: Array.isArray(response.singularArms) ? response.singularArms.map(Number) : [],
-                    singularityInfo: response.singularityInfo ? { ...response.singularityInfo } : {},
-                    errorArms: this.normalizeErrorArms(response.errorArms, response.errors),
-                    warningArms: Array.isArray(response.warningArms) ? response.warningArms.map(Number) : [],
-                    fisheyeWarningArms: Array.isArray(response.fisheyeWarningArms) ? response.fisheyeWarningArms.map(Number) : []
-                };
+                if (response.valid) {
+                    // 保留先前的本地警告（來自 calculateLocalInverse 的 fisheye/姿態限制等），
+                    // 避免 API 回應覆蓋掉只有在本地端才知道的警告訊息。
+                    const prevWarnings = Array.isArray(this.result?.warnings) ? [...this.result.warnings] : [];
+                    const serverWarnings = Array.isArray(response.warnings) ? response.warnings.map(String) : [];
+                    // 合併並去重：保留 server 警告 + 本地獨有警告
+                    const mergedWarnings = [...serverWarnings];
+                    for (const w of prevWarnings) {
+                        if (!mergedWarnings.includes(w)) {
+                            mergedWarnings.push(w);
+                        }
+                    }
+
+                    this.result = {
+                        servoAngles: Array.isArray(response.servoAngles) ? response.servoAngles.map(Number) : [0, 0, 0, 0, 0, 0],
+                        armEndPoints: this.normalizePointArray(response.armEndPoints),
+                        platformPoints: this.normalizePointArray(response.platformPoints),
+                        basePoints: this.normalizePointArray(response.basePoints),
+                        servoPointMap: Array.isArray(response.servoPointMap) ? response.servoPointMap.map(Number) : this.params.servoPointMap,
+                        rodLengths: Array.isArray(response.rodLengths) ? response.rodLengths.map(Number) : [0, 0, 0, 0, 0, 0],
+                        fisheyeAngles: Array.isArray(response.fisheyeAngles) ? response.fisheyeAngles.map(Number) : [0, 0, 0, 0, 0, 0],
+                        valid: true,
+                        errors: Array.isArray(response.errors) ? response.errors.map(String) : [],
+                        warnings: mergedWarnings,
+                        singularArms: Array.isArray(response.singularArms) ? response.singularArms.map(Number) : [],
+                        singularityInfo: response.singularityInfo ? { ...response.singularityInfo } : {},
+                        errorArms: this.normalizeErrorArms(response.errorArms, response.errors),
+                        warningArms: Array.isArray(response.warningArms) ? response.warningArms.map(Number) : [],
+                        fisheyeWarningArms: Array.isArray(response.fisheyeWarningArms) ? response.fisheyeWarningArms.map(Number) : []
+                    };
+                } else {
+                    // IK 無效時保留本地幾何，不讓伺服器修正值覆蓋拖曳位置
+                    // 合併本地警告與伺服器診斷，避免前端獨有警告（fisheye 等）被清除
+                    const prevWarnings = Array.isArray(this.result?.warnings) ? [...this.result.warnings] : [];
+                    const serverWarnings = Array.isArray(response.warnings) ? response.warnings.map(String) : [];
+                    const mergedWarnings = [...serverWarnings];
+                    for (const w of prevWarnings) {
+                        if (!mergedWarnings.includes(w)) {
+                            mergedWarnings.push(w);
+                        }
+                    }
+                    this.result.valid = false;
+                    this.result.errors = Array.isArray(response.errors) ? response.errors.map(String) : [];
+                    this.result.warnings = mergedWarnings;
+                    this.result.singularArms = Array.isArray(response.singularArms) ? response.singularArms.map(Number) : [];
+                    this.result.singularityInfo = response.singularityInfo ? { ...response.singularityInfo } : {};
+                    this.result.errorArms = this.normalizeErrorArms(response.errorArms, response.errors);
+                    this.result.warningArms = Array.isArray(response.warningArms) ? response.warningArms.map(Number) : [];
+                    this.result.fisheyeWarningArms = Array.isArray(response.fisheyeWarningArms) ? response.fisheyeWarningArms.map(Number) : [];
+                }
+                // 補充前端本地姿態限制警告（後端不知道 maxPoseLimits），避免重複
+                const limits = this.params.maxPoseLimits;
+                if (limits) {
+                    const relZ = this.pose.z - this.initialHeight;
+                    const addOnce = (msg) => { if (!this.result.warnings.includes(msg)) this.result.warnings.push(msg); };
+                    if (Math.abs(this.pose.x) > limits.x) addOnce(`X位移 ${this.pose.x.toFixed(2)} mm 超出 ±${limits.x} mm 限制`);
+                    if (Math.abs(this.pose.y) > limits.y) addOnce(`Y位移 ${this.pose.y.toFixed(2)} mm 超出 ±${limits.y} mm 限制`);
+                    if (Math.abs(relZ) > limits.z) addOnce(`Z位移 ${relZ.toFixed(2)} mm 超出 ±${limits.z} mm 限制`);
+                    if (Math.abs(this.pose.roll) > limits.roll) addOnce(`Roll ${this.pose.roll.toFixed(2)}° 超出 ±${limits.roll}° 限制`);
+                    if (Math.abs(this.pose.pitch) > limits.pitch) addOnce(`Pitch ${this.pose.pitch.toFixed(2)}° 超出 ±${limits.pitch}° 限制`);
+                    if (Math.abs(this.pose.yaw) > limits.yaw) addOnce(`Yaw ${this.pose.yaw.toFixed(2)}° 超出 ±${limits.yaw}° 限制`);
+                }
                 this.rememberRenderableResult(this.result);
             }
 
@@ -5018,30 +5145,49 @@
                 };
             }
 
-            // 3D到2D投影
+            // 取得目前視圖旋轉的三角函式快取（旋轉角度變更時自動重建）
+            // 每帧會呼叫 project() 數百次，快取可避免重複計算三角函式
+            getViewTrig() {
+                const rx = this.visualControl.rotationX || 0;
+                const ry = this.visualControl.rotationY || 0;
+                const rz = this.visualControl.rotationZ || 0;
+                const cache = this._viewTrigCache;
+                if (cache && cache.rx === rx && cache.ry === ry && cache.rz === rz) {
+                    return cache;
+                }
+                const rotX = rx * Math.PI / 180;
+                const rotY = ry * Math.PI / 180;
+                const rotZ = rz * Math.PI / 180;
+                const trig = {
+                    rx, ry, rz,
+                    cosX: Math.cos(rotX), sinX: Math.sin(rotX),
+                    cosY: Math.cos(rotY), sinY: Math.sin(rotY),
+                    cosZ: Math.cos(rotZ), sinZ: Math.sin(rotZ)
+                };
+                this._viewTrigCache = trig;
+                return trig;
+            }
+
+            // 3D到2D投影（第三個回傳值為深度：數值越大越靠近觀看者）
             project(point, viewType = 'iso') {
                 let [x, y, z] = point;
-
-                // 應用旋轉變換（所有視圖都應用）
-                const rotX = this.visualControl.rotationX * Math.PI / 180;
-                const rotY = this.visualControl.rotationY * Math.PI / 180;
-                const rotZ = this.visualControl.rotationZ * Math.PI / 180;
+                const t = this.getViewTrig();
 
                 // 先Y軸旋轉（水平轉動）
-                let tempX = x * Math.cos(rotY) + z * Math.sin(rotY);
-                let tempZ = -x * Math.sin(rotY) + z * Math.cos(rotY);
+                let tempX = x * t.cosY + z * t.sinY;
+                let tempZ = -x * t.sinY + z * t.cosY;
                 x = tempX;
                 z = tempZ;
 
                 // 再X軸旋轉（俯仰）
-                let tempY = y * Math.cos(rotX) - z * Math.sin(rotX);
-                tempZ = y * Math.sin(rotX) + z * Math.cos(rotX);
+                let tempY = y * t.cosX - z * t.sinX;
+                tempZ = y * t.sinX + z * t.cosX;
                 y = tempY;
                 z = tempZ;
 
                 // 最後Z軸旋轉（翻滾）
-                tempX = x * Math.cos(rotZ) - y * Math.sin(rotZ);
-                tempY = x * Math.sin(rotZ) + y * Math.cos(rotZ);
+                tempX = x * t.cosZ - y * t.sinZ;
+                tempY = x * t.sinZ + y * t.cosZ;
                 x = tempX;
                 y = tempY;
 
@@ -5065,11 +5211,12 @@
                     scale *= perspectiveFactor;
                 }
 
-                // 使用 clientWidth/Height (CSS像素) 以配合 ctx.scale(dpr, dpr)
-                // 這樣可以確保在 High DPI 螢幕上，中心點計算正確 (不會偏向右下角)
+                // 直接用 canvas 像素 / dpr 取得 CSS 尺寸：
+                // resize 時 canvas.width 已同步為 CSS 尺寸 * dpr，因此不必每點讀取 clientWidth
+                // （clientWidth 會觸發 layout 讀取，繪圖時每帧數百次呼叫會拖慢速度）
                 const dpr = window.devicePixelRatio || 1;
-                const width = this.canvas.clientWidth || (this.canvas.width / dpr);
-                const height = this.canvas.clientHeight || (this.canvas.height / dpr);
+                const width = (this.canvas.width || 0) / dpr;
+                const height = (this.canvas.height || 0) / dpr;
                 const offsetX = width / 2 + this.visualControl.panX;
                 const offsetY = height / 2 + this.visualControl.panY;
 
@@ -5105,6 +5252,312 @@
                             z // Depth
                         ];
                 }
+            }
+
+            // 只計算深度（畫序用），必須與 project() 的第三個回傳值一致
+            projectDepth(point) {
+                const t = this.getViewTrig();
+                const x1 = point[0] * t.cosY + point[2] * t.sinY;
+                const z1 = -point[0] * t.sinY + point[2] * t.cosY;
+                const y2 = point[1] * t.cosX - z1 * t.sinX;
+                const z2 = point[1] * t.sinX + z1 * t.cosX;
+                if (this.view === 'side') {
+                    // side 視圖的深度軸是旋轉後的 X
+                    return x1 * t.cosZ - y2 * t.sinZ;
+                }
+                return z2;
+            }
+
+            // 取得場景深度範圍（用於空氣透視著色）
+            computeDepthRange(pointGroups) {
+                let min = Infinity;
+                let max = -Infinity;
+                for (const group of pointGroups) {
+                    if (!Array.isArray(group)) continue;
+                    for (const p of group) {
+                        if (!Array.isArray(p) || p.length < 3) continue;
+                        const d = this.projectDepth(p);
+                        if (d < min) min = d;
+                        if (d > max) max = d;
+                    }
+                }
+                if (!Number.isFinite(min) || !Number.isFinite(max)) {
+                    return { min: -1, max: 1 };
+                }
+                if (max - min < 1) max = min + 1;
+                return { min, max };
+            }
+
+            toHexColor(color) {
+                const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+                const hex = (v) => clamp(v).toString(16).padStart(2, '0');
+                return `#${hex(color.r)}${hex(color.g)}${hex(color.b)}`;
+            }
+
+            // 依深度把顏色往背景色混合：遠端較暗、較冷（空氣透視），強化立體空間感
+            depthTint(color, depth, range, strength = 0.32) {
+                const c = this.parseColor(color);
+                if (!range || !Number.isFinite(depth)) return this.toHexColor(c);
+                const span = range.max - range.min || 1;
+                const t = Math.max(0, Math.min(1, (depth - range.min) / span));
+                const k = 1 - (1 - t) * strength; // 遠端 ≈ 0.68，近端 = 1
+                const bg = { r: 12, g: 26, b: 46 };
+                const mix = (v, b) => v * k + b * (1 - k) * 0.65;
+                return this.toHexColor({ r: mix(c.r, bg.r), g: mix(c.g, bg.g), b: mix(c.b, bg.b) });
+            }
+
+            // 2D 往外偏移方向（避開機構中心，減少標註壓住物件）
+            outwardOffset2D(from2D, center2D, distance) {
+                let dx = from2D[0] - center2D[0];
+                let dy = from2D[1] - center2D[1];
+                let len = Math.hypot(dx, dy);
+                if (len < 1e-3) {
+                    dx = 0;
+                    dy = -1;
+                    len = 1;
+                }
+                return [dx / len * distance, dy / len * distance];
+            }
+
+            addDrawItem(items, z, type, draw) {
+                items.push({ z: Number.isFinite(z) ? z : 0, type, draw });
+            }
+
+            // 將圓柱切成小段加入畫序：長桿件橫跨的深度很大，只用中點排序會讓
+            // 前景段的連桿被後方的平台面覆蓋；逐段排序可讓前後關係正確交錯。
+            addCylinderItems(items, start3D, end3D, radius, color, options = {}) {
+                const dx = end3D[0] - start3D[0];
+                const dy = end3D[1] - start3D[1];
+                const dz = end3D[2] - start3D[2];
+                const length = Math.hypot(dx, dy, dz);
+                if (length < 1e-6) return;
+
+                const maxSegments = Math.max(1, options.maxSegments || 1);
+                const segmentLength = options.segmentLength || 120;
+                const segments = maxSegments > 1
+                    ? Math.max(2, Math.min(maxSegments, Math.round(length / segmentLength)))
+                    : 1;
+                const plateInfo = options.plateInfo || null;
+                const overlap = segments > 1 ? 0.35 / length : 0; // 微量重疊，避免接縫
+
+                for (let k = 0; k < segments; k++) {
+                    const t0 = k / segments;
+                    const t1 = k === segments - 1 ? 1 : Math.min(1, (k + 1) / segments + overlap);
+                    const a = [start3D[0] + dx * t0, start3D[1] + dy * t0, start3D[2] + dz * t0];
+                    const b = [start3D[0] + dx * t1, start3D[1] + dy * t1, start3D[2] + dz * t1];
+                    const tm = (t0 + Math.min(1, (k + 1) / segments)) / 2;
+                    const mid = [start3D[0] + dx * tm, start3D[1] + dy * tm, start3D[2] + dz * tm];
+                    const z = this.projectDepth(mid);
+                    const hidden = plateInfo
+                        ? this.isSegmentOccludedByPlatform(a, b, null, plateInfo)
+                        : false;
+
+                    items.push({
+                        z,
+                        type: options.type || 'cylinder',
+                        draw: () => this.drawCylinder3D(a, b, radius, color, hidden, {
+                            cap: segments > 1 ? 'butt' : 'round',
+                            edges: options.edges !== false
+                        })
+                    });
+                }
+            }
+
+            addSphereItem(items, center3D, radius, color, options = {}) {
+                const z = this.projectDepth(center3D);
+                items.push({
+                    z: z + 0.01,
+                    type: options.type || 'sphere',
+                    draw: () => this.drawSphere3D(center3D, radius, color, !!options.isHidden)
+                });
+            }
+
+            // 平台面資訊（投影多邊形、平均深度），供遮擋判定重複使用
+            buildPlateInfo(platformPoints) {
+                const proj = platformPoints.map(p => this.project(p, this.view));
+                const n = proj.length || 1;
+                return {
+                    proj,
+                    z: proj.reduce((acc, p) => acc + p[2], 0) / n
+                };
+            }
+
+            // 六邊形邊長標註：相同邊長只標一次，避免對稱重複的數字蓋滿畫面
+            addHexagonEdgeLabelItems(items, points, center2D) {
+                if (!Array.isArray(points) || points.length < 3) return;
+                const groups = new Map();
+                for (let i = 0; i < points.length; i++) {
+                    const a = points[i];
+                    const b = points[(i + 1) % points.length];
+                    const length = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+                    const key = length.toFixed(3);
+                    const mid3 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+                    const depth = this.projectDepth(mid3);
+                    const prev = groups.get(key);
+                    // 同一邊長取最靠近觀看者的那一邊標註（一定看得到）
+                    if (!prev || depth > prev.depth) {
+                        groups.set(key, { text: key, depth, mid2: this.project(mid3, this.view) });
+                    }
+                }
+                groups.forEach((g) => {
+                    const off = this.outwardOffset2D(g.mid2, center2D, 22);
+                    items.push({
+                        z: g.depth + 0.02,
+                        type: 'edge_label',
+                        draw: () => this.drawLabelWithHighlight(
+                            g.text, g.mid2[0] + off[0], g.mid2[1] + off[1],
+                            '#0b1a26', 'rgba(255, 232, 128, 0.92)'
+                        )
+                    });
+                });
+            }
+
+            // 平台面：頂面細分 + 側面厚度，讓板面與連桿的前後關係正確
+            addPlatformItems(items, platformPoints, renderResult, depthRange) {
+                const n = platformPoints.length;
+                if (n < 3) return;
+
+                const thickness = 22;
+                const avg = (idx) => platformPoints.reduce((s, p) => s + p[idx], 0) / n;
+                const center3D = [avg(0), avg(1), avg(2)];
+                const center2D = this.project(center3D, this.view);
+
+                const valid = renderResult.valid;
+                const topColor = valid ? '#144f9c' : '#8a2b2b';
+                const sideColor = valid ? '#0d3a78' : '#6b2020';
+                const edgeColor = valid ? '#7fc0ff' : '#e07070';
+
+                // 頂面用「跨越整片板」的漸層（各三角形共用同一組螢幕座標），
+                // 這樣細分後不會出現色塊接縫，板面看起來是一整片連續的金屬面。
+                const projPoints = platformPoints.map(p => this.project(p, this.view));
+                let farIdx = 0;
+                let nearIdx = 0;
+                for (let i = 1; i < projPoints.length; i++) {
+                    if (projPoints[i][2] < projPoints[farIdx][2]) farIdx = i;
+                    if (projPoints[i][2] > projPoints[nearIdx][2]) nearIdx = i;
+                }
+                // 漸層端點：取「最遠」與「最近」的頂點；若兩者在畫面上重合
+                // （例如俯視圖所有頂點深度相同），改用投影外框的長邊方向，
+                // 否則會建立出零長度漸層而整片平台畫不出來。
+                let gx0 = projPoints[farIdx][0];
+                let gy0 = projPoints[farIdx][1];
+                let gx1 = projPoints[nearIdx][0];
+                let gy1 = projPoints[nearIdx][1];
+                if (Math.hypot(gx1 - gx0, gy1 - gy0) < 4) {
+                    const xs = projPoints.map(p => p[0]);
+                    const ys = projPoints.map(p => p[1]);
+                    const minX = Math.min(...xs);
+                    const maxX = Math.max(...xs);
+                    const minY = Math.min(...ys);
+                    const maxY = Math.max(...ys);
+                    if (maxY - minY >= maxX - minX) {
+                        gx0 = gx1 = (minX + maxX) / 2;
+                        gy0 = minY;
+                        gy1 = maxY;
+                    } else {
+                        gy0 = gy1 = (minY + maxY) / 2;
+                        gx0 = minX;
+                        gx1 = maxX;
+                    }
+                }
+                const faceGradient = this.ctx.createLinearGradient(gx0, gy0, gx1, gy1);
+                faceGradient.addColorStop(0, this.depthTint(topColor, projPoints[farIdx][2], depthRange, 0.55));
+                faceGradient.addColorStop(0.55, this.depthTint(topColor, (projPoints[farIdx][2] + projPoints[nearIdx][2]) / 2, depthRange, 0.45));
+                faceGradient.addColorStop(1, this.depthTint(this.lightenColor(this.parseColor(topColor), 0.12), projPoints[nearIdx][2], depthRange, 0.2));
+
+                // 側面（厚度）
+                for (let i = 0; i < n; i++) {
+                    const a = platformPoints[i];
+                    const b = platformPoints[(i + 1) % n];
+                    const a2 = [a[0], a[1], a[2] - thickness];
+                    const b2 = [b[0], b[1], b[2] - thickness];
+                    const z = (
+                        this.projectDepth(a) + this.projectDepth(b) +
+                        this.projectDepth(a2) + this.projectDepth(b2)
+                    ) / 4;
+                    const fill = this.depthTint(sideColor, z, depthRange);
+                    const rim = this.depthTint(edgeColor, z, depthRange);
+
+                    items.push({
+                        z,
+                        type: `plat_side_${i}`,
+                        draw: () => {
+                            const pa = this.project(a, this.view);
+                            const pb = this.project(b, this.view);
+                            const pa2 = this.project(a2, this.view);
+                            const pb2 = this.project(b2, this.view);
+
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(pa[0], pa[1]);
+                            this.ctx.lineTo(pb[0], pb[1]);
+                            this.ctx.lineTo(pb2[0], pb2[1]);
+                            this.ctx.lineTo(pa2[0], pa2[1]);
+                            this.ctx.closePath();
+                            this.ctx.fillStyle = fill;
+                            this.ctx.fill();
+
+                            // 上緣高光：讓板厚與頂面分界清楚
+                            this.ctx.strokeStyle = rim;
+                            this.ctx.lineWidth = 1.5;
+                            this.ctx.beginPath();
+                            this.ctx.moveTo(pa[0], pa[1]);
+                            this.ctx.lineTo(pb[0], pb[1]);
+                            this.ctx.stroke();
+                        }
+                    });
+                }
+
+                // 頂面：以中心扇形細分成 12 片，每片各自排序
+                const subdivide = (point, mid) => {
+                    // 由中心到邊中點再分一半，讓深度解析度更細
+                    return [(point[0] + mid[0]) / 2, (point[1] + mid[1]) / 2, (point[2] + mid[2]) / 2];
+                };
+                for (let i = 0; i < n; i++) {
+                    const a = platformPoints[i];
+                    const b = platformPoints[(i + 1) % n];
+                    const mid = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
+                    const quarter1 = subdivide(a, mid);
+                    const quarter2 = subdivide(b, mid);
+                    const tris = [
+                        [center3D, a, quarter1],
+                        [center3D, quarter1, mid],
+                        [center3D, mid, quarter2],
+                        [center3D, quarter2, b]
+                    ];
+
+                    for (const tri of tris) {
+                        const z = (this.projectDepth(tri[0]) + this.projectDepth(tri[1]) + this.projectDepth(tri[2])) / 3;
+                        items.push({
+                            z,
+                            type: 'plat_face',
+                            draw: () => {
+                                // 以重心為中心放大 1.5%，消除相鄰三角形之間的抗鋸齒細縫
+                                const gx = (tri[0][0] + tri[1][0] + tri[2][0]) / 3;
+                                const gy = (tri[0][1] + tri[1][1] + tri[2][1]) / 3;
+                                const gz = (tri[0][2] + tri[1][2] + tri[2][2]) / 3;
+                                const pts = tri.map((p) => [
+                                    gx + (p[0] - gx) * 1.015,
+                                    gy + (p[1] - gy) * 1.015,
+                                    gz + (p[2] - gz) * 1.015
+                                ]);
+                                this.ctx.save();
+                                this.ctx.globalAlpha = 1.0;
+                                this.ctx.beginPath();
+                                pts.forEach((p, idx) => {
+                                    const proj = this.project(p, this.view);
+                                    if (idx === 0) this.ctx.moveTo(proj[0], proj[1]);
+                                    else this.ctx.lineTo(proj[0], proj[1]);
+                                });
+                                this.ctx.closePath();
+                                this.ctx.fillStyle = faceGradient;
+                                this.ctx.fill();
+                                this.ctx.restore();
+                            }
+                        });
+                    }
+                }
+
+                return center2D;
             }
 
             // 繪製環境背景（增加空間感）
@@ -5373,73 +5826,39 @@
             }
 
             // 繪製帶有高亮背景的文字標籤
-            drawLabelWithHighlight(text, x, y, color = '#000000', bgColor = 'rgba(255, 255, 0, 0.85)', align = 'left') {
+            // 注意：字級維持小巧，避免大量標註把機構線條整個蓋住
+            drawLabelWithHighlight(text, x, y, color = '#000000', bgColor = 'rgba(255, 255, 0, 0.9)', align = 'left') {
                 this.ctx.save();
-                // 字體放大 2 倍
-                this.ctx.font = 'bold 22px Arial';
+                this.ctx.font = 'bold 13px Arial';
                 const metrics = this.ctx.measureText(text);
-                const padding = 4;
+                const padding = 3;
+                const boxHeight = 18;
                 
                 // 計算背景框位置
                 let boxX = x;
                 if (align === 'center') boxX = x - metrics.width / 2;
                 else if (align === 'right') boxX = x - metrics.width;
                 
-                const boxY = y - 18; // 向上偏移以適應較大字體
-                const boxHeight = 28;
+                const boxY = y - boxHeight + 3;
                 
                 // 畫背景
                 this.ctx.fillStyle = bgColor;
                 this.ctx.fillRect(boxX - padding, boxY, metrics.width + padding * 2, boxHeight);
                 // 畫邊框
-                this.ctx.strokeStyle = '#333';
+                this.ctx.strokeStyle = 'rgba(0, 0, 0, 0.45)';
                 this.ctx.lineWidth = 0.8;
-                this.ctx.strokeRect(boxX - padding, boxY, metrics.width + padding * 2, boxHeight);
+                this.ctx.strokeRect(boxX - padding + 0.5, boxY + 0.5, metrics.width + padding * 2 - 1, boxHeight - 1);
                 
                 // 畫文字
                 this.ctx.fillStyle = color;
-                this.ctx.textAlign = 'left'; 
-                this.ctx.fillText(text, boxX, boxY + 20);
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'middle';
+                this.ctx.fillText(text, boxX, boxY + boxHeight / 2 + 0.5);
                 
                 this.ctx.restore();
             }
 
-            // 繪制六邊形邊長標註
-            drawHexagonEdgeLabels(points, label, edgeA, edgeB, color) {
-                // 不再直接設定 fillStyle，由 drawLabelWithHighlight 處理
-                
-                for (let i = 0; i < 6; i++) {
-                    const currentPoint = points[i];
-                    const nextPoint = points[(i + 1) % 6];
-
-                    // 計算實際邊長
-                    const actualLength = Math.sqrt(
-                        Math.pow(nextPoint[0] - currentPoint[0], 2) +
-                        Math.pow(nextPoint[1] - currentPoint[1], 2) +
-                        Math.pow(nextPoint[2] - currentPoint[2], 2)
-                    );
-
-                    // 計算邊的中點
-                    const midPoint = [
-                        (currentPoint[0] + nextPoint[0]) / 2,
-                        (currentPoint[1] + nextPoint[1]) / 2,
-                        (currentPoint[2] + nextPoint[2]) / 2
-                    ];
-
-                    const [mx, my] = this.project(midPoint, this.view);
-
-                    // 只顯示實際計算的邊長
-                    const labelText = `${actualLength.toFixed(3)}`;
-
-                    // 調整標註位置，避免重疊
-                    const offsetX = Math.cos(i * Math.PI / 3) * 15;
-                    const offsetY = Math.sin(i * Math.PI / 3) * 15;
-
-                    this.drawLabelWithHighlight(labelText, mx + offsetX, my + offsetY, '#000000');
-                }
-            }
-
-            // 繪制連桿長度標註
+            // 繪製連桿長度標註
             drawRodLengthLabels(armEndPoints, platformPoints) {
                 for (let i = 0; i < 6; i++) {
                     const armEnd = armEndPoints[i];
@@ -5597,21 +6016,21 @@
             // radius: 圓柱半徑 (世界坐標系單位)
             // baseColor: 基礎顏色 (hex 或 rgb)
             // isHidden: 是否為被遮擋的隱藏線 (虛線+淡化)
-            drawCylinder3D(start3D, end3D, radius, baseColor, isHidden = false) {
+            drawCylinder3D(start3D, end3D, radius, baseColor, isHidden = false, options = {}) {
                 const [sx, sy, sz] = this.project(start3D, this.view);
                 const [ex, ey, ez] = this.project(end3D, this.view);
-                
+
                 // 計算 2D 方向與長度
                 const dx = ex - sx;
                 const dy = ey - sy;
                 const len2D = Math.hypot(dx, dy);
-                
+
                 if (len2D < 1) return; // 太短不繪製
-                
+
                 // 計算垂直方向 (用於圓柱寬度)
                 const perpX = -dy / len2D;
                 const perpY = dx / len2D;
-                
+
                 // 根據透視縮放半徑
                 const avgZ = (sz + ez) / 2;
                 let scaledRadius = radius * this.visualControl.scale;
@@ -5620,10 +6039,15 @@
                     const perspFactor = cameraDistance / (cameraDistance - avgZ);
                     scaledRadius *= perspFactor;
                 }
-                scaledRadius = Math.max(2, Math.min(scaledRadius, 20)); // 限制範圍
-                
+                scaledRadius = Math.max(1.5, Math.min(scaledRadius, 20)); // 限制範圍
+
+                const cap = options.cap || 'round';
+                // 分段繪製時不重畫每一段的邊線會出現鋸齒接縫，但每段都畫又太密；
+                // 只在粗細足夠時畫邊線，維持形體感。
+                const drawEdges = options.edges !== false && !isHidden && scaledRadius > 3.5;
+
                 this.ctx.save();
-                
+
                 if (isHidden) {
                     // 隱藏線：虛線 + 淡化
                     this.ctx.setLineDash([4, 4]);
@@ -5662,14 +6086,14 @@
                 // 繪製圓柱主體 (使用粗線條模擬)
                 this.ctx.strokeStyle = gradient;
                 this.ctx.lineWidth = scaledRadius * 2;
-                this.ctx.lineCap = 'round';
+                this.ctx.lineCap = cap;
                 this.ctx.beginPath();
                 this.ctx.moveTo(sx, sy);
                 this.ctx.lineTo(ex, ey);
                 this.ctx.stroke();
                 
                 // 繪製邊緣線 (增加立體感)
-                if (!isHidden && scaledRadius > 4) {
+                if (drawEdges) {
                     this.ctx.strokeStyle = shadowColorCyl;
                     this.ctx.lineWidth = 1;
                     this.ctx.lineCap = 'butt';
@@ -5806,11 +6230,21 @@
 
             // 顏色工具函式
             parseColor(color) {
+                if (typeof color !== 'string') {
+                    return { r: 128, g: 128, b: 128 };
+                }
                 if (color.startsWith('#')) {
                     const r = parseInt(color.slice(1, 3), 16);
                     const g = parseInt(color.slice(3, 5), 16);
                     const b = parseInt(color.slice(5, 7), 16);
-                    return { r, g, b };
+                    if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+                        return { r, g, b };
+                    }
+                    return { r: 128, g: 128, b: 128 };
+                }
+                const match = color.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/i);
+                if (match) {
+                    return { r: Number(match[1]), g: Number(match[2]), b: Number(match[3]) };
                 }
                 return { r: 128, g: 128, b: 128 };
             }
@@ -5830,7 +6264,10 @@
             }
 
             // 檢查線段是否被平台遮擋
-            isSegmentOccludedByPlatform(start3D, end3D, platformPoints) {
+            isSegmentOccludedByPlatform(start3D, end3D, platformPoints, plateInfo = null) {
+                const info = plateInfo || (Array.isArray(platformPoints) ? this.buildPlateInfo(platformPoints) : null);
+                if (!info || !Array.isArray(info.proj) || info.proj.length < 3) return false;
+
                 // 計算線段中點
                 const mid3D = [
                     (start3D[0] + end3D[0]) / 2,
@@ -5840,13 +6277,10 @@
                 
                 // 投影
                 const [mx, my, mz] = this.project(mid3D, this.view);
-                const projPlatPoints = platformPoints.map(p => this.project(p, this.view));
-                const platZ = projPlatPoints.reduce((acc, p) => acc + p[2], 0) / 6;
                 
-                // 深度比較：如果線段中點在平台後面
-                if (mz < platZ - 10) { // 10 為容差
-                    // 檢查投影點是否在平台多邊形內
-                    if (this.isPointInPolygon(mx, my, projPlatPoints)) {
+                // 深度比較：如果線段中點在平台面後面，且投影落在平台多邊形內
+                if (mz < info.z - 8) { // 8 為容差
+                    if (this.isPointInPolygon(mx, my, info.proj)) {
                         return true;
                     }
                 }
@@ -5878,7 +6312,7 @@
                 const renderResult = this.buildPreviewRenderResult();
 
                 this.ctx.clearRect(0, 0, width, height);
-                
+
                 // 繪製環境背景（天空漸層、光暈、地平線）
                 this.drawEnvironmentBackground(width, height);
 
@@ -5890,19 +6324,34 @@
                 const { armEndPoints, platformPoints } = renderResult;
                 const pointMap = Array.isArray(renderResult.servoPointMap) && renderResult.servoPointMap.length === 6
                     ? renderResult.servoPointMap
-                    : (Array.isArray(this.params.servoPointMap) ? this.params.servoPointMap : [0,1,2,3,4,5]);
+                    : (Array.isArray(this.params.servoPointMap) ? this.params.servoPointMap : [0, 1, 2, 3, 4, 5]);
 
                 if (basePoints.length === 0 || armEndPoints.length === 0 || platformPoints.length === 0) return;
 
+                // 平台面資訊（遮擋判定共用，避免每段重算投影）
+                const plateInfo = this.buildPlateInfo(platformPoints);
+
+                // 空氣透視：遠處較暗、較冷，讓機構的前後層次一眼看得出來
+                const depthRange = this.computeDepthRange([basePoints, platformPoints, armEndPoints]);
+                const tint = (color, depth) => this.depthTint(color, depth, depthRange);
+
+                const baseCenter2D = this.project([0, 0, 0], this.view);
+                const platCenter3D = [
+                    platformPoints.reduce((sum, p) => sum + p[0], 0) / platformPoints.length,
+                    platformPoints.reduce((sum, p) => sum + p[1], 0) / platformPoints.length,
+                    platformPoints.reduce((sum, p) => sum + p[2], 0) / platformPoints.length
+                ];
+                const platCenter2D = this.project(platCenter3D, this.view);
+
                 // 準備所有可渲染物件，統一進行深度排序
-                const allRenderItems = [];
+                const items = [];
 
                 // 光照與陰影參數
-                const lightDir = [-0.5, 0.5, 0.8]; 
-                const lightLen = Math.sqrt(lightDir[0]*lightDir[0] + lightDir[1]*lightDir[1] + lightDir[2]*lightDir[2]);
-                const normLight = [lightDir[0]/lightLen, lightDir[1]/lightLen, lightDir[2]/lightLen];
+                const lightDir = [-0.5, 0.5, 0.8];
+                const lightLen = Math.sqrt(lightDir[0] * lightDir[0] + lightDir[1] * lightDir[1] + lightDir[2] * lightDir[2]);
+                const normLight = [lightDir[0] / lightLen, lightDir[1] / lightLen, lightDir[2] / lightLen];
                 const groundZ = -150;
-                
+
                 // 投射陰影計算函數
                 const projectToGround = (point) => {
                     const t = (groundZ - point[2]) / normLight[2];
@@ -5912,7 +6361,7 @@
                         groundZ
                     ];
                 };
-                
+
                 // 計算平台陰影點
                 if (shouldDrawShadows) {
                     const shadowPoints = platformPoints.map(p => projectToGround(p));
@@ -5923,7 +6372,7 @@
                     const shadowCenterX = projShadowPoints.reduce((acc, p) => acc + p[0], 0) / 6;
                     const shadowCenterY = projShadowPoints.reduce((acc, p) => acc + p[1], 0) / 6;
 
-                    allRenderItems.push({
+                    items.push({
                         z: shadowZ - 1500,
                         type: 'ground_plane',
                         draw: () => {
@@ -5953,16 +6402,16 @@
                         }
                     });
 
-                    allRenderItems.push({
+                    items.push({
                         z: shadowZ - 1000,
                         type: 'platform_shadow',
                         draw: () => {
                             this.ctx.save();
                             this.ctx.shadowBlur = 35;
-                            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
+                            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
                             this.ctx.shadowOffsetX = 0;
                             this.ctx.shadowOffsetY = 0;
-                            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.18)';
+                            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.1)';
                             this.ctx.beginPath();
                             projShadowPoints.forEach((p, i) => {
                                 if (i === 0) this.ctx.moveTo(p[0], p[1]);
@@ -5978,7 +6427,7 @@
                                 shadowCenterY + (p[1] - shadowCenterY) * innerScale
                             ]);
 
-                            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.12)';
+                            this.ctx.fillStyle = 'rgba(0, 0, 0, 0.07)';
                             this.ctx.beginPath();
                             innerShadowPoints.forEach((p, i) => {
                                 if (i === 0) this.ctx.moveTo(p[0], p[1]);
@@ -5994,13 +6443,12 @@
                         const pi = pointMap[i];
                         const bp = basePoints[pi];
                         const ae = armEndPoints[i];
-                        const pp = platformPoints[pi];
 
                         const armShadowStart = projectToGround(bp);
                         const armShadowEnd = projectToGround(ae);
                         const armShadowMidZ = (this.project(armShadowStart, this.view)[2] + this.project(armShadowEnd, this.view)[2]) / 2;
 
-                        allRenderItems.push({
+                        items.push({
                             z: armShadowMidZ - 800,
                             type: `arm_shadow_${i}`,
                             draw: () => {
@@ -6008,11 +6456,12 @@
                             }
                         });
 
+                        const pp = platformPoints[pi];
                         const rodShadowStart = projectToGround(ae);
                         const rodShadowEnd = projectToGround(pp);
                         const rodShadowMidZ = (this.project(rodShadowStart, this.view)[2] + this.project(rodShadowEnd, this.view)[2]) / 2;
 
-                        allRenderItems.push({
+                        items.push({
                             z: rodShadowMidZ - 800,
                             type: `rod_shadow_${i}`,
                             draw: () => {
@@ -6022,41 +6471,25 @@
                     }
                 }
 
-                // 預先計算平台投影 (用於遮擋檢測)
-                const projPlatPoints = platformPoints.map(p => this.project(p, this.view));
-                const platZ = projPlatPoints.reduce((acc, p) => acc + p[2], 0) / 6;
-
                 // 1. 基座 (Base) - 六邊形框架
-                const projBasePoints = basePoints.map(p => this.project(p, this.view));
-                const baseZ = projBasePoints.reduce((acc, p) => acc + p[2], 0) / 6;
-                
-                // 基座邊緣 (圓柱)
                 for (let i = 0; i < 6; i++) {
                     const start = basePoints[i];
                     const end = basePoints[(i + 1) % 6];
-                    const midZ = (this.project(start, this.view)[2] + this.project(end, this.view)[2]) / 2;
-                    const isHidden = shouldCheckOcclusion && this.isSegmentOccludedByPlatform(start, end, platformPoints);
-                    
-                    allRenderItems.push({
-                        z: midZ,
+                    const midDepth = (this.projectDepth(start) + this.projectDepth(end)) / 2;
+                    this.addCylinderItems(items, start, end, 8, tint('#556070', midDepth), {
+                        maxSegments: 4,
+                        segmentLength: 160,
                         type: `base_edge_${i}`,
-                        draw: () => {
-                            this.drawCylinder3D(start, end, 8, '#555555', isHidden);
-                        }
+                        plateInfo: shouldCheckOcclusion ? plateInfo : null
                     });
                 }
-                
+
                 // 基座中心點
-                allRenderItems.push({
-                    z: baseZ,
-                    type: 'base_center',
-                    draw: () => {
-                        this.drawSphere3D([0, 0, 0], 12, '#333333', false);
-                        if (shouldDrawLabels) {
-                            this.drawHexagonEdgeLabels(basePoints, '基座', this.params.baseEdgeA, this.params.baseEdgeB, '#444');
-                        }
-                    }
-                });
+                const baseDepth = this.projectDepth([0, 0, 0]);
+                this.addSphereItem(items, [0, 0, 0], 12, tint('#333333', baseDepth), { type: 'base_center' });
+                if (shouldDrawLabels) {
+                    this.addHexagonEdgeLabelItems(items, basePoints, baseCenter2D);
+                }
 
                 // 2. 力臂與連桿 (Arms & Rods)
                 for (let i = 0; i < 6; i++) {
@@ -6064,347 +6497,272 @@
                     const bp = basePoints[pi];
                     const ae = armEndPoints[i];
                     const pp = platformPoints[pi];
-                    
+
                     const pbp = this.project(bp, this.view);
                     const pae = this.project(ae, this.view);
                     const ppp = this.project(pp, this.view);
-                    
-                    // 軌跡 (保持原有邏輯)
+                    const depthBp = pbp[2];
+                    const depthAe = pae[2];
+                    const depthPp = ppp[2];
+
+                    const hasSingularity = Array.isArray(renderResult.singularArms) && renderResult.singularArms.includes(i);
+                    const hasError = Array.isArray(renderResult.errorArms) && renderResult.errorArms.includes(i);
+                    const singularityInfo = renderResult.singularityInfo && renderResult.singularityInfo[i];
+
+                    // 力臂端點軌跡
                     if (shouldDrawTrajectories) {
-                        allRenderItems.push({
-                            z: pbp[2] - 1,
-                            type: `traj_${i}`,
-                            draw: () => this.drawServoTrajectory(bp, i)
-                        });
+                        this.addDrawItem(items, Math.min(depthBp, depthAe) - 1, `traj_${i}`, () => this.drawServoTrajectory(bp, i));
                     }
 
                     // 基座連接點 (球體)
-                    allRenderItems.push({
-                        z: pbp[2],
-                        type: `base_joint_${i}`,
-                        draw: () => {
-                            const isHidden = shouldCheckOcclusion && this.isSegmentOccludedByPlatform(bp, bp, platformPoints);
-                            this.drawSphere3D(bp, 15, '#222222', isHidden);
-                        }
-                    });
+                    this.addSphereItem(items, bp, 15, tint('#1c2431', depthBp), { type: `base_joint_${i}` });
 
                     // 力臂 (圓柱)
-                    const armMidZ = (pbp[2] + pae[2]) / 2;
-                    const armIsHidden = shouldCheckOcclusion && this.isSegmentOccludedByPlatform(bp, ae, platformPoints);
-                    
-                    allRenderItems.push({
-                        z: armMidZ,
+                    const armMidZ = (depthBp + depthAe) / 2;
+                    const armColor = hasSingularity ? '#ff0000' : '#cc3333';
+                    this.addCylinderItems(items, bp, ae, 12, tint(armColor, armMidZ), {
+                        maxSegments: 3,
+                        segmentLength: 140,
                         type: `arm_${i}`,
-                        draw: () => {
-                            // 檢查該力臂是否有奇點，有奇點則顯示紅色，否則正常顏色
-                            const hasSingularity = renderResult.singularArms && renderResult.singularArms.includes(i);
-                            const armColor = hasSingularity ? '#ff0000' : '#cc3333';
-                            this.drawCylinder3D(bp, ae, 12, armColor, armIsHidden);
-                            
-                            // 標註
-                            if (shouldDrawLabels && !armIsHidden) {
-                                const midArmX = (pbp[0] + pae[0]) / 2;
-                                const midArmY = (pbp[1] + pae[1]) / 2;
-                                const armDisplayIndex = this.inverseMap[i] !== undefined ? this.inverseMap[i] : i;
-                                this.drawLabelWithHighlight(`#${armDisplayIndex + 1} L=${this.params.servoArmLength}`, midArmX, midArmY, '#000', 'rgba(255, 220, 220, 0.9)');
-                                
-                                // 如果有奇點，顯示奇點資訊
-                                if (hasSingularity && renderResult.singularityInfo && renderResult.singularityInfo[i]) {
-                                    const info = renderResult.singularityInfo[i];
-                                    let singularLabel = '';
-                                    if (info.type === 'vertical') {
-                                        singularLabel = `奇點: ${info.value}°<${info.threshold}°`;
-                                    } else if (info.type === 'horizontal') {
-                                        singularLabel = `奇點: ${info.value}°>${info.threshold}°`;
-                                    } else if (info.type === 'extend') {
-                                        singularLabel = `奇點: ${info.value}%>${info.threshold}%`;
-                                    } else if (info.type === 'contract') {
-                                        singularLabel = `奇點: ${info.value}%<${info.threshold}%`;
-                                    }
-                                    this.drawLabelWithHighlight(singularLabel, midArmX, midArmY + 15, '#fff', 'rgba(255, 0, 0, 0.85)');
-                                }
-                            }
-                        }
+                        plateInfo: shouldCheckOcclusion ? plateInfo : null
                     });
 
                     // 力臂端點關節 (球體)
-                    allRenderItems.push({
-                        z: pae[2],
-                        type: `arm_end_joint_${i}`,
-                        draw: () => {
-                            const isHidden = shouldCheckOcclusion && this.isSegmentOccludedByPlatform(ae, ae, platformPoints);
-                            this.drawSphere3D(ae, 10, '#ff4444', isHidden);
-                        }
-                    });
+                    this.addSphereItem(items, ae, 10, tint('#ff4444', depthAe), { type: `arm_end_joint_${i}` });
 
                     // 連桿 (圓柱)
-                    const rodMidZ = (pae[2] + ppp[2]) / 2;
-                    const rodIsHidden = shouldCheckOcclusion && this.isSegmentOccludedByPlatform(ae, pp, platformPoints);
-                    
-                    allRenderItems.push({
-                        z: rodMidZ,
+                    const rodMidZ = (depthAe + depthPp) / 2;
+                    const rodColor = (hasSingularity || hasError) ? '#ff0000' : '#228833';
+                    this.addCylinderItems(items, ae, pp, 8, tint(rodColor, rodMidZ), {
+                        maxSegments: 5,
+                        segmentLength: 110,
                         type: `rod_${i}`,
-                        draw: () => {
-                            const hasSingularity = renderResult.singularArms && renderResult.singularArms.includes(i);
-                            const hasError = renderResult.errorArms && renderResult.errorArms.includes(i);
-                            const singularityInfo = renderResult.singularityInfo && renderResult.singularityInfo[i];
-                            // 有奇點或錯誤顯示紅色，否則正常綠色
-                            const rodColor = (hasSingularity || hasError) ? '#ff0000' : '#228833';
-                            this.drawCylinder3D(ae, pp, 8, rodColor, rodIsHidden);
-                            
-                            // 如果有幾何奇點（垂直或水平），繪製延伸線標示夾角
-                            if (shouldDrawLabels && hasSingularity && singularityInfo && (singularityInfo.type === 'vertical' || singularityInfo.type === 'horizontal')) {
-                                // 計算連桿向量
-                                const rodVec = [pp[0] - ae[0], pp[1] - ae[1], pp[2] - ae[2]];
-                                const rodLen = Math.sqrt(rodVec[0] ** 2 + rodVec[1] ** 2 + rodVec[2] ** 2);
-                                
-                                // 延伸連桿線（虛線）
-                                const extendLen = 80;
-                                const extendEnd = [
-                                    ae[0] - (rodVec[0] / rodLen) * extendLen,
-                                    ae[1] - (rodVec[1] / rodLen) * extendLen,
-                                    ae[2] - (rodVec[2] / rodLen) * extendLen
-                                ];
-                                const projExtendEnd = this.project(extendEnd, this.view);
-                                
-                                // 繪製連桿延伸虛線
-                                this.ctx.save();
-                                this.ctx.setLineDash([5, 3]);
-                                this.ctx.strokeStyle = '#ff6600';
-                                this.ctx.lineWidth = 2;
-                                this.ctx.beginPath();
-                                this.ctx.moveTo(pae[0], pae[1]);
-                                this.ctx.lineTo(projExtendEnd[0], projExtendEnd[1]);
-                                this.ctx.stroke();
-                                this.ctx.setLineDash([]);
-                                this.ctx.restore();
-                                
-                                // 繪製Z軸參考線（從力臂端點垂直向上/向下）
-                                const zRefLen = 80;
-                                const zRefEnd = [ae[0], ae[1], ae[2] + zRefLen];
-                                const projZRefEnd = this.project(zRefEnd, this.view);
-                                
-                                this.ctx.save();
-                                this.ctx.setLineDash([3, 3]);
-                                this.ctx.strokeStyle = '#0088ff';
-                                this.ctx.lineWidth = 2;
-                                this.ctx.beginPath();
-                                this.ctx.moveTo(pae[0], pae[1]);
-                                this.ctx.lineTo(projZRefEnd[0], projZRefEnd[1]);
-                                this.ctx.stroke();
-                                this.ctx.setLineDash([]);
-                                this.ctx.restore();
-                                
-                                // 繪製夾角弧線
-                                const angleRad = parseFloat(singularityInfo.value) * Math.PI / 180;
-                                const arcRadius = 25;
-                                
-                                // 計算弧線的起始和結束角度（在螢幕座標系）
-                                const zVecScreen = [projZRefEnd[0] - pae[0], projZRefEnd[1] - pae[1]];
-                                const rodVecScreen = [ppp[0] - pae[0], ppp[1] - pae[1]];
-                                
-                                const zAngle = Math.atan2(zVecScreen[1], zVecScreen[0]);
-                                const rodAngle = Math.atan2(rodVecScreen[1], rodVecScreen[0]);
-                                
-                                this.ctx.save();
-                                this.ctx.strokeStyle = '#ffcc00';
-                                this.ctx.lineWidth = 2;
-                                this.ctx.beginPath();
-                                // 繪製從Z軸到連桿的弧線
-                                const startAngle = Math.min(zAngle, rodAngle);
-                                const endAngle = Math.max(zAngle, rodAngle);
-                                // 選擇較小的弧
-                                if (endAngle - startAngle > Math.PI) {
-                                    this.ctx.arc(pae[0], pae[1], arcRadius, endAngle, startAngle + 2 * Math.PI);
-                                } else {
-                                    this.ctx.arc(pae[0], pae[1], arcRadius, startAngle, endAngle);
-                                }
-                                this.ctx.stroke();
-                                this.ctx.restore();
-                                
-                                // 在弧線旁標註角度
-                                const midAngle = (zAngle + rodAngle) / 2;
-                                const labelX = pae[0] + Math.cos(midAngle) * (arcRadius + 15);
-                                const labelY = pae[1] + Math.sin(midAngle) * (arcRadius + 15);
-                                this.drawLabelWithHighlight(`${singularityInfo.value}°`, labelX, labelY, '#fff', 'rgba(255, 100, 0, 0.9)');
-                            }
-                            
-                            // 連桿標註
-                            if (shouldDrawLabels && !rodIsHidden) {
-                                const rodLength = Array.isArray(renderResult.rodLengths)
-                                    ? Number(renderResult.rodLengths[i] || 0)
-                                    : Math.sqrt(
-                                        Math.pow(pp[0] - ae[0], 2) +
-                                        Math.pow(pp[1] - ae[1], 2) +
-                                        Math.pow(pp[2] - ae[2], 2)
-                                    );
-                                const midRodX = (pae[0] + ppp[0]) / 2;
-                                const midRodY = (pae[1] + ppp[1]) / 2;
-                                const labelText = `${rodLength.toFixed(3)}`;
-                                const offsetX = Math.cos(i * Math.PI / 3) * 20;
-                                const offsetY = Math.sin(i * Math.PI / 3) * 20;
-                                this.drawLabelWithHighlight(labelText, midRodX + offsetX, midRodY + offsetY, '#000000', 'rgba(230, 255, 230, 0.9)');
-
-                                // 魚眼角度
-                                const fisheyeAngle = Array.isArray(renderResult.fisheyeAngles)
-                                    ? Number(renderResult.fisheyeAngles[i] || 0)
-                                    : 0;
-                                const limit = this.params.fisheyeAngleLimit || 30;
-                                let angleColor = '#0066cc';
-                                if (fisheyeAngle > limit * 0.9) angleColor = '#ff6600';
-                                if (fisheyeAngle > limit) angleColor = '#cc0000';
-                                if (fisheyeAngle > 0) {
-                                    this.drawLabelWithHighlight(`${fisheyeAngle.toFixed(3)}°`, pae[0] + 8, pae[1] - 8, angleColor);
-                                }
-                            }
-                            
-                            // 編號
-                            const displayIndex = this.inverseMap[i] !== undefined ? this.inverseMap[i] : i;
-                            if (shouldDrawLabels) {
-                                this.ctx.fillStyle = '#000';
-                                this.ctx.font = 'bold 12px Arial';
-                                this.ctx.fillText(`${displayIndex + 1}`, pbp[0] + 5, pbp[1] - 5);
-                            }
-                        }
+                        plateInfo: shouldCheckOcclusion ? plateInfo : null
                     });
 
                     // 平台連接點關節 (球體)
-                    allRenderItems.push({
-                        z: ppp[2] + 1, // 稍微在平台上方
-                        type: `plat_joint_${i}`,
-                        draw: () => {
-                            const hasError = renderResult.errorArms && renderResult.errorArms.includes(i);
-                            const jointColor = hasError ? '#cc0000' : '#0066cc';
-                            this.drawSphere3D(pp, 10, jointColor, false);
-                        }
-                    });
-                }
-                
-                // 3. 平台 (Platform)
-                const platformItem = {
-                    z: platZ,
-                    type: 'platform',
-                    draw: () => {
-                        const valid = renderResult.valid;
-                        
-                        // 判斷正反面
-                        let signedArea = 0;
-                        for (let i = 0; i < 6; i++) {
-                            const cur = projPlatPoints[i];
-                            const next = projPlatPoints[(i + 1) % 6];
-                            signedArea += (cur[0] * next[1] - next[0] * cur[1]);
-                        }
-                        const isFrontFace = signedArea > 0;
-                        
-                        // 根據正反面和有效性選擇顏色
-                        let fillColor, strokeColor;
-                        if (valid) {
-                            fillColor = isFrontFace ? 'rgba(0, 50, 150, 0.85)' : 'rgba(100, 150, 220, 0.85)';
-                            strokeColor = '#0066cc';
-                        } else {
-                            fillColor = isFrontFace ? 'rgba(150, 50, 50, 0.85)' : 'rgba(220, 100, 100, 0.85)'; 
-                            strokeColor = '#cc0000';
-                        }
-                        
-                        // 繪製平台面
-                        this.ctx.fillStyle = fillColor;
-                        this.ctx.strokeStyle = strokeColor;
-                        this.ctx.lineWidth = 3;
-                        this.ctx.beginPath();
-                        projPlatPoints.forEach((p, i) => {
-                            if (i === 0) this.ctx.moveTo(p[0], p[1]);
-                            else this.ctx.lineTo(p[0], p[1]);
-                        });
-                        this.ctx.closePath();
-                        this.ctx.fill();
-                        this.ctx.stroke();
+                    const jointColor = hasError ? '#cc0000' : '#0066cc';
+                    this.addSphereItem(items, pp, 10, tint(jointColor, depthPp), { type: `plat_joint_${i}` });
 
-                        if (shouldDrawLabels) {
-                            this.drawHexagonEdgeLabels(platformPoints, '平台', this.params.platformEdgeA, this.params.platformEdgeB, strokeColor);
-                        }
+                    if (!shouldDrawLabels) continue;
+
+                    const armDisplayIndex = this.inverseMap[i] !== undefined ? this.inverseMap[i] : i;
+
+                    // 力臂編號：往外側偏移，避免壓在機構線上
+                    const armMid2D = [(pbp[0] + pae[0]) / 2, (pbp[1] + pae[1]) / 2];
+                    const armOffset = this.outwardOffset2D(armMid2D, platCenter2D, 18);
+                    this.addDrawItem(items, armMidZ + 0.5, `arm_label_${i}`, () => {
+                        this.drawLabelWithHighlight(
+                            `#${armDisplayIndex + 1}`,
+                            armMid2D[0] + armOffset[0],
+                            armMid2D[1] + armOffset[1],
+                            '#000000',
+                            hasSingularity ? 'rgba(255, 196, 196, 0.95)' : 'rgba(255, 226, 226, 0.92)'
+                        );
+                    });
+
+                    // 連桿標註（長度 + 魚眼角度）
+                    const rodLength = Array.isArray(renderResult.rodLengths)
+                        ? Number(renderResult.rodLengths[i] || 0)
+                        : Math.hypot(pp[0] - ae[0], pp[1] - ae[1], pp[2] - ae[2]);
+                    const fisheyeAngle = Array.isArray(renderResult.fisheyeAngles)
+                        ? Number(renderResult.fisheyeAngles[i] || 0)
+                        : 0;
+                    const limit = this.params.fisheyeAngleLimit || 30;
+                    let angleColor = '#003d7a';
+                    let angleBg = 'rgba(214, 236, 255, 0.92)';
+                    if (fisheyeAngle > limit * 0.9) {
+                        angleColor = '#7a3200';
+                        angleBg = 'rgba(255, 228, 196, 0.95)';
                     }
-                };
-                allRenderItems.push(platformItem);
+                    if (fisheyeAngle > limit) {
+                        angleColor = '#7a0000';
+                        angleBg = 'rgba(255, 198, 198, 0.95)';
+                    }
 
-                // 平台邊緣 (圓柱框架)
-                for (let i = 0; i < 6; i++) {
-                    const start = platformPoints[i];
-                    const end = platformPoints[(i + 1) % 6];
-                    const midZ = (this.project(start, this.view)[2] + this.project(end, this.view)[2]) / 2;
-                    
-                    allRenderItems.push({
-                        z: midZ + 0.5, // 稍微在平台面上方
-                        type: `plat_edge_${i}`,
-                        draw: () => {
-                            const valid = renderResult.valid;
-                            this.drawCylinder3D(start, end, 6, valid ? '#0055aa' : '#aa3333', false);
+                    const rodMid2D = [(pae[0] + ppp[0]) / 2, (pae[1] + ppp[1]) / 2];
+                    const rodOffset = this.outwardOffset2D(rodMid2D, platCenter2D, 16);
+                    // 魚眼軸承在平台接頭端，標註放在平台接點外側並用該點深度排序，
+                    // 才不會被平台面蓋掉（也不會壓在桿長標註上）
+                    const fisheyeOffset = this.outwardOffset2D(ppp, platCenter2D, 18);
+                    const rodHidden = shouldCheckOcclusion
+                        ? this.isSegmentOccludedByPlatform(ae, pp, null, plateInfo)
+                        : false;
+
+                    this.addDrawItem(items, rodMidZ + 0.5, `rod_label_${i}`, () => {
+                        if (hasSingularity && singularityInfo && (singularityInfo.type === 'vertical' || singularityInfo.type === 'horizontal')) {
+                            this.drawArmSingularityGuides(ae, pp, pae, ppp, singularityInfo);
                         }
+                        if (rodHidden) return;
+
+                        this.drawLabelWithHighlight(
+                            rodLength.toFixed(3),
+                            rodMid2D[0] + rodOffset[0],
+                            rodMid2D[1] + rodOffset[1],
+                            '#00220a',
+                            'rgba(222, 255, 222, 0.92)'
+                        );
                     });
+
+                    if (fisheyeAngle > 0) {
+                        this.addDrawItem(items, depthPp + 1, `fisheye_label_${i}`, () => {
+                            this.drawLabelWithHighlight(
+                                `${fisheyeAngle.toFixed(3)}°`,
+                                ppp[0] + fisheyeOffset[0],
+                                ppp[1] + fisheyeOffset[1] - 4,
+                                angleColor,
+                                angleBg
+                            );
+                        });
+                    }
+                }
+
+                // 3. 平台 (Platform) - 頂面細分 + 側面厚度
+                this.addPlatformItems(items, platformPoints, renderResult, depthRange);
+
+                if (shouldDrawLabels) {
+                    this.addHexagonEdgeLabelItems(items, platformPoints, platCenter2D);
                 }
 
                 // --- 統一深度排序並繪製 ---
-                // Z 值較小的在後面（先畫），Z 值較大的在前面（後畫）
-                allRenderItems.sort((a, b) => a.z - b.z);
-                
-                allRenderItems.forEach(item => {
-                    item.draw();
-                });
+                // 深度小 = 較遠（先畫），深度大 = 較近（後畫）
+                items.sort((a, b) => a.z - b.z);
+                for (let i = 0; i < items.length; i++) {
+                    items[i].draw();
+                }
 
-                // 繪制平台重心到基座重心的 Z 軸高度指示 (最後畫)
+                // 繪制平台重心到基座重心的 Z 軸高度指示與平台座標軸（標註層，最後畫）
                 this.drawCentroidHeight();
 
                 // 繪制魚眼軸承角度圖例
                 this.drawFisheyeAngleLegend();
             }
 
+            // 奇點幾何輔助線（連桿延伸虛線、Z 參考線、夾角弧線）
+            drawArmSingularityGuides(ae, pp, pae, ppp, singularityInfo) {
+                const rodVec = [pp[0] - ae[0], pp[1] - ae[1], pp[2] - ae[2]];
+                const rodLen = Math.hypot(rodVec[0], rodVec[1], rodVec[2]);
+                if (!rodLen) return;
+
+                // 延伸連桿線（虛線）
+                const extendLen = 80;
+                const extendEnd = [
+                    ae[0] - (rodVec[0] / rodLen) * extendLen,
+                    ae[1] - (rodVec[1] / rodLen) * extendLen,
+                    ae[2] - (rodVec[2] / rodLen) * extendLen
+                ];
+                const projExtendEnd = this.project(extendEnd, this.view);
+
+                this.ctx.save();
+                this.ctx.setLineDash([5, 3]);
+                this.ctx.strokeStyle = '#ff6600';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                this.ctx.moveTo(pae[0], pae[1]);
+                this.ctx.lineTo(projExtendEnd[0], projExtendEnd[1]);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+                this.ctx.restore();
+
+                // Z 軸參考線（從力臂端點垂直向上）
+                const zRefEnd = [ae[0], ae[1], ae[2] + 80];
+                const projZRefEnd = this.project(zRefEnd, this.view);
+
+                this.ctx.save();
+                this.ctx.setLineDash([3, 3]);
+                this.ctx.strokeStyle = '#0088ff';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                this.ctx.moveTo(pae[0], pae[1]);
+                this.ctx.lineTo(projZRefEnd[0], projZRefEnd[1]);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+                this.ctx.restore();
+
+                // 夾角弧線
+                const arcRadius = 25;
+                const zVecScreen = [projZRefEnd[0] - pae[0], projZRefEnd[1] - pae[1]];
+                const rodVecScreen = [ppp[0] - pae[0], ppp[1] - pae[1]];
+                const zAngle = Math.atan2(zVecScreen[1], zVecScreen[0]);
+                const rodAngle = Math.atan2(rodVecScreen[1], rodVecScreen[0]);
+
+                this.ctx.save();
+                this.ctx.strokeStyle = '#ffcc00';
+                this.ctx.lineWidth = 2;
+                this.ctx.beginPath();
+                const startAngle = Math.min(zAngle, rodAngle);
+                const endAngle = Math.max(zAngle, rodAngle);
+                if (endAngle - startAngle > Math.PI) {
+                    this.ctx.arc(pae[0], pae[1], arcRadius, endAngle, startAngle + 2 * Math.PI);
+                } else {
+                    this.ctx.arc(pae[0], pae[1], arcRadius, startAngle, endAngle);
+                }
+                this.ctx.stroke();
+                this.ctx.restore();
+
+                // 在弧線旁標註角度
+                const midAngle = (zAngle + rodAngle) / 2;
+                const labelX = pae[0] + Math.cos(midAngle) * (arcRadius + 15);
+                const labelY = pae[1] + Math.sin(midAngle) * (arcRadius + 15);
+                this.drawLabelWithHighlight(`${Number(singularityInfo.value).toFixed(4)}°`, labelX, labelY, '#ffffff', 'rgba(200, 60, 0, 0.95)');
+            }
+
             // 繪制魚眼軸承角度圖例
             drawFisheyeAngleLegend() {
                 const limit = this.params.fisheyeAngleLimit || 30;
-                const legendX = this.canvas.width - 180;
-                const legendY = 20;
+                const dpr = window.devicePixelRatio || 1;
+                const cssWidth = (this.canvas.width || 0) / dpr;
+                const legendWidth = 176;
+                const legendX = Math.max(10, cssWidth - legendWidth - 12);
+                const legendY = 14;
 
-                // 背景框
-                this.ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-                this.ctx.fillRect(legendX - 10, legendY - 15, 170, 80);
+                this.ctx.save();
+
+                // 背景框（深色玻璃面板，與場景一致）
+                this.ctx.fillStyle = 'rgba(10, 22, 38, 0.82)';
+                this.ctx.fillRect(legendX - 8, legendY - 12, legendWidth, 84);
 
                 // 邊框
-                this.ctx.strokeStyle = '#333';
+                this.ctx.strokeStyle = 'rgba(120, 170, 215, 0.4)';
                 this.ctx.lineWidth = 1;
-                this.ctx.strokeRect(legendX - 10, legendY - 15, 170, 80);
+                this.ctx.strokeRect(legendX - 8 + 0.5, legendY - 12 + 0.5, legendWidth - 1, 83);
 
                 // 標題
-                this.ctx.fillStyle = '#000';
+                this.ctx.fillStyle = '#d7e6f5';
                 this.ctx.font = '12px Arial';
+                this.ctx.textAlign = 'left';
+                this.ctx.textBaseline = 'alphabetic';
                 this.ctx.fillText('魚眼軸承中心偏移角度', legendX, legendY);
 
-                // 正常範圍
-                this.ctx.fillStyle = '#0066cc';
-                this.ctx.fillRect(legendX, legendY + 8, 12, 12);
-                this.ctx.fillStyle = '#000';
-                this.ctx.fillText(`正常 (< ${(limit * 0.9).toFixed(0)}°)`, legendX + 18, legendY + 18);
+                const rows = [
+                    { color: '#3d9be9', text: `正常 (< ${(limit * 0.9).toFixed(0)}°)` },
+                    { color: '#ff9a3d', text: `接近限制 (${(limit * 0.9).toFixed(0)}°-${limit.toFixed(0)}°)` },
+                    { color: '#ff5a5a', text: `超過限制 (> ${limit.toFixed(0)}°)` }
+                ];
 
-                // 接近限制
-                this.ctx.fillStyle = '#ff6600';
-                this.ctx.fillRect(legendX, legendY + 28, 12, 12);
-                this.ctx.fillStyle = '#000';
-                this.ctx.fillText(`接近限制 (${(limit * 0.9).toFixed(0)}°-${limit.toFixed(0)}°)`, legendX + 18, legendY + 38);
+                rows.forEach((row, i) => {
+                    const y = legendY + 8 + i * 20;
+                    this.ctx.fillStyle = row.color;
+                    this.ctx.fillRect(legendX, y, 11, 11);
+                    this.ctx.fillStyle = '#c9dcee';
+                    this.ctx.fillText(row.text, legendX + 17, y + 9.5);
+                });
 
-                // 超過限制
-                this.ctx.fillStyle = '#cc0000';
-                this.ctx.fillRect(legendX, legendY + 48, 12, 12);
-                this.ctx.fillStyle = '#000';
-                this.ctx.fillText(`超過限制 (> ${limit.toFixed(0)}°)`, legendX + 18, legendY + 58);
+                this.ctx.restore();
             }
 
             updateDisplay() {
                 // 更新結果顯示
                 const resultSection = document.getElementById('resultSection');
                 const resultTitle = document.getElementById('resultTitle');
-                const errorList = document.getElementById('errorList');
 
                 // 更新標題和樣式
-                resultTitle.innerHTML = `力臂角度輸出 (逆運動學) <span class="status-icon ${this.result.valid ? 'status-ok' : 'status-error'}">${this.result.valid ? '✓' : '✗'}</span>`;
-                resultSection.className = `section section-compact ${this.result.valid ? 'section-green' : 'section-red'}`;
+                const hasWarnings = Array.isArray(this.result.warnings) && this.result.warnings.length > 0;
+                const hasIssues = !this.result.valid || hasWarnings;
+                const statusIcon = this.result.valid ? '✓' : '✗';
+                const statusClass = hasIssues ? 'status-error' : 'status-ok';
+                resultTitle.innerHTML = `力臂角度輸出 (逆運動學) <span class="status-icon ${statusClass}">${statusIcon}</span>`;
+                resultSection.className = `section section-compact ${hasIssues ? 'section-red' : 'section-green'}`;
 
                 // 依顯示順序更新 outputServoAngle 輸入框
                 for (let i = 0; i < 6; i++) {
@@ -6412,23 +6770,46 @@
                     const angle = this.result.servoAngles[paramIndex] ?? 0;
                     const outputEl = document.getElementById(`outputServoAngle${i}`);
                     if (outputEl) {
-                        outputEl.value = angle.toFixed(7);
+                        outputEl.value = angle.toFixed(4);
                     }
                 }
 
-                // 更新錯誤列表
-                const messages = [
-                    ...(Array.isArray(this.result.errors) ? this.result.errors : []),
-                    ...(Array.isArray(this.result.warnings) ? this.result.warnings : [])
-                ];
-                if (messages.length > 0) {
-                    errorList.style.display = 'block';
-                    errorList.innerHTML = messages.map(error => `<div>${error}</div>`).join('');
-                } else {
-                    errorList.style.display = 'none';
-                }
+                // 更新警告訊息（繪製在作圖區 overlay 避免版面重排）
+                this.renderCanvasWarningOverlay();
 
                 this.updateNativePlannerDisplay();
+            }
+
+            // 統一把 IK 錯誤/警告 + Native Planner 錯誤繪製到 canvas overlay，並標記來源
+            renderCanvasWarningOverlay() {
+                const canvasWarn = document.getElementById('canvasWarningOverlay');
+                if (!canvasWarn) return;
+
+                const parts = [];
+
+                // 標記訊息來源：前端（本地檢查）vs 後端（伺服器/SSE）
+                const tagMsg = (msg) => {
+                    if (/超出|魚眼/.test(msg)) return `[前端] ${msg}`;
+                    return `[後端] ${msg}`;
+                };
+
+                // IK 錯誤與警告
+                const errMsgs = Array.isArray(this.result?.errors) ? this.result.errors : [];
+                const warnMsgs = Array.isArray(this.result?.warnings) ? this.result.warnings : [];
+                for (const m of errMsgs) parts.push(tagMsg(m));
+                for (const m of warnMsgs) parts.push(tagMsg(m));
+
+                // Native Planner 錯誤
+                const plannerErrs = Array.isArray(this.nativePlannerState?.errors) ? this.nativePlannerState.errors : [];
+                for (const m of plannerErrs) parts.push(`[後端] ${m}`);
+
+                if (parts.length > 0) {
+                    canvasWarn.style.display = 'block';
+                    canvasWarn.innerHTML = parts.map(msg => `<div>${msg}</div>`).join('');
+                } else {
+                    canvasWarn.style.display = 'none';
+                    canvasWarn.innerHTML = '';
+                }
             }
 
             // 重置參數到預設值
@@ -6528,10 +6909,10 @@
                 // 綜合縮放：取較大的縮放以滿足最嚴格需求，但對小設計目標更敏感
                 const scale = Math.max(linearScale, angularScale);
 
-                // 根據縮放調整基座/平台/臂長/連桿
+                // 根據縮放調整基座/平台尺寸；力臂長度固定 300 mm 避免整體過大
                 const baseSize = Math.round(650 * scale);
                 const platformSize = Math.round(550 * scale);
-                const armLength = Math.round(280 * scale);
+                const armLength = 300;
 
                 this.params.baseEdgeA = baseSize;
                 this.params.baseEdgeB = Math.max(15, Math.round(baseSize / 6)); // 降低最小值以允許更小機構
@@ -6539,7 +6920,7 @@
                 this.params.platformEdgeB = Math.max(15, Math.round(platformSize / 6));
 
                 this.params.servoArmLength = armLength;
-                // 連桿長度按比例並保留合理範圍
+                // 連桿長度按力臂比例（力臂固定 300 → rod ≈ 540）
                 this.params.rodLength = Math.max(100, Math.round(armLength * 1.8)); // 提高最小值確保穩定性
 
                 // 注意：不再根據設計目標自動調整角度限制，保持用戶設定的值
@@ -6685,8 +7066,8 @@
 
                 // 4. 連接桿間干涉考慮
                 // 計算相鄰連接桿間的最小角度間距
-                const baseRadius = (this.params.baseEdgeA + this.params.baseEdgeB) / 2;
-                const platformRadius = (this.params.platformEdgeA + this.params.platformEdgeB) / 2;
+                const baseRadius = this.calculateHexagonRadius(this.params.baseEdgeA, this.params.baseEdgeB);
+                const platformRadius = this.calculateHexagonRadius(this.params.platformEdgeA, this.params.platformEdgeB);
 
                 // 估算連接桿間的干涉角度
                 const minRodSpacing = Math.min(baseRadius, platformRadius) * 0.15; // 基於半徑的15%作為安全間距
@@ -6728,8 +7109,8 @@
 
                 // 1. 優化連接桿長度比例以避免邊界奇點
                 // 連接桿長度應該在合理範圍內，避免過長或過短
-                const baseRadius = (this.params.baseEdgeA + this.params.baseEdgeB) / 2;
-                const platformRadius = (this.params.platformEdgeA + this.params.platformEdgeB) / 2;
+                const baseRadius = this.calculateHexagonRadius(this.params.baseEdgeA, this.params.baseEdgeB);
+                const platformRadius = this.calculateHexagonRadius(this.params.platformEdgeA, this.params.platformEdgeB);
 
                 // 計算理論上的最小和最大連接桿長度
                 const minRodLength = Math.abs(baseRadius - platformRadius) + 50; // 加上安全裕度
@@ -6747,15 +7128,17 @@
                 const baseToPlatformRatio = baseRadius / platformRadius;
 
                 if (baseToPlatformRatio < 1.2) {
-                    // 基座太小，增加基座尺寸
+                    // 基座太小，增加基座尺寸（依真實半徑比例縮放）
                     const newBaseRadius = platformRadius * 1.3;
-                    this.params.baseEdgeA = Math.round(newBaseRadius * 2);
-                    this.params.baseEdgeB = Math.round(newBaseRadius * 2 / 6);
+                    const scaleFactor = newBaseRadius / baseRadius;
+                    this.params.baseEdgeA = Math.round(this.params.baseEdgeA * scaleFactor);
+                    this.params.baseEdgeB = Math.round(this.params.baseEdgeB * scaleFactor);
                 } else if (baseToPlatformRatio > 3.0) {
-                    // 基座太大，減小基座尺寸
+                    // 基座太大，減小基座尺寸（依真實半徑比例縮放）
                     const newBaseRadius = platformRadius * 2.8;
-                    this.params.baseEdgeA = Math.round(newBaseRadius * 2);
-                    this.params.baseEdgeB = Math.round(newBaseRadius * 2 / 6);
+                    const scaleFactor = newBaseRadius / baseRadius;
+                    this.params.baseEdgeA = Math.round(this.params.baseEdgeA * scaleFactor);
+                    this.params.baseEdgeB = Math.round(this.params.baseEdgeB * scaleFactor);
                 }
 
                 // 3. 優化力臂安裝角度以減少內部奇點區域
@@ -6775,8 +7158,8 @@
 
             // 評估奇點風險
             evaluateSingularityRisk() {
-                const baseRadius = (this.params.baseEdgeA + this.params.baseEdgeB) / 2;
-                const platformRadius = (this.params.platformEdgeA + this.params.platformEdgeB) / 2;
+                const baseRadius = this.calculateHexagonRadius(this.params.baseEdgeA, this.params.baseEdgeB);
+                const platformRadius = this.calculateHexagonRadius(this.params.platformEdgeA, this.params.platformEdgeB);
                 const rodRatio = this.params.rodLength / this.params.servoArmLength;
 
                 let riskLevel = '低';

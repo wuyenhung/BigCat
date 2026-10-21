@@ -6,7 +6,7 @@
                                "type":  "cppvsdbg",
                                "request":  "launch",
                                "program":  "${workspaceFolder}/build/Debug/BigCat.exe",
-                               "dumpPath":  "D:\\Wu6Dof\\PROG\\WuBigCat\\build\\Release\\bin\\main\\BigCat_crash_20260225_224403_SIGABRT.dmp",
+                               "dumpPath":  "${workspaceFolder}/build/Release/bin/main/BigCat_crash_20260225_224403_SIGABRT.dmp",
                                "symbolSearchPath":  "${workspaceFolder}/build/Debug;${workspaceFolder};C:\\Symbols",
                                "externalConsole":  false,
                                "preLaunchTask":  "update-dump-path",

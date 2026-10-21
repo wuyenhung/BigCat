@@ -18,7 +18,7 @@ param(
     [ValidateSet('VisualStudio','Ninja','Auto')][string]$PreferGenerator = 'Ninja',
     [ValidateSet('Release','Debug')][string]$Configuration = 'Release',
     [switch]$NonInteractive,
-    [switch]$StripBinary = $true,
+    [bool]$StripBinary = $true,
     [bool]$RemovePdb = $true,
     [bool]$PruneIntermediates = $true,
     [int]$Parallel = 0,
@@ -131,7 +131,7 @@ function Find-CMakeExe {
 function Test-CMakeGenerator { param([string]$CMakeExe, [string]$GeneratorName) try { $help = & $CMakeExe --help | Out-String; return ($help -match [regex]::Escape($GeneratorName)) } catch { return $false } }
 function Find-WindowsSdkBin { $kitsRoot = 'C:\Program Files (x86)\Windows Kits\10\bin'; if (-not (Test-Path $kitsRoot)) { return $null }; $verDir = Get-ChildItem -Path $kitsRoot -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object Name -Descending | Select-Object -First 1; if (-not $verDir) { return $null }; $sdkBin = Join-Path $verDir.FullName 'x64'; if (Test-Path (Join-Path $sdkBin 'rc.exe')) { return $sdkBin }; return $null }
 
-function Choose-Generator {
+function Select-Generator {
     param($VcVars, $Prefer)
     $cmakeExe = Find-CMakeExe
 
@@ -247,11 +247,12 @@ $needConfigure = $true
 
 # CMake configure args with hardening build flags
 # Choose generator; if user provided a Generator use it, otherwise pick adaptively
+$gen = $null
 if ($Generator -and $Generator -ne '') {
     $gen = $Generator
 } else {
     # If $gen was already set (e.g., from cached CMakeCache.txt) reuse it; otherwise choose adaptively
-    if (-not $gen -or $gen -eq '') { $gen = Choose-Generator $vcvarsall $PreferGenerator }
+    if (-not $gen) { $gen = Select-Generator $vcvarsall $PreferGenerator }
 }
 
 $cmakeConfigureArgs = @(
@@ -266,8 +267,6 @@ if ($Arch -ne '') { $cmakeConfigureArgs += "-A"; $cmakeConfigureArgs += $Arch }
 # Force configuration-related flags to make it harder to reverse engineer (uses $Configuration)
 $extraDefs = @()
 $extraDefs += "-DCMAKE_BUILD_TYPE=$Configuration"
-# Try to avoid generating PDBs on MSVC-based generators when Release
-if ($Configuration -eq 'Release') { $extraDefs += "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=None" }
 $extraDefs += "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
 # Strong optimization flags are only relevant for Release builds under MSVC; these are appended later when MSVC is detected.
 
@@ -285,12 +284,10 @@ if ($needConfigure) {
     $msvcExtra = @()
     $gccExtra = @()
     if ($useMSVC) {
-        # MSVC flags
-        $msvcExtra += "-DCMAKE_BUILD_TYPE=$Configuration"
+        # MSVC-specific hardening flags (base flags already in $extraDefs)
         if ($Configuration -eq 'Release') {
             # Disable PDB generation for Release to allow /GL+/LTCG to remain effective
             $msvcExtra += "-DGENERATE_PDB_FOR_RELEASE=OFF"
-            $msvcExtra += "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=None"
             $msvcExtra += "-DCMAKE_C_FLAGS_RELEASE=/O2 /GL /Gw /Gy /Oi /Ot /Ob2 /GF /fp:fast /DNDEBUG"
             $msvcExtra += "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /GL /Gw /Gy /Oi /Ot /Ob2 /GF /fp:fast /DNDEBUG"
             $msvcExtra += "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/LTCG /INCREMENTAL:NO /OPT:REF /OPT:ICF /DEBUG:NONE /GUARD:CF /DYNAMICBASE /NXCOMPAT"
@@ -298,9 +295,7 @@ if ($needConfigure) {
         }
         $extraDefs += $msvcExtra
     } else {
-        # Generic flags for non-MSVC toolchains
-        $gccExtra += "-DCMAKE_BUILD_TYPE=$Configuration"
-        $gccExtra += "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+        # GCC/Clang-specific hardening flags (base flags already in $extraDefs)
         if ($Configuration -eq 'Release') {
             $gccExtra += "-DCMAKE_C_FLAGS_RELEASE=-O3 -DNDEBUG -march=native -fomit-frame-pointer -ffunction-sections -fdata-sections -fvisibility=hidden"
             $gccExtra += "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -march=native -fomit-frame-pointer -ffunction-sections -fdata-sections -fvisibility=hidden"
@@ -309,7 +304,6 @@ if ($needConfigure) {
         }
         $extraDefs += $gccExtra
     }
-        # (duplicate block removed)
 
     # Prefer using local tinyxml2 when available; otherwise FetchContent requires git
     $localTiny = Test-Path (Join-Path $ProjectRoot 'lib\tinyxml2')
@@ -333,13 +327,12 @@ if ($needConfigure) {
     Write-Note "Will attempt generators in order and stop on first success."
 
     # Helper: run configure in the appropriate environment with a specific generator
-    function Run-Configure {
+    function Invoke-Configure {
         param($VSBatch, $TryGen)
         $cmdExe = $env:ComSpec; if (-not $cmdExe) { $cmdExe = 'cmd.exe' }
-        # Build args array from base configure args, add generator if requested, then extra defs
+        # Build args array from base configure args (extraDefs already merged into cmakeConfigureArgs)
         $argsArray = @($cmakeConfigureArgs)
         if ($TryGen -and $TryGen -ne '') { $argsArray += "-G"; $argsArray += $TryGen }
-        if ($extraDefs) { $argsArray += $extraDefs }
 
         if ($VSBatch -and (Test-Path $VSBatch)) {
             $quotedArgs = ($argsArray | ForEach-Object {
@@ -355,7 +348,7 @@ if ($needConfigure) {
     }
 
     # Determine the ordered generator list to try. User-specified generator gets precedence.
-    $genCandidates = Choose-Generator $vcvarsall $PreferGenerator
+    $genCandidates = Select-Generator $vcvarsall $PreferGenerator
     $tryList = @()
     if ($Generator -ne '') { $tryList += $Generator }
     foreach ($g in $genCandidates) { if (-not ($tryList -contains $g)) { $tryList += $g } }
@@ -364,7 +357,7 @@ if ($needConfigure) {
     $selectedGen = ''
     foreach ($g in $tryList) {
         Write-Note "Attempting generator: $g"
-        $rc = Run-Configure $vcvarsall $g
+        $rc = Invoke-Configure $vcvarsall $g
         if ($rc -eq 0) { $selectedGen = $g; Write-Note "CMake configured successfully with generator: $g"; break }
         Write-Note "Generator $g failed (exit $rc), trying next..."
         # Remove any partial cache/CMakeFiles produced by the failed attempt before trying the next generator
@@ -386,22 +379,22 @@ Write-Note "Starting build ($Configuration) with parallel=$Parallel"
 Push-Location $BuildDir
 try {
     # Build using cmake --build for generator compatibility
-    $buildCmd = "cmake --build . --config Release --parallel $Parallel"
+    $buildCmd = "cmake --build . --config Release --parallel $Parallel --target BigCat"
     Write-Note "Running: $buildCmd"
     # Run build inside Visual Studio environment if available
-    function Run-Build {
+    function Invoke-Build {
         param($VSBatch, $BuildRoot, $Parallel)
         $cmdExe = $env:ComSpec; if (-not $cmdExe) { $cmdExe = 'cmd.exe' }
         if ($VSBatch -and (Test-Path $VSBatch)) {
             if ($gen -like '*Ninja*') {
-                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration --parallel $Parallel"
+                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration --parallel $Parallel --target BigCat"
             } elseif ($gen -like '*Visual Studio*') {
-                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration -- /m:$Parallel"
+                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration --target BigCat -- /m:$Parallel"
             } elseif ($gen -like '*NMake*') {
                 # Use nmake directly to avoid cmake mapping parallel flags incorrectly
-                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && (set CMAKE_BUILD_PARALLEL_LEVEL=) && nmake"
+                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && (set CMAKE_BUILD_PARALLEL_LEVEL=) && nmake BigCat"
             } else {
-                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration"
+                $cmd = "`"$VSBatch`" x64 && cd /d `"$BuildRoot`" && cmake --build . --config $Configuration --target BigCat"
             }
             Write-Note "Executing (cmd): $cmd"
             & $cmdExe /c $cmd | Out-Host
@@ -410,32 +403,38 @@ try {
         }
 
         if ($gen -like '*Ninja*') {
-            & cmake --build . --config $Configuration --parallel $Parallel | Out-Host
+            & cmake --build . --config $Configuration --parallel $Parallel --target BigCat | Out-Host
         } elseif ($gen -like '*Visual Studio*') {
-            & cmake --build . --config $Configuration -- /m:$Parallel | Out-Host
+            & cmake --build . --config $Configuration --target BigCat -- /m:$Parallel | Out-Host
         } elseif ($gen -like '*NMake*') {
             # Use nmake directly to avoid cmake mapping parallel flags incorrectly
             # Unset CMAKE_BUILD_PARALLEL_LEVEL temporarily to avoid cmake/nmake receiving a parallel flag
             $oldCb = $env:CMAKE_BUILD_PARALLEL_LEVEL
             Remove-Item Env:CMAKE_BUILD_PARALLEL_LEVEL -ErrorAction SilentlyContinue
-            Write-Note "Executing: nmake"
-            & nmake | Out-Host
+            Write-Note "Executing: nmake BigCat"
+            & nmake BigCat | Out-Host
             if ($oldCb) { $env:CMAKE_BUILD_PARALLEL_LEVEL = $oldCb }
         } else {
-            Write-Note "Executing: cmake --build . --config $Configuration"
-            & cmake --build . --config $Configuration | Out-Host
+            Write-Note "Executing: cmake --build . --config $Configuration --target BigCat"
+            & cmake --build . --config $Configuration --target BigCat | Out-Host
         }
         $code = $LASTEXITCODE
         return $code
     }
 
-    $rc = Run-Build $vcvarsall (Get-Location) $Parallel
+    $rc = Invoke-Build $vcvarsall (Get-Location) $Parallel
     if ($rc -ne 0) { Write-Err "Build failed (exit $rc)"; Pop-Location; exit $rc }
 } finally {
     Pop-Location
 }
 
 Write-Note "Build succeeded — running hardening post-steps (StripBinary=$StripBinary, RemovePdb=$RemovePdb)"
+
+# Detect available strip tool once at script scope (used by both strip block and summary)
+$stripTool = $null
+if (Get-Command -Name llvm-strip -ErrorAction SilentlyContinue) { $stripTool = "llvm-strip" }
+elseif (Get-Command -Name strip -ErrorAction SilentlyContinue) { $stripTool = "strip" }
+elseif (Get-Command -Name objcopy -ErrorAction SilentlyContinue) { $stripTool = "objcopy" }
 
 # Helper to find outputs (common CMake layout)
 function Get-BinaryPaths($root) {
@@ -484,12 +483,6 @@ if (-not $bins -or $bins.Count -eq 0) {
 
     # Attempt to strip binaries using available strip tools
     if ($StripBinary) {
-        # prefer llvm-strip if present, then GNU strip, then try objcopy
-        $stripTool = $null
-        if (Get-Command -Name llvm-strip -ErrorAction SilentlyContinue) { $stripTool = "llvm-strip" }
-        elseif (Get-Command -Name strip -ErrorAction SilentlyContinue) { $stripTool = "strip" }
-        elseif (Get-Command -Name objcopy -ErrorAction SilentlyContinue) { $stripTool = "objcopy" }
-
         if (-not $stripTool) {
             Write-Note "No strip tool found in PATH (llvm-strip/strip/objcopy). Skipping binary strip."
         } else {
@@ -508,18 +501,12 @@ if (-not $bins -or $bins.Count -eq 0) {
                             Start-Sleep -Milliseconds 200
                         } else {
                             $ans = Read-Host "Process $baseName is running. Stop it to strip symbols? (Y/N) [Y]"
-                            if ($NonInteractive) {
-                                Write-Note "NonInteractive -> stopping process $baseName to allow strip"
+                            if ([string]::IsNullOrEmpty($ans) -or $ans.ToUpper().StartsWith('Y')) {
                                 $running | Stop-Process -Force -ErrorAction SilentlyContinue
                                 Start-Sleep -Milliseconds 200
                             } else {
-                                if ([string]::IsNullOrEmpty($ans) -or $ans.ToUpper().StartsWith('Y')) {
-                                    $running | Stop-Process -Force -ErrorAction SilentlyContinue
-                                    Start-Sleep -Milliseconds 200
-                                } else {
-                                    Write-Note "Skipping strip for $exePath (process running)"
-                                    continue
-                                }
+                                Write-Note "Skipping strip for $exePath (process running)"
+                                continue
                             }
                         }
                     }
@@ -546,6 +533,7 @@ if (-not $bins -or $bins.Count -eq 0) {
 }
 
 # Summarize build method and environment for user
+$cache = Join-Path $BuildDir 'CMakeCache.txt'
 # Ensure we have a canonical generator value
 if (-not $gen -or $gen -eq '') {
     try {
@@ -568,11 +556,7 @@ else { $toolchain = 'Unknown' }
 $generatePdb = 'unknown'
 try { if (-not $cacheLines) { $cacheLines = Get-Content $cache -ErrorAction SilentlyContinue } ; $pdbLine = $cacheLines | Where-Object { $_ -match '^GENERATE_PDB_FOR_RELEASE:BOOL=' } | Select-Object -First 1; if ($pdbLine) { $generatePdb = $pdbLine -replace '^GENERATE_PDB_FOR_RELEASE:BOOL=', '' } } catch { }
 
-$stripToolName = $null
-if (Get-Command -Name 'llvm-strip' -ErrorAction SilentlyContinue) { $stripToolName = 'llvm-strip' }
-elseif (Get-Command -Name 'strip' -ErrorAction SilentlyContinue) { $stripToolName = 'strip' }
-elseif (Get-Command -Name 'objcopy' -ErrorAction SilentlyContinue) { $stripToolName = 'objcopy' }
-if (-not $stripToolName) { $gv = Get-Variable -Name 'stripTool' -ErrorAction SilentlyContinue; if ($gv) { $stripToolName = $gv.Value } }
+$stripDisplay = if ($stripTool) { $stripTool } else { 'None' }
 
 # Count binaries in build output
 $bins = Get-ChildItem -Path $BuildDir -Recurse -Include *.exe,*.dll -File -ErrorAction SilentlyContinue
@@ -583,7 +567,6 @@ Write-Note "  Generator: $gen"
 Write-Note "  Toolchain: $toolchain"
 Write-Note "  Configuration: $Configuration    Parallel: $Parallel"
 Write-Note "  StripBinary: $StripBinary    RemovePdb: $RemovePdb    GENERATE_PDB_FOR_RELEASE: $generatePdb"
-$stripDisplay = if ($stripToolName) { $stripToolName } else { 'None' }
 Write-Note "  Strip tool: $stripDisplay"
 Write-Note "  Binaries found: $binCount (under $BuildDir)"
 

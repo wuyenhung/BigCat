@@ -22,10 +22,10 @@
 namespace {
 
 constexpr int kSimulationSlaveCount = 6;
-constexpr int kSimulationOutputBytesPerSlave = 12;
-constexpr int kSimulationInputBytesPerSlave = 12;
+constexpr int kSimulationOutputBytesPerSlave = 17;  // 7-entry RxPDO (Startup.csv)
+constexpr int kSimulationInputBytesPerSlave = 19;   // 7-entry TxPDO (Startup.csv)
 constexpr int kSimulationTotalOutputBytes = kSimulationSlaveCount * kSimulationOutputBytesPerSlave;
-constexpr uint32_t kSimulationVendorId = 0x5755534Fu; // "WUSO"
+constexpr uint32_t kSimulationVendorId = 0x445653; // DVS — speed-based block detection
 constexpr uint32_t kSimulationProductCode = 0x00060001u;
 constexpr uint32_t kSimulationRevision = 0x00010000u;
 constexpr double kSimulationServoMaxVelocityCountsPerSec = 12000000.0;
@@ -52,15 +52,30 @@ constexpr double kSimulationCsvSettleStableSec = 0.25;
 
 using CreateWaitableTimerExWFn = HANDLE (WINAPI *)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
 
+// Win11: HR timer wakeup jitter breaks DC SYNC0 — return NULL to force
+// the caller into a pure TSC-spin path (consistent with CyclicTask strategy).
+static bool g_sim_isWin11 = false;
+void InitSimulationOSDetect() {
+    static bool done = false; if (done) return; done = true;
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        typedef LONG (WINAPI *RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
+        auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+        if (fn) {
+            RTL_OSVERSIONINFOW info = { sizeof(info) };
+            if (fn(&info) == 0) g_sim_isWin11 = (info.dwBuildNumber >= 22000);
+        }
+    }
+}
 HANDLE CreateSimulationWaitTimer()
 {
+    InitSimulationOSDetect();
+    if (g_sim_isWin11) return nullptr;  // Win11: skip HR timer, use TSC spin
     static CreateWaitableTimerExWFn createExFn = reinterpret_cast<CreateWaitableTimerExWFn>(
         GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "CreateWaitableTimerExW"));
     if (createExFn) {
         HANDLE timer = createExFn(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
-        if (timer) {
-            return timer;
-        }
+        if (timer) return timer;
     }
     return CreateWaitableTimer(nullptr, FALSE, nullptr);
 }
@@ -229,6 +244,21 @@ bool EtherCATMaster::InitializeSimulationLocked(const char* ifnameParam)
         softStartReadyCacheSize_ = 0;
     }
 
+    // Allocate per-slave PDO caches (0x603F Error Code, 0x6061 Mode Display)
+    // so the PDO processing thread and GetPdo603F/GetPdo6061 work in simulation.
+    pdoCacheSlaveCount_.store(0, std::memory_order_release);
+    try {
+        pdo603FCache_.reset(new std::atomic<uint16_t>[slaveCount + 1]);
+        pdo6061Cache_.reset(new std::atomic<uint8_t>[slaveCount + 1]);
+        for (int i = 0; i <= slaveCount; ++i) {
+            pdo603FCache_[i].store(0, std::memory_order_relaxed);
+            pdo6061Cache_[i].store(0, std::memory_order_relaxed);
+        }
+        pdoCacheSlaveCount_.store(slaveCount, std::memory_order_release);
+    } catch (...) {
+        pdoCacheSlaveCount_.store(0, std::memory_order_release);
+    }
+
     isInitialized = true;
     isRunning = false;
     SetError("Simulation master initialized with 6 virtual EtherCAT axes");
@@ -249,11 +279,13 @@ bool EtherCATMaster::ConfigureSimulationSlavesLocked()
         auto& axis = simulationAxes_[slave];
         axis.controlword = 0x0006;
         axis.lastControlword = 0x0006;
-        axis.operationMode = CoreHelpers::kDefaultCyclicOperationMode;
-        axis.modeDisplay = CoreHelpers::kDefaultCyclicOperationMode;
+        axis.operationMode = GetCyclicOperationMode();
+        axis.modeDisplay = GetCyclicOperationMode();
         axis.errorCode = 0;
         axis.targetPosition = 0;
         axis.targetVelocity = 0;
+        axis.softwarePositionLimitMin = -2000000000;  // ~-55k deg @ 36k cnt/deg
+        axis.softwarePositionLimitMax =  2000000000;  // ~+55k deg
         axis.actualPositionCounts = 0.0;
         axis.actualVelocityCounts = 0.0;
         axis.positionErrorIntegralCountsSec = 0.0;
@@ -321,6 +353,12 @@ bool EtherCATMaster::StartSimulationCyclicOperationLocked()
     }
     workingCounter = slaveCount * 2;
     observedCycleMicros_.store(desiredCycleTime ? desiredCycleTime : 2000, std::memory_order_relaxed);
+
+    // Prime the PDO pipeline so PDOProcessingTask can start immediately.
+    // Without this, the guard `!pdoPipelinePrimed_` keeps the PDO processing
+    // thread in a Sleep(10) loop and PDO filtering never runs in simulation.
+    pdoPipelinePrimed_.store(true, std::memory_order_release);
+
     StartPDOProcessingThread();
     SetError("Simulation cyclic operation started");
     return true;
@@ -333,6 +371,7 @@ void EtherCATMaster::ShutdownSimulationLocked(const std::function<void(const std
     }
 
     StopPDOProcessingThread();
+    StopSdoReader();
     StopCyclicOperation();
     try {
         StopMMF1In();
@@ -401,7 +440,16 @@ bool EtherCATMaster::ReadSimulationSdo(uint16_t slave, uint16_t index, uint8_t s
         }
         break;
     case 0x1600: {
-        static const uint32_t mappings[] = {0x60400010u, 0x607A0020u, 0x60FF0020u, 0x60710010u};
+        // 7-entry RxPDO (order matches Par/Startup.csv)
+        static const uint32_t mappings[] = {
+            0x607A0020u,  // 1. Target Position (32-bit)
+            0x60FF0020u,  // 2. Target Velocity (32-bit)
+            0x60710010u,  // 3. Target Torque (16-bit)
+            0x60E00010u,  // 4. Positive Torque Limit (16-bit)
+            0x60E10010u,  // 5. Negative Torque Limit (16-bit)
+            0x60400010u,  // 6. Controlword (16-bit)
+            0x60600008u   // 7. Modes of Operation (8-bit)
+        };
         if (subindex == 0x00) {
             const uint8_t count = static_cast<uint8_t>(_countof(mappings));
             ok = CopySimulationValue(count, data, size);
@@ -411,7 +459,16 @@ bool EtherCATMaster::ReadSimulationSdo(uint16_t slave, uint16_t index, uint8_t s
         break;
     }
     case 0x1A00: {
-        static const uint32_t mappings[] = {0x60410010u, 0x60640020u, 0x606C0020u, 0x60770010u};
+        // 7-entry TxPDO (order matches Par/Startup.csv)
+        static const uint32_t mappings[] = {
+            0x60640020u,  // 1. Actual Position (32-bit)
+            0x606C0020u,  // 2. Actual Velocity (32-bit)
+            0x60770010u,  // 3. Actual Torque (16-bit)
+            0x60410010u,  // 4. Statusword (16-bit)
+            0x603F0010u,  // 5. Error Code (16-bit)
+            0x60610008u,  // 6. Modes of Operation Display (8-bit)
+            0x60FD0020u   // 7. Digital Inputs (32-bit)
+        };
         if (subindex == 0x00) {
             const uint8_t count = static_cast<uint8_t>(_countof(mappings));
             ok = CopySimulationValue(count, data, size);
@@ -449,6 +506,13 @@ bool EtherCATMaster::ReadSimulationSdo(uint16_t slave, uint16_t index, uint8_t s
         break;
     case 0x6098:
         ok = CopySimulationValue(axis.homingMethod, data, size);
+        break;
+    case 0x607D:
+        if (subindex == 0x01) {
+            ok = CopySimulationValue(axis.softwarePositionLimitMin, data, size);
+        } else if (subindex == 0x02) {
+            ok = CopySimulationValue(axis.softwarePositionLimitMax, data, size);
+        }
         break;
     case 0x60E0:
         ok = CopySimulationValue(axis.softwareLimitMin, data, size);
@@ -499,7 +563,7 @@ bool EtherCATMaster::WriteSimulationSdo(uint16_t slave, uint16_t index, uint8_t 
             axis.errorCode = 0;
         }
         EnterCriticalSection(&pdoDataCS);
-        WriteLe16(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave, axis.controlword);
+        WriteLe16(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave + 14, axis.controlword);  // offset 14
         LeaveCriticalSection(&pdoDataCS);
         break;
     case 0x6060:
@@ -523,15 +587,15 @@ bool EtherCATMaster::WriteSimulationSdo(uint16_t slave, uint16_t index, uint8_t 
         axis.haveLastCsvTargetPosition = false;
         const int inBase = kSimulationTotalOutputBytes + (slave - 1) * kSimulationInputBytesPerSlave;
         EnterCriticalSection(&pdoDataCS);
-        WriteLe32(IOmap + inBase + 2, RoundSimulationCount(axis.actualPositionCounts));
-        WriteLe32(IOmap + inBase + 6, 0);
+        WriteLe32(IOmap + inBase, RoundSimulationCount(axis.actualPositionCounts));   // offset 0
+        WriteLe32(IOmap + inBase + 4, 0);                                              // offset 4
         LeaveCriticalSection(&pdoDataCS);
         break;
     }
     case 0x607A:
         axis.targetPosition = (size >= 4) ? ReadLe32(bytes) : 0;
         EnterCriticalSection(&pdoDataCS);
-        WriteLe32(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave + 2, axis.targetPosition);
+        WriteLe32(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave, axis.targetPosition);  // offset 0
         LeaveCriticalSection(&pdoDataCS);
         break;
     case 0x607C:
@@ -539,6 +603,13 @@ bool EtherCATMaster::WriteSimulationSdo(uint16_t slave, uint16_t index, uint8_t 
         break;
     case 0x6098:
         axis.homingMethod = static_cast<int8_t>(bytes[0]);
+        break;
+    case 0x607D:
+        if (subindex == 0x01) {
+            axis.softwarePositionLimitMin = (size >= 4) ? ReadLe32(bytes) : 0;
+        } else if (subindex == 0x02) {
+            axis.softwarePositionLimitMax = (size >= 4) ? ReadLe32(bytes) : 0;
+        }
         break;
     case 0x60E0:
         axis.softwareLimitMin = (size >= 4) ? static_cast<uint32_t>(ReadLe32(bytes)) : 0u;
@@ -549,7 +620,7 @@ bool EtherCATMaster::WriteSimulationSdo(uint16_t slave, uint16_t index, uint8_t 
     case 0x60FF:
         axis.targetVelocity = (size >= 4) ? ReadLe32(bytes) : 0;
         EnterCriticalSection(&pdoDataCS);
-        WriteLe32(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave + 6, axis.targetVelocity);
+        WriteLe32(IOmap + (slave - 1) * kSimulationOutputBytesPerSlave + 4, axis.targetVelocity);  // offset 4
         LeaveCriticalSection(&pdoDataCS);
         break;
     default:
@@ -657,9 +728,21 @@ void EtherCATMaster::AdvanceSimulation(double dtSeconds)
         const int outBase = (slave - 1) * kSimulationOutputBytesPerSlave;
         const int inBase = kSimulationTotalOutputBytes + (slave - 1) * kSimulationInputBytesPerSlave;
 
-        axis.controlword = ReadLe16(IOmap + outBase);
-        axis.targetPosition = ReadLe32(IOmap + outBase + 2);
-        axis.targetVelocity = ReadLe32(IOmap + outBase + 6);
+        // Startup.csv 7-entry RxPDO: TPos(0) TVel(4) TTorq(8) PTLim(10) NTLim(12) Ctrl(14) Mode(16)
+        axis.targetPosition = ReadLe32(IOmap + outBase);
+        axis.targetVelocity = ReadLe32(IOmap + outBase + 4);
+        axis.controlword = ReadLe16(IOmap + outBase + 14);
+        // Read 0x6060 (Modes of Operation) from RxPDO so PDO-staged mode switches
+        // (e.g. CSP→CSV for jog batch) are visible to the simulation.
+        // Only apply when IOmap carries a valid CiA402 mode (avoid zero-overwrite
+        // of the configured mode during the first cycles before PDO staging).
+        {
+            const int8_t pdoMode = static_cast<int8_t>(IOmap[outBase + 16]);
+            if (pdoMode >= 1 && pdoMode <= 10 && pdoMode != axis.operationMode) {
+                axis.operationMode = pdoMode;
+                axis.modeDisplay = pdoMode;
+            }
+        }
 
         if ((axis.controlword & 0x0080u) != 0u) {
             axis.errorCode = 0;
@@ -737,7 +820,7 @@ void EtherCATMaster::AdvanceSimulation(double dtSeconds)
                 (targetVelocity < 0.0 && axis.actualPositionCounts <= static_cast<double>(axis.targetPosition))) {
                 targetVelocity = 0.0;
                 axis.targetVelocity = 0;
-                WriteLe32(IOmap + outBase + 6, 0);
+                WriteLe32(IOmap + outBase + 4, 0);  // TargetVel at offset 4
             }
             const double targetPosition = static_cast<double>(axis.targetPosition);
             const double targetDelta = axis.haveLastCsvTargetPosition
@@ -771,7 +854,7 @@ void EtherCATMaster::AdvanceSimulation(double dtSeconds)
                 axis.servoAccelerationCounts = 0.0;
                 axis.positionVelocityDemandCounts = 0.0;
                 axis.targetVelocity = 0;
-                WriteLe32(IOmap + outBase + 6, 0);
+                WriteLe32(IOmap + outBase + 4, 0);  // TargetVel at offset 4
             }
             axis.lastCsvTargetPosition = axis.targetPosition;
             axis.haveLastCsvTargetPosition = true;
@@ -785,12 +868,40 @@ void EtherCATMaster::AdvanceSimulation(double dtSeconds)
                              kSimulationServoMaxAccelerationCountsPerSec2);
         }
 
+        // ── Simulated mechanical hard-stop ──
+        // When jogging in CSV mode, clamp position at software limits and
+        // zero velocity so the real-world system's 堵轉 (blocking) detection
+        // sees the axis has stopped against a mechanical limit.
+        if (axis.actualVelocityCounts != 0.0) {
+            const double posMin = static_cast<double>(axis.softwarePositionLimitMin);
+            const double posMax = static_cast<double>(axis.softwarePositionLimitMax);
+            if (axis.actualPositionCounts < posMin) {
+                axis.actualPositionCounts = posMin;
+                axis.actualVelocityCounts = 0.0;
+                axis.velocityErrorIntegralCounts = 0.0;
+                axis.servoAccelerationCounts = 0.0;
+                axis.positionVelocityDemandCounts = 0.0;
+            } else if (axis.actualPositionCounts > posMax) {
+                axis.actualPositionCounts = posMax;
+                axis.actualVelocityCounts = 0.0;
+                axis.velocityErrorIntegralCounts = 0.0;
+                axis.servoAccelerationCounts = 0.0;
+                axis.positionVelocityDemandCounts = 0.0;
+            }
+        }
+
         axis.modeDisplay = axis.operationMode;
+        // Startup.csv 7-entry TxPDO: APos(0) AVel(4) ATorq(8) Stat(10) Err(12) Mode(14) DI(15)
         const uint16_t statusword = ComputeSimulationStatusword(axis);
-        WriteLe16(IOmap + inBase, statusword);
-        WriteLe32(IOmap + inBase + 2, RoundSimulationCount(axis.actualPositionCounts));
-        WriteLe32(IOmap + inBase + 6, RoundSimulationCount(axis.actualVelocityCounts));
-        WriteLe16(IOmap + inBase + 10, 0u);
+        WriteLe32(IOmap + inBase, RoundSimulationCount(axis.actualPositionCounts));      // offset 0
+        WriteLe32(IOmap + inBase + 4, RoundSimulationCount(axis.actualVelocityCounts));   // offset 4
+        WriteLe16(IOmap + inBase + 8, 0u);                                                // offset 8
+        WriteLe16(IOmap + inBase + 10, statusword);                                       // offset 10
+        WriteLe16(IOmap + inBase + 12, axis.errorCode);                                   // offset 12
+        IOmap[inBase + 14] = static_cast<uint8_t>(axis.modeDisplay);                      // offset 14
+        // 0x60FD Digital Inputs (4B at offset 15): used by AutoWindow for
+        // external button sync (bit0=EmergencyStop active-low, bit5=ImmediateStop).
+        std::memcpy(IOmap + inBase + 15, axis.digitalInputs.data(), 4);                   // offset 15
         axis.lastControlword = axis.controlword;
     }
 
@@ -882,17 +993,85 @@ void EtherCATMaster::SimulationCyclicTask()
         }
         previousTick = currentTick;
 
-        // MMFReader is externally polled by the master cyclic thread. Mirror the
-        // real EtherCAT path here so simulation mode consumes fresh MMF1_IN data.
+        // In physical mode the MMF receiver thread (non-RT core) polls MMF1
+        // independently.  In simulation mode, keep the inline PollOnce here
+        // so the simulated PDO cycle stays deterministic — the receiver
+        // thread's async timing would desynchronise from simulated time steps.
         if (mmf1ReaderRunning.load(std::memory_order_relaxed)) {
             (void)mmf1Reader.PollOnce();
         }
 
         AdvanceSimulation(dtSeconds);
+
+        // ========================================================================
+        // Forward Kinematics: 6-axis simulation target position → 6-DOF platform pose
+        // Simulation has no PDO filter; uses target position directly.
+        // Only runs when pose MMF output is enabled.
+        // ========================================================================
+        bool poseMmfActive = poseMmfEnabled_.load(std::memory_order_relaxed);
+        if (slaveCount == 6 && poseMmfActive) {
+            std::array<long double, 6> targetServoAngles{};
+            bool allAnglesValid = true;
+            for (int slave = 1; slave <= slaveCount; ++slave) {
+                const int idx = slave - 1;
+                const auto& axis = simulationAxes_[slave];
+                // Get scaling factors (default scale=1.0 if not configured)
+                MotionScaling scaling{};
+                {
+                    EnterCriticalSection(&pdoDataCS);
+                    auto it = motionScalingFactors.find(slave);
+                    if (it != motionScalingFactors.end()) {
+                        scaling = it->second;
+                    }
+                    LeaveCriticalSection(&pdoDataCS);
+                }
+                const double sign = scaling.invertSign ? -1.0 : 1.0;
+                targetServoAngles[idx] = static_cast<long double>(axis.targetPosition * scaling.scale * sign);
+            }
+            if (allAnglesValid) {
+                auto snap = ReadStewartParamsSnapshot();
+                WuSOEM::Pose6D initialPose;
+                initialPose.z = snap.initialHeight;
+                auto fwdResult = WuSOEM::StewartIK::CalculateForward(
+                    snap.params, targetServoAngles, initialPose);
+                forwardKinPose_ = fwdResult.pose;
+                forwardKinInitialHeight_ = snap.initialHeight;
+                forwardKinValid_.store(fwdResult.valid, std::memory_order_release);
+                // Compute epoch ms for MMF header
+                uint64_t epochMs = 0;
+                {
+                    auto now = std::chrono::system_clock::now();
+                    auto epoch = now.time_since_epoch();
+                    epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
+                }
+                WritePoseMMF(fwdResult.pose, fwdResult.valid, snap.initialHeight, epochMs);
+            } else {
+                forwardKinValid_.store(false, std::memory_order_release);
+                uint64_t epochMs = 0;
+                {
+                    auto now = std::chrono::system_clock::now();
+                    auto epoch = now.time_since_epoch();
+                    epochMs = std::chrono::duration_cast<std::chrono::milliseconds>(epoch).count();
+                }
+                WuSOEM::Pose6D zeroPose{};
+                WritePoseMMF(zeroPose, false, 0.0L, epochMs);
+            }
+        } else if (slaveCount == 6) {
+            // Pose MMF disabled: clear forward kinematics so SSE/web shows nothing
+            forwardKinValid_.store(false, std::memory_order_release);
+        }
+
         workingCounter = slaveCount * 2;
         pdosSentCount.fetch_add(1, std::memory_order_relaxed);
         commsTime_.store(0, std::memory_order_relaxed);
         maxObservedCommsTime.store(0, std::memory_order_relaxed);
+        UpdatePdoInputCaches();
+
+        // Signal PDOProcessingTask so PDO filtering runs in simulation mode.
+        // Mirrors the same pattern used by the real-hardware CyclicTask.
+        if (pdoCycleEvent) {
+            SetEvent(pdoCycleEvent);
+        }
 
         const auto period = std::chrono::microseconds(cycleUs);
         nextWake += period;

@@ -3,6 +3,7 @@
 #include "../include/EtherCATMaster.h"
 #include "../include/core/CoreHelpers.h"
 #include "../include/MachineConfigIO.h"
+#include "../include/HttpServer.h"
 
 namespace {
 
@@ -22,14 +23,14 @@ public:
         return master_ ? master_->GetSlaveCount() : 0;
     }
 
-    bool GetLastSdo60FD(std::vector<uint8_t>& out) override {
+    bool GetPdo60FD(std::vector<uint8_t>& out) override {
         if (!master_) return false;
-        return master_->GetLastSdo60FD(out);
+        return master_->GetPdo60FD(out);
     }
 
-    bool GetLastSdo60FDLowByte(uint8_t& outLowByte) override {
+    bool GetPdo60FDLowByte(uint8_t& outLowByte) override {
         if (!master_) return false;
-        return master_->GetLastSdo60FDLowByte(outLowByte);
+        return master_->GetPdo60FDLowByte(outLowByte);
     }
 
     bool TryGetPDOChannelValuesLockFree(int slaveIndex, std::vector<PDOChannelValue>& outValues, uint64_t* outVersion) override {
@@ -132,8 +133,28 @@ void AppController::Initialize(EtherCATMaster* master, MainWindow* mainWindow) {
         WuSOEM::StewartParams machineParams;
         Mmf1InputMode mmf1Mode = Mmf1InputMode::ServoAngle;
         Mmf1PoseCoordinateSystem coordinateSystem = Mmf1PoseCoordinateSystem::World;
+        WuSOEM::Pose6DLimits pose6dLimits;
         const std::string machineConfigPath = MachineConfigIO::GetDefaultMachineConfigPath();
-        if (MachineConfigIO::LoadMachineParams(machineConfigPath, machineParams, mmf1Mode, &coordinateSystem)) {
+
+        // Pre-check: if machine.xml is missing or corrupt, rebuild from built-in defaults
+        // and prompt the user to restart. The rebuilt file won't take effect until restart.
+        {
+            std::string xmlContent;
+            bool restartRequired = false;
+            std::string rebuildError;
+            if (!MachineConfigIO::LoadMachineConfigXmlWithDefaults(machineConfigPath, xmlContent, restartRequired, &rebuildError)) {
+                if (restartRequired) {
+                    HWND parent = mainWindow_ ? mainWindow_->GetHwnd() : NULL;
+                    MessageBoxW(parent,
+                                L"machine.xml 已遺失或損毀，已使用內建預設值重建。\r\n"
+                                L"請重新啟動程式以使重建的設定檔生效。",
+                                L"machine.xml 已重建",
+                                MB_OK | MB_ICONWARNING);
+                }
+            }
+        }
+
+        if (MachineConfigIO::LoadMachineParams(machineConfigPath, machineParams, mmf1Mode, &coordinateSystem, &pose6dLimits)) {
             master_->SetStewartParams(machineParams);
             master_->SetMmf1InputMode(mmf1Mode);
             master_->SetMmf1PoseCoordinateSystem(coordinateSystem);
@@ -143,6 +164,10 @@ void AppController::Initialize(EtherCATMaster* master, MainWindow* mainWindow) {
             master_->SetMmf1InputMode(mmf1Mode);
             master_->SetMmf1PoseCoordinateSystem(coordinateSystem);
         }
+        // 總是設定 Pose6D 硬限制（來自 machine.xml 或預設值）
+        master_->SetPose6DLimits(pose6dLimits);
+        // 也推送給 HTTP server，讓 web API 端使用相同限制值
+        SetStewartPose6DLimits(pose6dLimits);
     }
 
     // MainWindow::Create() may construct MotionController before AppController
@@ -267,8 +292,7 @@ bool AppController::RequestAutoConnect() {
     return true;
 }
 
-bool AppController::RequestAutoDownToOrigin(uintptr_t requesterWindow,
-                                            bool notifyAutoWindowHomeReset) {
+bool AppController::RequestAutoDownToOrigin(uintptr_t requesterWindow) {
     if (!mainWindow_) {
         return false;
     }
@@ -280,10 +304,6 @@ bool AppController::RequestAutoDownToOrigin(uintptr_t requesterWindow,
 
     if (mainWindow_->autoDownToOriginRequestPending.exchange(true)) {
         return false;
-    }
-
-    if (notifyAutoWindowHomeReset && mainWindow_->hAutoWindow && IsWindow(mainWindow_->hAutoWindow)) {
-        PostMessageW(mainWindow_->hAutoWindow, WM_USER + 299, 0, 0);
     }
 
     if (!PostMessageW(mainWindow_->hwnd,
@@ -375,7 +395,7 @@ void AppController::StopAutoProcedureFromHttp() {
 }
 
 void AppController::RequestAutoDownToOriginFromHttp() {
-    RequestAutoDownToOrigin(0, true);
+    RequestAutoDownToOrigin(0);
 }
 
 void AppController::AutoFaultResetAllFromHttp() {

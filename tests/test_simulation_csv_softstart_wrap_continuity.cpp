@@ -1,4 +1,4 @@
-#include "EtherCATMaster.h"
+﻿#include "EtherCATMaster.h"
 
 #include <windows.h>
 
@@ -46,14 +46,14 @@ std::vector<PDOChannelDescriptor> CreateStandardCyclicDescriptors() {
         descriptors.push_back(std::move(desc));
     };
 
-    add(L"0x6040", 0x6040, 16, true, 0);
-    add(L"0x607A", 0x607A, 32, true, 2);
-    add(L"0x60FF", 0x60FF, 32, true, 6);
-    add(L"0x6071", 0x6071, 16, true, 10);
-    add(L"0x6041", 0x6041, 16, false, 0);
-    add(L"0x6064", 0x6064, 32, false, 2);
-    add(L"0x606C", 0x606C, 32, false, 6);
-    add(L"0x6077", 0x6077, 16, false, 10);
+    add(L"0x6040", 0x6040, 16, true, EtherCATMaster::kPdoOutOff_Controlword);
+    add(L"0x607A", 0x607A, 32, true, EtherCATMaster::kPdoOutOff_TargetPos);
+    add(L"0x60FF", 0x60FF, 32, true, EtherCATMaster::kPdoOutOff_TargetVel);
+    add(L"0x6071", 0x6071, 16, true, EtherCATMaster::kPdoOutOff_TargetTorque);
+    add(L"0x6041", 0x6041, 16, false, EtherCATMaster::kPdoInOff_Statusword);
+    add(L"0x6064", 0x6064, 32, false, EtherCATMaster::kPdoInOff_ActualPos);
+    add(L"0x606C", 0x606C, 32, false, EtherCATMaster::kPdoInOff_ActualVel);
+    add(L"0x6077", 0x6077, 16, false, EtherCATMaster::kPdoInOff_ActualTorque);
     return descriptors;
 }
 
@@ -139,7 +139,7 @@ int main() {
     }
 
     const uint16_t enableOperation = 0x000F;
-    const uint8_t cyclicMode = static_cast<uint8_t>(CoreHelpers::kDefaultCyclicOperationMode);
+    const uint8_t cyclicMode = static_cast<uint8_t>(master.GetCyclicOperationMode());
     for (int slave = 1; slave <= kAxisCount; ++slave) {
         if (!Check(master.WriteSDO(static_cast<uint16_t>(slave), 0x6060, 0x00, (void*)&cyclicMode, 1),
                    "simulation slave should accept default cyclic mode") ||
@@ -175,9 +175,9 @@ int main() {
     while (std::chrono::steady_clock::now() < deadline) {
         int32_t targetPosRaw = 0;
         int32_t targetVelRaw = 0;
-        if (!Check(SnapshotI32(master, outBase + 2, targetPosRaw),
+        if (!Check(SnapshotI32(master, outBase + EtherCATMaster::kPdoOutOff_TargetPos, targetPosRaw),
                    "simulation should expose logical target position bytes") ||
-            !Check(SnapshotI32(master, outBase + 6, targetVelRaw),
+            !Check(SnapshotI32(master, outBase + EtherCATMaster::kPdoOutOff_TargetVel, targetVelRaw),
                    "simulation should expose CSV target velocity bytes")) {
             return EXIT_FAILURE;
         }

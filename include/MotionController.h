@@ -47,7 +47,14 @@ public:
     // HomeAsync: origin-setting sequence. Optionally accept a P13 motion-parameter value (from
     // `savedMotionParamsForSlave` "P13" row, column '值'). If haveP13==true
     // the controller will write that value into SDO 0x607C instead of 0.
-    MotionResult HomeAsync(int slaveIdx, bool assert, bool haveP13 = false, uint32_t p13 = 0);
+    // Set skipSdo=true when HomePrepareSDO already ran — skips SDO preamble and
+    // jumps directly to PDO controlword staging + polling.
+    MotionResult HomeAsync(int slaveIdx, bool assert, bool haveP13 = false, uint32_t p13 = 0, bool skipSdo = false);
+    // HomePrepareSDO: execute only the SDO-heavy preamble (0x6060=6, 0x6098, 0x607C)
+    // without staging any controlword. Call this for every slave first, then
+    // call HomeAsync with skipSdo=true for all slaves so the PDO controlword
+    // stages are batched into the same cycle — all axes start homing together.
+    bool HomePrepareSDO(int slaveIdx, bool haveP13, uint32_t p13);
     // PowerOnAllAsync: Batch power-on for multiple slaves, ensuring all PDO data
     // is staged before any controlword is sent to prevent race conditions.
     // This avoids the issue where sequential PowerOnAsync calls would enable one
@@ -56,11 +63,18 @@ public:
     // Jog (寸動) operations: start/stop positive and negative direction
     MotionResult JogPositiveStart(int slaveIdx, uint32_t stagedVal = 20000u);
     MotionResult JogNegativeStart(int slaveIdx, uint32_t stagedVal = (uint32_t)-20000);
+    // Batch jog: all axes zero 0x60FF, switch to CSV mode, wait for all mode
+    // switches, then write target velocity simultaneously — eliminates the
+    // per-axis serial delay that causes visible start-asynchrony.
+    MotionResult JogNegativeStartBatch(const std::vector<int>& slaves, const std::vector<uint32_t>& velocities);
     MotionResult JogStop(int slaveIdx);
 
     // 設置寸動緩啟動時間（秒），預設 0.5 秒
     void SetJogSoftStartTime(double timeSec) { jogSoftStartTime_ = timeSec; }
     double GetJogSoftStartTime() const { return jogSoftStartTime_; }
+
+    // PDO display proxy for motion-command staging (e.g. 0x60FF=0)
+    PDOProxy* GetPDODisplay() const { return pdoDisplay; }
 
 private:
     EtherCATMaster* etherCATMaster;

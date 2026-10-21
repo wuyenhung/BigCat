@@ -23,10 +23,15 @@ param(
 )
 
 function Find-Cdb {
+    # 1) Project-bundled cdb (always available, no external dependency)
+    $projectCdb = Join-Path -Path $PSScriptRoot -ChildPath '..\tools\cdb\cdb.exe'
+    if (Test-Path $projectCdb) { return (Resolve-Path $projectCdb).Path }
+
+    # 2) PATH
     $cdb = (Get-Command cdb.exe -ErrorAction SilentlyContinue).Path
     if ($cdb) { return $cdb }
 
-    # common Windows Kits location for Debugging Tools
+    # 3) common Windows Kits location for Debugging Tools
     $candidates = @( 
         "C:\\Program Files (x86)\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",
         "C:\\Program Files\\Windows Kits\\10\\Debuggers\\x64\\cdb.exe",

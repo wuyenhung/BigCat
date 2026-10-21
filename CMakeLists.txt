@@ -38,7 +38,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SOEM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/SOEM" CACHE PATH "Path to SOEM library")
 
 # 設定 Npcap SDK 路徑 (可由 -DNPCAP_SDK_DIR=<path> 或環境變數 NPCAP_SDK_DIR 覆寫)
-set(NPCAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/npcap-sdk-1.15" CACHE PATH "Path to Npcap SDK")
+set(NPCAP_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/lib/npcap-sdk-1.16" CACHE PATH "Path to Npcap SDK")
 
 # --- 新增：更健壯的 Npcap 偵測與 find_* 邏輯 -----------------------------
 # Allow override from environment if the cache value is empty or default doesn't exist
@@ -50,7 +50,7 @@ endif()
 
 if(NOT EXISTS "${NPCAP_SDK_DIR}/Include/pcap.h")
     set(_possible_npcap_paths
-        "${CMAKE_CURRENT_SOURCE_DIR}/lib/npcap-sdk-1.15"
+        "${CMAKE_CURRENT_SOURCE_DIR}/lib/npcap-sdk-1.16"
         "C:/npcap-sdk"
         "C:/WpdPack"
         "$ENV{ProgramFiles}/Npcap"
@@ -228,6 +228,8 @@ set(BIGCAT_CORE_SOURCES
     src/core/AppConfig.cpp
     src/core/CoreHelpers.cpp
     src/core/CpuIsolation.cpp
+    src/core/CpuTopology.cpp
+    src/core/ShutdownGuard.cpp
     src/core/Win32Utils.cpp
 )
 
@@ -249,6 +251,7 @@ set(BIGCAT_ETHERCAT_SOURCES
     src/ethercat/EtherCATMaster.SDO.cpp
     src/ethercat/EtherCATMaster.Simulation.cpp
     src/ethercat/EtherCATMaster.MMF.cpp
+    src/ethercat/EtherCATMaster.EMCY.cpp
     src/ethercat/EtherCATMaster.Diagnostics.cpp
     src/ethercat/PDOFilter.cpp
     src/ethercat/PDOHelpers.cpp
@@ -428,6 +431,7 @@ endfunction()
 
 add_library(bigcat_core STATIC ${BIGCAT_CORE_SOURCES})
 bigcat_configure_target(bigcat_core)
+target_link_libraries(bigcat_core PUBLIC iphlpapi setupapi cfgmgr32 powrprof)
 
 add_library(bigcat_io STATIC ${BIGCAT_IO_SOURCES})
 bigcat_configure_target(bigcat_io)
@@ -496,6 +500,35 @@ bigcat_configure_target(generate_license)
 set_target_properties(generate_license PROPERTIES OUTPUT_NAME "generate_license" WIN32_EXECUTABLE TRUE)
 target_link_libraries(generate_license PRIVATE bigcat_security bcrypt comdlg32 user32)
 
+# tools: cpu_burn_test — 佔用指定 CPU 核心以驗證工作管理員核心配置
+add_executable(cpu_burn_test tools/cpu_burn_test.cpp)
+set_target_properties(cpu_burn_test PROPERTIES
+    OUTPUT_NAME "cpu_burn_test"
+    WIN32_EXECUTABLE TRUE
+)
+target_compile_options(cpu_burn_test PRIVATE /utf-8)
+target_link_libraries(cpu_burn_test PRIVATE user32 comctl32)
+add_custom_command(TARGET cpu_burn_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:cpu_burn_test>"
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/cpu_burn_test.exe"
+    COMMENT "Copy cpu_burn_test.exe → tools/"
+)
+
+# tools: mmf_sine_writer — 模擬 FlyPT Mover 以 1ms 週期寫入 sin 波形到 MMF
+add_executable(mmf_sine_writer tools/mmf_sine_writer.cpp)
+bigcat_configure_target(mmf_sine_writer)
+set_target_properties(mmf_sine_writer PROPERTIES OUTPUT_NAME "mmf_sine_writer")
+target_compile_options(mmf_sine_writer PRIVATE /utf-8)
+target_link_libraries(mmf_sine_writer PRIVATE winmm avrt)
+
+# tools: mmf_scope — MMF 波形示波器，即時顯示 1ms 位置/速度波形
+add_executable(mmf_scope tools/mmf_scope.cpp)
+bigcat_configure_target(mmf_scope)
+set_target_properties(mmf_scope PROPERTIES OUTPUT_NAME "mmf_scope")
+target_compile_options(mmf_scope PRIVATE /utf-8)
+target_link_libraries(mmf_scope PRIVATE winmm avrt user32 gdi32)
+
 # 建立可執行檔
 add_executable(${PROJECT_NAME}
     ${BIGCAT_MAIN_SOURCES}
@@ -519,6 +552,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     bcrypt
     comctl32
     setupapi
+    cfgmgr32
     iphlpapi
     shlwapi
     $<$<BOOL:${WPCAP_LIB}>:${WPCAP_LIB}>
@@ -605,12 +639,16 @@ if(BUILD_TESTING)
     bigcat_add_optional_test(test_httpserver_api_actions tests/test_httpserver_api_actions.cpp "server;api" bigcat_server_support)
     bigcat_add_optional_test(test_appcontroller_contract tests/test_appcontroller_contract.cpp "smoke;appcontroller")
     bigcat_add_optional_test(test_system_state_policy tests/test_system_state_policy.cpp "smoke;policy")
+    bigcat_add_optional_test(test_shutdown_guard tests/test_shutdown_guard.cpp "smoke;policy" bigcat_core)
     bigcat_add_optional_test(test_coordinate_transform tests/test_coordinate_transform.cpp "smoke;math" bigcat_motion)
     bigcat_add_optional_test(test_machine_config_mmf_pose_coordinate tests/test_machine_config_mmf_pose_coordinate.cpp "smoke;motionconfig" bigcat_motion iphlpapi)
     bigcat_add_optional_test(test_machine_config_xml_io tests/test_machine_config_xml_io.cpp "smoke;motionconfig" bigcat_motion iphlpapi)
     bigcat_add_optional_test(test_mmf_pose6d_input_order tests/test_mmf_pose6d_input_order.cpp "smoke;motionconfig" bigcat_motion)
+    bigcat_add_optional_test(test_mmf_monitor tests/test_mmf_monitor.cpp "utility;diagnostic")
+    bigcat_add_optional_test(test_udp_monitor tests/test_udp_monitor.cpp "utility;diagnostic")
     bigcat_add_optional_test(test_motion_config_defaults tests/test_motion_config_defaults.cpp "smoke;motionconfig" bigcat_motion iphlpapi)
     bigcat_add_optional_test(test_stewart_ik tests/test_stewart_ik.cpp "smoke;math" bigcat_motion)
+    bigcat_add_optional_test(test_pose6d_limits tests/test_pose6d_limits.cpp "smoke;math" bigcat_motion)
     bigcat_add_optional_test(test_yaw_roll_modal_diagnostic tests/test_yaw_roll_modal_diagnostic.cpp "math;diagnostic" bigcat_motion)
     bigcat_add_optional_test(test_csv_disable_filter_clears_command tests/test_csv_disable_filter_clears_command.cpp "smoke;ethercat" bigcat_motion bigcat_ethercat)
     bigcat_add_optional_test(test_simulation_reconnect_clears_staged_outputs tests/test_simulation_reconnect_clears_staged_outputs.cpp "smoke;ethercat;simulation" bigcat_motion bigcat_ethercat)
@@ -629,6 +667,14 @@ if(BUILD_TESTING)
     bigcat_add_optional_test(test_pdofilter_pdo_limit_velocity_decay tests/test_pdofilter_pdo_limit_velocity_decay.cpp "smoke;pdofilter" bigcat_ethercat)
     bigcat_add_optional_test(test_pdofilter_violation_no_runaway tests/test_pdofilter_violation_no_runaway.cpp "smoke;pdofilter" bigcat_ethercat)
     bigcat_add_optional_test(test_pdofilter_oscillating_input_within_limits tests/test_pdofilter_oscillating_input_within_limits.cpp "smoke;pdofilter" bigcat_ethercat)
+    # Standalone EtherCAT jog test (direct SOEM, not part of smoke-test groups)
+    add_executable(test_Ethercat_jog tests/test_Ethercat_jog.cpp)
+    bigcat_configure_test_target(test_Ethercat_jog)
+    target_include_directories(test_Ethercat_jog PRIVATE ${NPCAP_INCLUDE_DIR})
+    target_link_libraries(test_Ethercat_jog PRIVATE soem
+        $<$<BOOL:${WPCAP_LIB}>:${WPCAP_LIB}> $<$<NOT:$<BOOL:${WPCAP_LIB}>>:wpcap>
+        $<$<BOOL:${PACKET_LIB}>:${PACKET_LIB}> $<$<NOT:$<BOOL:${PACKET_LIB}>>:Packet>
+        ws2_32 winmm)
 endif()
 
 # --- 新增：在每次 Build 後自動複製 Par 資料夾到執行檔輸出目錄 -----------------

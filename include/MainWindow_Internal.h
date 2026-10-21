@@ -1,4 +1,4 @@
-#ifndef MAIN_WINDOW_INTERNAL_H
+﻿#ifndef MAIN_WINDOW_INTERNAL_H
 #define MAIN_WINDOW_INTERNAL_H
 
 #ifndef MAIN_WINDOW_H
@@ -6,16 +6,19 @@
 #endif
 
 private:
-    // Track last observed low-order byte of SDO 0x60FD so we can detect
-    // edges on interest bits (bit0 = Immediate Stop, active-high; bit5 = Emergency Stop, active-low).
-    // -1 indicates "unknown / not yet observed". Use atomic for thread-safety
-    // because SDO reader invokes callbacks from a background thread.
-    std::atomic<int> lastSdo60FDLastByte{ -1 };
-    std::atomic<int> sdo60FDFailureStreak{0};
-    std::atomic<int> sdo60FDConsecutiveFailureCount{0};
-    std::atomic<ULONGLONG> sdo60FDFailureSinceTick{0};
-    std::atomic<ULONGLONG> lastSdo60FDFailureTick{0};
-    std::atomic<bool> sdo60FDDisconnectRequested{false};
+    // Track last observed low-order byte of PDO 0x60FD (was SDO; now PDO-cached every cycle)
+    // so we can detect edges on interest bits (bit0=Emergency Stop active-low,
+    // bit5=Immediate Stop active-high).
+    // -1 = "unknown / not yet observed". Atomic for thread-safety:
+    // the cyclic PDO thread updates the cache, UI thread reads it.
+    std::atomic<int> lastPdo60FDLastByte{ -1 };
+    std::atomic<int> pdo60FDFailureStreak{0};
+    std::atomic<int> pdo60FDConsecutiveFailureCount{0};
+    std::atomic<ULONGLONG> pdo60FDFailureSinceTick{0};
+    std::atomic<ULONGLONG> lastPdo60FDFailureTick{0};
+    std::atomic<bool> pdo60FDDisconnectRequested{false};
+    // Whether external E-Stop (0x60FD bit0) detection is enabled (INI-configurable)
+    std::atomic<bool> externalEstopEnabled_{true};
     static constexpr ULONGLONG SDO_60FD_FAILURE_WINDOW_MS = 1000;
     // Whether status messages are also written to logs\status.log (persisted via INI)
     std::atomic<bool> statusLogEnabled_{true};
@@ -64,6 +67,7 @@ private:
     bool PreparePDOForSlave(int slaveIdx);
     bool TryGetMechanicalActualPosition(int slaveIdx, double &outPosition) const;
     bool TryGetMechanicalActualSpeed(int slaveIdx, double &outSpeed) const;
+    bool TryGetMechanicalActualTorque(int slaveIdx, double &outTorque) const;
     bool ComputeHomeCommandValue(int slaveIdx, bool &haveValue, uint64_t &value);
     bool ValidateHomePreconditions(int slaveIdx, std::wstring &errorMessage);
     bool RunAutoDownToOriginWorkflow();
@@ -122,6 +126,7 @@ private:
     void CacheMotionParamsFromUi(int slaveIndex);
     void OptimizeAdapterForEthercat(
         const std::string &ifname,
+        bool irqAlreadyReady,
         const std::function<void(const std::string&)> &post);
     void VerifyCyclicModeAndPdoReadiness(
         uint32_t desiredCycleTime,
@@ -139,7 +144,8 @@ private:
         const char *message,
         const std::function<void(const std::string&)> &post);
     void StartPostConnectSdoReader();
-    void HandleSdo60FDCallback(const std::string &message);
+    void HandlePdo60FDCallback(const std::string &message);
+    void PollExternalAutoInputsPdo();
     // Extracted WM_USER_AUTO_IMMEDIATE_STOP_REQUEST handler
     void HandleAutoImmediateStopRequest(HWND hRequester, bool isPDOErrorTriggered, int slaveNumber, bool requireManualReset = false, bool skipManualReset = false);
     // Extracted WM_USER_AUTO_EMERGENCY_STOP_REQUEST handler
@@ -161,6 +167,7 @@ private:
     void StartErrorAlertSoundForStop(const char *logPrefix);
     void SetFaultResetUiEnabledForStop(bool enabled);
     void NotifyAutoWindowOwnerState(WPARAM state);
+    void FinalizeSuccessfulAutoConnectSoftStart();
     bool ExecuteStopMotionSequence(const char *logPrefix, bool allowSoftStartRetry);
     bool TryPowerOnAllSlaves(const char *logPrefix, const char *partialFailureLog = nullptr, const char *missingControllerLog = nullptr);
     bool ClearMasterErrorAndResetPdoFilters(int slaveNumber = 0);
@@ -192,6 +199,11 @@ private:
     // Ensure PC 'Connect' button state is correct for given adapter selection.
     // Checks that adapter reports link up and that the system is not busy/connected.
     void UpdateConnectButtonStateForAdapter(const std::string &ifname);
+    // Native-UI half of SetSelectedAdapter (combobox selection, connect button,
+    // RT core / IRQ display, IRQ affinity registry work). MUST run on the UI thread;
+    // SetSelectedAdapter posts WM_USER_APPLY_SELECTED_ADAPTER_UI instead when it is
+    // called from an HTTP/SSE worker thread.
+    void ApplySelectedAdapterToNativeUi(const std::string &canonicalIfname);
     // Front-end integration: set selected adapter (pcap ifname, UTF-8)
     // ESI handling
     void PopulateESIFiles();
@@ -258,7 +270,13 @@ private:
 
     // 控制項句柄
     HWND hComboAdapter;
+    // Static control showing the effective IRQ CPU for the selected adapter
+    HWND hStaticAdapterIrqCpu;
+    HWND hStaticOtherIrqAssignments;
+    HWND hStaticRtCore;  // auto-detected RT physical core display
     HWND hComboSlaves; // 新增: 從站下拉選單（依從站數量填充）
+    // Static text showing PDO mapping status for selected slave
+    HWND hStaticPdoMapping;
     HWND hBtnConnect;
     HWND hBtnDisconnect;
     HWND hListSlaves;
@@ -276,6 +294,7 @@ private:
     HWND hBtnSendMailbox;
     HWND hEditCycleTime;        // Desired cycle time (editable)
     HWND hEditCurrentCycleTime; // Current cycle time (display only)
+    HWND hEditPdoProcFreq;      // PDOProc frequency (display only)
     HWND hEditWKC;              // Working Counter (display only)
     // Auto cycle UI removed: controls for editable auto-cycle and measured-ms
     // were intentionally removed as SDO polling is now managed by EtherCATMaster
@@ -313,6 +332,7 @@ private:
     HWND hBtnSaveConfig;    // 設定檔存檔
     // MMF 可視化輸出勾選框
     HWND hChkMMFOutput;     // MMF 即時輸出
+    HWND hChkMMFPoseOutput; // IK 實際 6DoF 姿態 MMF 輸出（名稱取自 INI PoseOutputName）
     // 靜態文字：顯示 MMF 名稱與連線資訊，位於勾選框右側
     
     HWND hStaticMMFInfo;
@@ -425,6 +445,10 @@ private:
     // the motion start is still in progress. This allows release to interrupt
     // a start that hasn't completed yet.
     std::atomic<bool> jogPressRequested{false};
+    // true while keyboard arrow-key jog is active (prevents key-repeat re-trigger)
+    std::atomic<bool> keyboardJogActive{false};
+    // true when the active keyboard jog direction is positive (VK_UP), false=negative (VK_DOWN)
+    std::atomic<bool> keyboardJogPositive{true};
 
     // Background worker thread used for long-running connect/initialize
     std::atomic<bool> workerRunning;
@@ -485,28 +509,54 @@ private:
     // 由 TriggerAutoStartupSequence() 設定；連線完成後檢查並執行
     std::atomic<bool> autoStartAfterConnect{false};
     std::atomic<bool> suppressAutoWindowForStartupAuto{false};
+    // Suppress SDO/PDO-triggered auto immediate/emergency stop during the
+    // auto-startup window (between FinalizeSuccessfulConnection clearing
+    // busy flags and StartAutoProcedure acquiring them). Prevents a race
+    // where the 10ms SDO reader re-sets immediateStopBusy before START_AUTO
+    // is processed on the UI thread.
+    std::atomic<bool> suppressAutoStopDuringStartup_{false};
     // Close request handling: if user attempts to close while EtherCAT is running
     // we perform a safe disconnect first and only close the window afterwards.
     std::atomic<bool> closePending{false};
     // Currently used pcap interface name (UTF-8). Populated on connect, cleared on disconnect.
-    std::string currentIfName;
+    // GuardedString: this selection is written by the UI thread, the connect worker and
+    // HTTP workers, and read by UI/watchdog/HTTP/SSE threads — a plain std::string
+    // would race. Copy it out first when a pointer is needed (no c_str()).
+    GuardedString currentIfName;
     // Current native adapter combobox mapping: combo item data -> pcap name.
     std::vector<std::string> adapterComboPcapNames;
     ULONGLONG linkDownSinceTick = 0;
     bool linkLossDisconnectRequested = false;
     static constexpr ULONGLONG LINK_LOSS_DISCONNECT_DELAY_MS = 1000;
     // Adapter selected from web UI (separate from `currentIfName` which is the PC's selection)
-    std::string webSelectedIfName;
+    GuardedString webSelectedIfName;
+    // Saved NVIDIA DisableDynamicPstate value for restore on disconnect
+    std::string nvidiaDpsSavedValue;
+    // Saved TwinCAT service list for restore on disconnect (semicolon-separated)
+    std::string twinCatSavedServices;
+    // Async futures for slow PowerShell optimizations (run in parallel with master init)
+    std::future<void> tcStopFuture;
     // Watchdog/recovery support
     std::atomic<int> watchdogCounter{0};        // current consecutive watchdog hits
-    int watchdogThreshold = 3;                  // number of consecutive hits before recovery
+    int watchdogThreshold = 2;                  // number of consecutive hits before recovery
     std::atomic<bool> recoveryRunning{false};
     std::thread recoveryThread;
     void StartWatchdogRecovery();
+    // Cooldown after recovery: skip watchdog counting for N ms after a recovery
+    // completes, to avoid rapid re-trigger loops when WKC=0 persists transiently.
+    static constexpr ULONGLONG WATCHDOG_COOLDOWN_MS = 2000;
+    std::atomic<ULONGLONG> watchdogCooldownUntil{0};
+    // Escalation: if N recovery attempts happen within a time window, escalate to
+    // full disconnect instead of looping indefinitely.
+    static constexpr int WATCHDOG_MAX_RECOVERY_ATTEMPTS = 3;
+    static constexpr ULONGLONG WATCHDOG_RECOVERY_WINDOW_MS = 15000;
+    std::atomic<int> recoveryAttemptCount{0};
+    std::atomic<ULONGLONG> recoveryWindowStartTick{0};
     // Persistent global error detection: count consecutive OnTimer ticks where the
     // master reports a global error before auto-disconnect is triggered (to avoid falses)
     std::atomic<int> globalErrorCounter{0};
     int globalErrorThreshold = 5; // number of consecutive timer ticks (100ms each) before auto-disconnect
+    std::atomic<bool> wkcStopTriggered_{false}; // one-shot latch: prevent repeated WKC emergency stop loops
 
     // 0x603F Error Code 循環檢查機制（每50ms檢查一個從站）
     std::atomic<bool> errorCodeCheckRunning{false};
@@ -528,7 +578,7 @@ private:
     std::map<int, int> errorCodeConsecutiveCounter;
     int errorCodeConsecutiveThreshold = 3; // defaults: require 3 consecutive non-zero reads to mark persistent error
 
-    // 自動程序按鈕現在透過 EtherCATMaster 直接啟/停 SDO 讀取
+    // 0x60FD Digital Inputs 現已由 PDO 每週期自動更新，不再需要 SDO 背景讀取
     // Start the higher-level auto procedure.
     // If showAutoWindow==true the PC AutoWindow will be created/activated
     // and receive UI enable/disable messages. When started remotely (from
@@ -594,6 +644,7 @@ private:
     void SetAutoStopLampLatched(bool immediateStop, bool emergencyStop);
     void RequestMotionUiRefresh();
     void RefreshConfirmedSlaveControlState(bool rebuildPdoControls);
+    void RefreshPdoMappingDisplay();
     void BeginAutoProcedureStartupUiBatch();
     void EndAutoProcedureStartupUiBatch(bool forceMainWindowRefresh = false);
     void BeginMainWindowVisualRefreshBatch();
@@ -643,6 +694,7 @@ private:
     void MasterResetMaxObservedCommsTime();
     void MasterStopCyclicOperation();
     void MasterForceSlaveOperational(int slaveIndex, std::string &outLog);
+    bool MasterAllSlavesOperationalNoAlarm();
     bool MasterSendMailbox(uint16_t slave, uint8_t* data, int size);
     // Expose MMF1 accessors publicly so modeless AutoWindow can query them
 public:
@@ -672,7 +724,7 @@ public:
     // Returns true if the call succeeded (snapshot available). If succeeded,
     // `hasValue` indicates whether a statusword value was decoded; the
     // decoded value is written to outVal.
-    bool MasterGetStatusword6041(int slaveIndex, uint32_t &outVal, bool &hasValue);    // Check if all slaves have the ready statusword (0x1637u, indicating CiA402 Operation Enabled).
+    bool MasterGetStatusword6041(int slaveIndex, uint32_t &outVal, bool &hasValue);    // Check if all slaves are in CiA402 Operation Enabled (mask-based: bits 0-6 + bit 9).
     // Returns true if all slaves report the expected statusword, false otherwise.
     // Thread-safe; may be called from any context once PDO snapshot is available.
     bool AreAllSlavesReadyByStatusword() const;private:
@@ -690,6 +742,12 @@ public:
     // Return the max observed cycle-to-cycle period (microseconds)
     uint32_t MasterGetMaxObservedCycleMicros() const;
     void MasterResetMaxObservedCycleMicros();
+    // ── Cycle spike diagnostics ──
+    uint32_t MasterGetLastSpikePhase() const;
+    uint32_t MasterGetLastSpikeCycleUs() const;
+    uint32_t MasterGetLastSpikeCommsUs() const;
+    uint32_t MasterGetSpikeCount() const;
+    void MasterResetSpikeCounters();
     uint32_t MasterGetWorkingCounter() const;
     uint64_t MasterGetPDOSentCount() const;
     double MasterGetPDOFrequencyHz() const;

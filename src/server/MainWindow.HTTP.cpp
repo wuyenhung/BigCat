@@ -249,6 +249,10 @@ static void ExecuteHttpAppControllerCommand(const HttpAppControllerCommandPlan& 
     }
 }
 
+// NOTE: the helper below (and the combo helpers further down) send messages to
+// native controls, so they must only ever run on the UI thread. They are reached
+// exclusively through the posted WM_USER_POST_UTF8_LOG command pipeline
+// (MainWindow::HandlePostedUtf8LogMessage), never directly from an HTTP worker.
 static void ApplyHttpMmfOutputToggle(HWND hwnd, HWND hChkMMFOutput, bool enabled) {
     if (!hChkMMFOutput || !IsWindow(hChkMMFOutput)) return;
 
@@ -607,7 +611,7 @@ LRESULT MainWindow::HandlePostedUtf8LogMessage(PostedUtf8UiMessage* message)
                 }
                 // Reset UI-level maxObservedCycleTime too
                 this->maxObservedCycleTime = 0;
-                SafeSetTextW(hEditCurrentCycleTime, std::wstring(L"0.00 ms / 0.00 ms"));
+                SafeSetTextW(hEditCurrentCycleTime, std::wstring(L"C0/P0M0 F0Hz"));
                 // Start warm-up delay before collecting maxObservedCycleTime
                 // Record absolute tick when collection should start
                 this->maxObservedCollectStartTick = GetTickCount64() + this->maxObservedCollectDelayMs;

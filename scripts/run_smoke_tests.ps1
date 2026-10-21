@@ -274,7 +274,9 @@ $targets = @(
 
 if (-not $SkipBuild) {
     Write-SmokeLine "[smoke] Building targets in $resolvedBuildDir ($Config)..."
-    $buildResult = Invoke-ProcessCapture -FilePath $cmakeExe -ArgumentList (@("--build", $resolvedBuildDir, "--config", $Config, "--target") + $targets) -Phase Build
+    $buildArgs = @("--build", $resolvedBuildDir, "--config", $Config)
+    foreach ($t in $targets) { $buildArgs += @("--target", $t) }
+    $buildResult = Invoke-ProcessCapture -FilePath $cmakeExe -ArgumentList $buildArgs -Phase Build
     if ($buildResult.ExitCode -ne 0) {
         $buildFailedWithMissingTarget = ($buildResult.Output | Out-String) -match "unknown target"
         if (-not $buildFailedWithMissingTarget) {

@@ -16,8 +16,14 @@ MMFWriter::~MMFWriter() {
 
 bool MMFWriter::Create(const std::wstring& mappingName) {
     std::lock_guard<std::mutex> lk(mtx_);
+    // Inline cleanup to avoid recursive lock on mtx_ (Close() also acquires mtx_).
     if (view_) {
-        Close(); // 關閉現有的映射
+        UnmapViewOfFile(view_);
+        view_ = nullptr;
+    }
+    if (hMapping_) {
+        CloseHandle(hMapping_);
+        hMapping_ = NULL;
     }
 
     // 建立或開啟 file mapping object

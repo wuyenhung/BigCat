@@ -272,29 +272,28 @@ void MainWindow::OnFaultReset(bool assert)
 void MainWindow::OnImmediateStop(bool assert)
 {
     if (!assert) return;
-    int slaveIdx = -1;
-    HWND hCombo = GetDlgItem(hContentWnd, 2001);
-    if (hCombo) {
-        LRESULT sel = SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
-        if (sel != CB_ERR) slaveIdx = (int)(sel + 1);
-    }
-
-    if (slaveIdx <= 0) { PrependStatus(L"[ImmediateStop] No slave selected\r\n"); return; }
     if (!IsMasterInitialized()) { PrependStatus(L"[ImmediateStop] EtherCAT master not available\r\n"); NotifyEthercatError(true); return; }
     SetManualResetRequired(true);
 
     if (motionController) {
-        // Stop PDO 0x607A logical target position recording immediately when user requests Immediate Stop
         try {
             if (auto* master = AppController::GetInstance().GetMaster()) {
                 master->EnablePDO607ARecording(false);
             }
         } catch(...) {}
         SetBusyFlagAndNotify(this->immediateStopBusy, true);
-        std::thread([this, slaveIdx, assert]() {
-            MotionResult r = this->motionController->ImmediateStopAsync(slaveIdx, assert);
-            std::string utf = CoreHelpers::WideToUtf8(r.message);
-            PostUTF8LogToUI(utf);
+        std::thread([this]() {
+            bool success = false;
+            try {
+                if (auto* master = AppController::GetInstance().GetMaster()) {
+                    master->HoldAllPDOFiltersPosition();
+                    success = true;
+                }
+            } catch (...) {}
+            std::string msg = std::string("[ImmediateStop] ") +
+                (success ? "all PDO filters set to hold current position (deceleration-limited stop)\n"
+                         : "failed to set hold-position mode\n");
+            PostUTF8LogToUI(msg);
             SetBusyFlagAndNotify(this->immediateStopBusy, false);
         }).detach();
     } else {
@@ -453,6 +452,7 @@ void MainWindow::OnHome(bool assert)
 
     // Move ALL validation and execution to background thread
     // Main thread returns immediately without any UI updates or blocking operations
+    try {
     std::thread([this, slaveIdx]() {
         struct HomingBusyGuard {
             MainWindow* window;
@@ -508,6 +508,13 @@ void MainWindow::OnHome(bool assert)
             PostUTF8LogToUI(CoreHelpers::WideToUtf8(r.message));
         } while (false);
     }).detach();
+    } catch (const std::exception &ex) {
+        SetBusyFlagAndNotify(this->homingBusy, false);
+        PostUTF8LogToUI(std::string("[OriginSet] failed to create worker thread: ") + ex.what() + "\n");
+    } catch (...) {
+        SetBusyFlagAndNotify(this->homingBusy, false);
+        PostUTF8LogToUI(std::string("[OriginSet] unknown error creating worker thread\n"));
+    }
 }
 
 
@@ -609,6 +616,35 @@ bool MainWindow::TryGetMechanicalActualSpeed(int slaveIdx, double &outSpeed) con
 }
 
 
+bool MainWindow::TryGetMechanicalActualTorque(int slaveIdx, double &outTorque) const {
+    outTorque = 0.0;
+    if (slaveIdx <= 0) return false;
+    auto* service = AppController::GetInstance().GetEtherCATService();
+    if (!service) return false;
+    MechanicalUnitMetrics metrics;
+    bool gotMetrics = service->TryGetMechanicalUnitMetricsLockFree(slaveIdx, metrics);
+    if (!gotMetrics) {
+        static thread_local std::array<ULONGLONG, 128> lastLockedReadTick{};
+        ULONGLONG nowTick = GetTickCount64();
+        bool allowFallback = true;
+        if (slaveIdx > 0 && slaveIdx < static_cast<int>(lastLockedReadTick.size())) {
+            const ULONGLONG fallbackIntervalMs = 200;
+            ULONGLONG &lastTick = lastLockedReadTick[slaveIdx];
+            if (nowTick - lastTick < fallbackIntervalMs) {
+                allowFallback = false;
+            } else {
+                lastTick = nowTick;
+            }
+        }
+        if (allowFallback) {
+            gotMetrics = service->GetMechanicalUnitMetrics(slaveIdx, metrics);
+        }
+    }
+    if (!gotMetrics || !metrics.valid) return false;
+    return TryParseMechanicalMetricValue(metrics.actualTorque, outTorque);
+}
+
+
 bool MainWindow::ComputeHomeCommandValue(int slaveIdx, bool &haveValue, uint64_t &value) {
     MotionParamSnapshot snap = CaptureMotionParams(slaveIdx);
     haveValue = false;
@@ -691,6 +727,29 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
         PostUTF8LogToUI(std::string("[AutoDownToOrigin] Master or controller unavailable\n"));
         return false;
     }
+
+    // Disable PDO filtering during the entire down-to-origin workflow.
+    // The jog phase switches drives to CSV mode and writes velocity to 0x60FF;
+    // the CSP cyclic path would otherwise keep zeroing 0x60FF every 2 ms and
+    // fight the jog velocity commands, causing an initial burst and stutter.
+    const bool filteringWasEnabled = master->IsPDOFilteringEnabled();
+    if (filteringWasEnabled) {
+        master->EnablePDOFiltering(false);
+        PostUTF8LogToUI(std::string("[AutoDownToOrigin] PDO filtering disabled for jog phase\n"));
+    }
+    // RAII guard: restore PDO filtering on scope exit (success or failure).
+    struct FilteringRestoreGuard {
+        EtherCATMaster* m;
+        bool wasEnabled;
+        ~FilteringRestoreGuard() {
+            if (m && wasEnabled && !m->IsPDOFilteringEnabled()) {
+                // Hold all filters at current position before re-enabling
+                // so the drives don't jump when PDO filtering resumes.
+                m->HoldAllPDOFiltersPosition();
+                m->EnablePDOFiltering(true);
+            }
+        }
+    } filterGuard{master, filteringWasEnabled};
     int slaveCount = MasterGetSlaveCount();
     if (slaveCount <= 0) {
         PostUTF8LogToUI(std::string("[AutoDownToOrigin] No slaves detected\n"));
@@ -703,7 +762,25 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
     };
 
     std::vector<TorqueLimitRestoreEntry> torqueLimitRestoreEntries;
+    // Write torque limit value preferring PDO when the torque-limit object
+    // is present in the slave's RxPDO mapping (checked via pdoDisplay items).
+    // Falls back to SDO only when the index is not found in PDO.
+    // The PDO byte offset is naturally drive-model-specific because it comes
+    // from the actual PDO mapping read from each slave.
     auto writeTorqueLimitValue = [&](int slave, uint16_t index, uint32_t value) {
+        auto* master = AppController::GetInstance().GetMaster();
+        if (!master) return false;
+
+        // Prefer PDO: StagePDOByIndex looks up the index in pdoDisplay.pdoItems
+        // and writes directly into the IOmap at the correct byte offset.
+        // This works for both X1S (0x2019/0x201A) and DVS (0x60E0/0x60E1)
+        // because the PDO byte layout is identical (offsets 10/12).
+        if (MotionLogic::StagePDOByIndex(master, &pdoDisplay, slave, index, value)) {
+            return true;
+        }
+
+        // PDO item not found — fall back to SDO (e.g. basic 4+4 PDO layout
+        // or drive that doesn't map torque limits into PDO).
         uint8_t bytes[4] = {
             static_cast<uint8_t>(value & 0xFF),
             static_cast<uint8_t>((value >> 8) & 0xFF),
@@ -744,91 +821,17 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
                 fn();
             }
         }
-    } restoreTorqueLimitGuard{restoreNegativeTorqueLimits};
+    };
 
-    for (int s = 1; s <= slaveCount; ++s) {
-        MotionParamSnapshot snap = CaptureMotionParams(s);
-        if (!snap.haveP12) {
-            std::ostringstream oss;
-            oss << "[AutoDownToOrigin] Missing configured P12 for slave " << s << "\n";
-            PostUTF8LogToUI(oss.str());
-            return false;
-        }
-
-        const uint32_t configuredP12 = static_cast<uint32_t>(llround(snap.p12));
-        const uint32_t reducedP12 = static_cast<uint32_t>(llround(static_cast<double>(configuredP12) * 0.5));
-        const uint16_t targetIndex = (snap.haveP2 && snap.p2 == 1) ? 0x60E0 : 0x60E1;
-        if (!writeTorqueLimitValue(s, targetIndex, reducedP12)) {
-            std::ostringstream oss;
-            oss << "[AutoDownToOrigin] Failed to apply temporary 50% P12 torque limit"
-                << " slave=" << s
-                << " index=0x" << std::hex << std::uppercase << targetIndex
-                << " configured=" << std::dec << configuredP12
-                << " temporary=" << reducedP12 << "\n";
-            PostUTF8LogToUI(oss.str());
-            return false;
-        }
-
-        torqueLimitRestoreEntries.push_back({s, targetIndex, configuredP12});
-    }
-    {
-        std::ostringstream oss;
-        oss << "[AutoDownToOrigin] Applied temporary 50% P12 torque limit to "
-            << torqueLimitRestoreEntries.size() << " slaves\n";
-        PostUTF8LogToUI(oss.str());
-    }
-
+    // === Phase 1: Immediate motor reversal — start CSV jog first ===
+    // The motor reverses within 1-2 PDO cycles after the button press.
+    // SDO safety operations (soft-limits / torque-limits) run afterward
+    // while the soft-start ramp keeps velocity low during the first few
+    // hundred milliseconds.
     std::vector<bool> jogStarted(slaveCount + 1, false);
     std::vector<bool> jogStopped(slaveCount + 1, false);
-    struct DownToOriginCompressionTarget {
-        bool havePositioningPoint = false;
-        double positioningPoint = 0.0;
-        bool haveCompressionPoint = false;
-        double compressionPoint = 0.0;
-    };
-    std::vector<DownToOriginCompressionTarget> compressionTargets(slaveCount + 1);
-    std::vector<bool> positioningPointReached(slaveCount + 1, false);
-    std::vector<bool> compressionPointReached(slaveCount + 1, false);
     std::vector<bool> haveStartPosition(slaveCount + 1, false);
     std::vector<double> startPositions(slaveCount + 1, 0.0);
-    auto hasReachedMechanicalTarget = [](double startPosition, double currentPosition, double targetPosition, double tolerance) {
-        if (!std::isfinite(startPosition) || !std::isfinite(currentPosition) || !std::isfinite(targetPosition)) {
-            return false;
-        }
-        if (targetPosition <= startPosition) {
-            return currentPosition <= (targetPosition + tolerance);
-        }
-        return currentPosition >= (targetPosition - tolerance);
-    };
-    auto resolveCompressionTargets = [&](int slaveIdx) {
-        DownToOriginCompressionTarget target;
-        MotionParamSnapshot snap = CaptureMotionParams(slaveIdx);
-        if (snap.haveP9 && std::isfinite(snap.p9)) {
-            target.havePositioningPoint = true;
-            target.positioningPoint = snap.p9;
-        }
-        if (snap.haveP13 && std::isfinite(snap.p13)) {
-            target.haveCompressionPoint = true;
-            target.compressionPoint = snap.p13;
-        }
-        if (!target.haveCompressionPoint && target.havePositioningPoint) {
-            target.haveCompressionPoint = true;
-            target.compressionPoint = target.positioningPoint;
-        }
-        if (!target.havePositioningPoint && target.haveCompressionPoint) {
-            target.havePositioningPoint = true;
-            target.positioningPoint = target.compressionPoint;
-        }
-        if (target.havePositioningPoint && target.haveCompressionPoint) {
-            const bool positioningBeforeCompression =
-                std::fabs(target.positioningPoint - target.compressionPoint) <= 1e-6 ||
-                target.positioningPoint >= target.compressionPoint;
-            if (!positioningBeforeCompression) {
-                target.positioningPoint = target.compressionPoint;
-            }
-        }
-        return target;
-    };
     auto cleanupJoggers = [&]() {
         int stoppedCount = 0;
         for (int s = 1; s <= slaveCount; ++s) {
@@ -861,13 +864,16 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
         return false;
     };
 
+    std::vector<int> jogSlaves;
+    std::vector<uint32_t> jogVelocities;
+    jogSlaves.reserve(slaveCount);
+    jogVelocities.reserve(slaveCount);
     for (int s = 1; s <= slaveCount; ++s) {
         if (this->autoDownToOriginAbortRequested.load()) {
             PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by Immediate Stop before start\n"));
             cleanupJoggers();
             return false;
         }
-        compressionTargets[s] = resolveCompressionTargets(s);
         double initialPosition = 0.0;
         if (TryGetMechanicalActualPosition(s, initialPosition)) {
             haveStartPosition[s] = true;
@@ -878,79 +884,375 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
             return failWide(ss.str());
         }
         uint32_t staged = ResolveJogVelocityCommand(s, false);
-        MotionResult startRes = motionController->JogNegativeStart(s, staged);
-        // 只在失敗時記錄，減少日誌輸出頻率
-        if (!startRes.success) {
-            PostUTF8LogToUI(CoreHelpers::WideToUtf8(startRes.message));
-            return failUtf8("[AutoDownToOrigin] Jog CCW start failed\n");
-        }
+        jogSlaves.push_back(s);
+        jogVelocities.push_back(staged);
         jogStarted[s] = true;
     }
 
-    Sleep(500); // brief delay to allow jog to initiate
+    // Batch-start all axes: zero 0x60FF, switch to CSV, wait for all mode
+    // switches, then write target velocity — all in the same PDO cycle.
+    {
+        MotionResult batchRes = motionController->JogNegativeStartBatch(jogSlaves, jogVelocities);
+        if (!batchRes.success) {
+            PostUTF8LogToUI(CoreHelpers::WideToUtf8(batchRes.message));
+            return failUtf8("[AutoDownToOrigin] Jog batch start failed\n");
+        }
+        PostUTF8LogToUI(CoreHelpers::WideToUtf8(batchRes.message + L"\n"));
+    }
 
-    const double SPEED_THRESHOLD = -2.5;
-    const double POSITION_TOLERANCE = 0.5;
+    const DWORD jogStartTick = GetTickCount();
+    const ecx_contextt* ecxCtx = master ? master->GetContext() : nullptr;
+
+    // === Phase 2: Safety operations (run while soft-start ramps up) ===
+    // Soft limits (0x607D): SDO-only — not in standard PDO mapping.
+    // Torque limits: PDO-preferred (via pdoDisplay item lookup), SDO fallback.
+    // The motor is already reversing under low initial velocity from the
+    // soft-start ramp, so these SDO writes are not on the critical path
+    // for perceived motor-start latency.
+
+    // --- Temporarily disable drive software position limits (0x607D) ---
+    // 0x607D is NOT mapped in the standard 7-entry RxPDO/TxPDO layout,
+    // so SDO is the only path.  During the reverse jog the drive may be
+    // commanded to positions outside its normal soft-limit range.
+    // Disable limits now and restore after homing.
+    struct SoftLimitRestoreEntry {
+        int slave = 0;
+        int32_t minPos = 0;
+        int32_t maxPos = 0;
+    };
+    std::vector<SoftLimitRestoreEntry> softLimitRestoreEntries;
+    softLimitRestoreEntries.reserve(slaveCount);
+    {
+        auto* mDown = AppController::GetInstance().GetMaster();
+        constexpr int32_t kDisabledSoftLimit = 0x7FFFFFFF;  // effectively unbounded
+        for (int s = 1; s <= slaveCount; ++s) {
+            SoftLimitRestoreEntry entry;
+            entry.slave = s;
+            // Read current limits via SDO
+            int32_t curMin = 0, curMax = 0;
+            bool haveMin = false, haveMax = false;
+            {
+                uint8_t buf[4] = {0};
+                int sz = 4;
+                if (mDown && mDown->ReadSDO(static_cast<uint16_t>(s), 0x607D, 0x01, buf, sz) && sz == 4) {
+                    curMin = static_cast<int32_t>(buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24));
+                    haveMin = true;
+                    entry.minPos = curMin;
+                }
+            }
+            {
+                uint8_t buf[4] = {0};
+                int sz = 4;
+                if (mDown && mDown->ReadSDO(static_cast<uint16_t>(s), 0x607D, 0x02, buf, sz) && sz == 4) {
+                    curMax = static_cast<int32_t>(buf[0] | (buf[1] << 8) | (buf[2] << 16) | (buf[3] << 24));
+                    haveMax = true;
+                    entry.maxPos = curMax;
+                }
+            }
+            if (!haveMin || !haveMax) {
+                // If we can't read current limits, skip disabling for this slave
+                std::ostringstream oss;
+                oss << "[AutoDownToOrigin] Cannot read 0x607D soft limits slave=" << s
+                    << " min=" << (haveMin ? "ok" : "FAIL") << " max=" << (haveMax ? "ok" : "FAIL") << "\n";
+                PostUTF8LogToUI(oss.str());
+                continue;
+            }
+            // Write disabled limits
+            uint8_t wbuf[4];
+            wbuf[0] = static_cast<uint8_t>(kDisabledSoftLimit & 0xFF);
+            wbuf[1] = static_cast<uint8_t>((kDisabledSoftLimit >> 8) & 0xFF);
+            wbuf[2] = static_cast<uint8_t>((kDisabledSoftLimit >> 16) & 0xFF);
+            wbuf[3] = static_cast<uint8_t>((kDisabledSoftLimit >> 24) & 0xFF);
+            bool okMin = mDown && mDown->WriteSDO(static_cast<uint16_t>(s), 0x607D, 0x01, wbuf, 4);
+            bool okMax = mDown && mDown->WriteSDO(static_cast<uint16_t>(s), 0x607D, 0x02, wbuf, 4);
+            if (!okMin || !okMax) {
+                std::ostringstream oss;
+                oss << "[AutoDownToOrigin] Failed to disable 0x607D soft limits slave=" << s << "\n";
+                PostUTF8LogToUI(oss.str());
+                continue;
+            }
+            softLimitRestoreEntries.push_back(entry);
+        }
+        if (!softLimitRestoreEntries.empty()) {
+            std::ostringstream oss;
+            oss << "[AutoDownToOrigin] Disabled 0x607D soft limits for "
+                << softLimitRestoreEntries.size() << " slaves\n";
+            PostUTF8LogToUI(oss.str());
+        }
+    }
+    auto restoreSoftLimits = [&]() {
+        auto* mDown = AppController::GetInstance().GetMaster();
+        int restoredCount = 0;
+        for (const auto &entry : softLimitRestoreEntries) {
+            uint8_t wbuf[4];
+            wbuf[0] = static_cast<uint8_t>(entry.minPos & 0xFF);
+            wbuf[1] = static_cast<uint8_t>((entry.minPos >> 8) & 0xFF);
+            wbuf[2] = static_cast<uint8_t>((entry.minPos >> 16) & 0xFF);
+            wbuf[3] = static_cast<uint8_t>((entry.minPos >> 24) & 0xFF);
+            bool okMin = mDown && mDown->WriteSDO(static_cast<uint16_t>(entry.slave), 0x607D, 0x01, wbuf, 4);
+            wbuf[0] = static_cast<uint8_t>(entry.maxPos & 0xFF);
+            wbuf[1] = static_cast<uint8_t>((entry.maxPos >> 8) & 0xFF);
+            wbuf[2] = static_cast<uint8_t>((entry.maxPos >> 16) & 0xFF);
+            wbuf[3] = static_cast<uint8_t>((entry.maxPos >> 24) & 0xFF);
+            bool okMax = mDown && mDown->WriteSDO(static_cast<uint16_t>(entry.slave), 0x607D, 0x02, wbuf, 4);
+            if (okMin && okMax) {
+                ++restoredCount;
+            }
+        }
+        if (!softLimitRestoreEntries.empty()) {
+            std::ostringstream oss;
+            oss << "[AutoDownToOrigin] Restored 0x607D soft limits for "
+                << restoredCount << "/" << softLimitRestoreEntries.size() << " slaves\n";
+            PostUTF8LogToUI(oss.str());
+        }
+        softLimitRestoreEntries.clear();
+    };
+    // RAII: restore soft limits on scope exit (after homing completes or on failure)
+    ScopeExit restoreSoftLimitGuard{restoreSoftLimits};
+
+    // RAII: restore configured torque limits on scope exit (after homing
+    // completes or on failure).  Defined before the torque-PDO loop so that
+    // partially-populated entries are still restored on early-exit.
+    ScopeExit restoreTorqueLimitGuard{restoreNegativeTorqueLimits};
+
+    // --- Apply temporary torque limit (100% P12 for X1S, 50% for others) ---
+    for (int s = 1; s <= slaveCount; ++s) {
+        MotionParamSnapshot snap = CaptureMotionParams(s);
+        if (!snap.haveP12) {
+            std::ostringstream oss;
+            oss << "[AutoDownToOrigin] Missing configured P12 for slave " << s << "\n";
+            PostUTF8LogToUI(oss.str());
+            return failUtf8(oss.str());
+        }
+
+        const uint32_t configuredP12 = static_cast<uint32_t>(llround(snap.p12));
+        auto* mDown = AppController::GetInstance().GetMaster();
+        const ecx_contextt* cxDown = mDown ? mDown->GetContext() : nullptr;
+        const uint32_t eepMan = (cxDown && s <= cxDown->slavecount) ? cxDown->slavelist[s].eep_man : 0;
+        const double torqueMultiplier = EtherCATMaster::IsX1sDrive(eepMan) ? 1.0 : 0.5;
+        const uint32_t torqueLimit = static_cast<uint32_t>(llround(static_cast<double>(configuredP12) * torqueMultiplier));
+        // Resolve correct torque limit object index for this slave type
+        // (X1S: 0x2019/0x201A, DVS: 0x60E0/0x60E1).  writeTorqueLimitValue
+        // prefers PDO when the index is mapped; falls back to SDO otherwise.
+        const uint16_t targetIndex = (snap.haveP2 && snap.p2 == 1)
+            ? EtherCATMaster::GetTorqueLimitPosIdx(eepMan)
+            : EtherCATMaster::GetTorqueLimitNegIdx(eepMan);
+        if (!writeTorqueLimitValue(s, targetIndex, torqueLimit)) {
+            std::ostringstream oss;
+            oss << "[AutoDownToOrigin] Failed to apply temporary P12 torque limit"
+                << " slave=" << s
+                << " index=0x" << std::hex << std::uppercase << targetIndex
+                << " configured=" << std::dec << configuredP12
+                << " multiplier=" << torqueMultiplier
+                << " temporary=" << torqueLimit << "\n";
+            PostUTF8LogToUI(oss.str());
+            return failUtf8(oss.str());
+        }
+
+        torqueLimitRestoreEntries.push_back({s, targetIndex, configuredP12});
+    }
+    {
+        std::ostringstream oss;
+        oss << "[AutoDownToOrigin] Applied temporary P12 torque limit to "
+            << torqueLimitRestoreEntries.size() << " slaves\n";
+        PostUTF8LogToUI(oss.str());
+    }
+
+    // Ensure the motor has been reversing for at least 200 ms before the
+    // stall-detection poll loop starts.  The SDO safety operations above
+    // already provide significant delay; 200 ms is sufficient for the
+    // soft-start ramp to establish non-zero velocity on all axes.
+    {
+        DWORD elapsedSinceJog = GetTickCount() - jogStartTick;
+        const DWORD MIN_PRE_POLL_DELAY_MS = 200;
+        if (elapsedSinceJog < MIN_PRE_POLL_DELAY_MS) {
+            Sleep(MIN_PRE_POLL_DELAY_MS - elapsedSinceJog);
+        }
+    }
+
+    // Per-drive block-detection thresholds.
+    // DVS: speed-based — when actual speed approaches zero (stalled against hard stop).
+    // X1S: torque-based — when actual torque exceeds threshold.
+    const double speedThreshold = AppConfig::ReadReverseJogSpeedThreshold();    // deg/s, default -2.5 (closer to zero → stalled)
+    const double torqueThreshold = AppConfig::ReadReverseJogTorqueThreshold();  // 0.1% rated torque, default 400
     const DWORD SPEED_POLL_INTERVAL_MS = 20;  // 20ms reduces CPU load vs 10ms; still fast enough for speed check
     const DWORD SPEED_TIMEOUT_MS = 30000;
+    const DWORD DIAG_LOG_INTERVAL_MS = 3000; // log compact diagnostic every 3s
+    // DVS speed-stability backup: when speed hovers in a narrow near-zero band
+    // for this duration, the axis is considered stalled against a compliant stop.
+    const double DVS_STABLE_SPEED_WINDOW = -2.0;   // deg/s, speed must be above this
+    const double DVS_STABLE_SPEED_DELTA  = 0.2;    // deg/s, max change between reads
+    const DWORD DVS_STABLE_DURATION_MS   = 2000;   // must stay stable this long
     DWORD waitStart = GetTickCount();
+    DWORD lastDiagLogMs = 0;
+    int blockReadFailCount[9] = {}; // 1-indexed per slave, max 8 axes
+    bool diagPending = false;
+    DWORD dvsStableSinceTick[9] = {};   // when stable window started (0=not tracking)
+    double dvsLastStableSpeed[9] = {};  // last speed for delta comparison
+    bool dvsMinSpeedReached[9] = {};    // must exceed threshold before stall detection activates
+    DWORD jogStallSinceTick[9] = {};    // position-timeout stall detection
+    double jogStallLastPos[9] = {};     // last position for delta comparison
+    DWORD torqueAboveSinceTick[9] = {}; // torque debounce: when torque first exceeded threshold
+    const DWORD TORQUE_DEBOUNCE_MS = 1000; // torque must stay above threshold this long
     while (true) {
+        DWORD nowMs = GetTickCount();
         bool allReleased = true;
+        bool diagIntervalElapsed = (nowMs - lastDiagLogMs >= DIAG_LOG_INTERVAL_MS);
+        if (diagIntervalElapsed) diagPending = true;
         for (int s = 1; s <= slaveCount; ++s) {
             if (!jogStarted[s] || jogStopped[s]) continue;
             allReleased = false;
-            bool stopByPosition = false;
+            // Track start position for DVS position-timeout fallback (relative delta),
+            // but do NOT use absolute P13/P9 position targets — position is not
+            // calibrated before homing completes.
             double actualPosition = 0.0;
             if (TryGetMechanicalActualPosition(s, actualPosition)) {
                 if (!haveStartPosition[s]) {
                     haveStartPosition[s] = true;
                     startPositions[s] = actualPosition;
                 }
-                const auto &target = compressionTargets[s];
-                if (haveStartPosition[s] && target.havePositioningPoint && !positioningPointReached[s] &&
-                    hasReachedMechanicalTarget(startPositions[s], actualPosition, target.positioningPoint, POSITION_TOLERANCE)) {
-                    positioningPointReached[s] = true;
-                    if (target.haveCompressionPoint &&
-                        std::fabs(target.compressionPoint - target.positioningPoint) > POSITION_TOLERANCE) {
-                        std::ostringstream oss;
-                        oss << "[AutoDownToOrigin] Slave " << s
-                            << " reached positioning point " << std::fixed << std::setprecision(4) << target.positioningPoint
-                            << "; simulating compression toward " << target.compressionPoint << "\n";
-                        PostUTF8LogToUI(oss.str());
+            }
+            // Per-drive hardware-block detection:
+            //   DVS (0x445653): speed-based primary; torque-based backup when speed
+            //                  is near-zero but hasn't crossed the strict threshold.
+            //   X1S (0x766): torque-based — when actual torque exceeds threshold.
+            //   Other/unknown: torque-based (safe fallback).
+            uint32_t eepMan = (ecxCtx && s <= ecxCtx->slavecount) ? ecxCtx->slavelist[s].eep_man : 0;
+            const bool isDvs = EtherCATMaster::IsDvsDrive(eepMan);
+            bool stopByBlock = false;
+            const char* stopReason = nullptr;
+            double metricValue = 0;
+            bool metricReady = false;
+            double thresholdUsed = 0;
+
+            if (isDvs) {
+                // DVS: speed-based block detection (primary)
+                double speed = 0;
+                metricReady = TryGetMechanicalActualSpeed(s, speed);
+                metricValue = speed;
+                thresholdUsed = speedThreshold;
+                // Minimum delay before stall detection: motor needs time to
+                // accelerate from zero.  Without this, the initial speed
+                // reading (0 or near-zero before PDO cache is fresh) triggers
+                // immediate false-positive stall.
+                const DWORD MIN_STALL_CHECK_DELAY_MS = 500;
+                bool stallCheckEnabled = (nowMs - jogStartTick >= MIN_STALL_CHECK_DELAY_MS);
+                // Phase 1: motor must first exceed threshold (reverse faster
+                // than speedThreshold) to confirm it's actively moving.
+                // Phase 2: once moving, stall is detected when speed returns
+                // to the [speedThreshold, 0] band (approaching zero = stalled).
+                if (metricReady && speed < speedThreshold) {
+                    dvsMinSpeedReached[s] = true;  // actively reversing
+                }
+                stopByBlock = stallCheckEnabled && metricReady && dvsMinSpeedReached[s] &&
+                              (speed >= speedThreshold && speed <= 0.0);
+                if (stopByBlock) stopReason = "speed";
+                // Speed-stability backup: DVS has no torque output. When speed
+                // is near-zero but hasn't crossed the strict threshold (e.g.
+                // threshold=-0.5 but speed hovers at -0.6), and the reading
+                // stays stable for DVS_STABLE_DURATION_MS, the axis is stalled
+                // against a compliant stop.
+                if (!stopByBlock && metricReady && speed > DVS_STABLE_SPEED_WINDOW && speed < 0.0) {
+                    if (s <= 8) {
+                        if (dvsStableSinceTick[s] == 0 ||
+                            std::fabs(speed - dvsLastStableSpeed[s]) > DVS_STABLE_SPEED_DELTA) {
+                            dvsStableSinceTick[s] = nowMs;
+                            dvsLastStableSpeed[s] = speed;
+                        } else if (nowMs - dvsStableSinceTick[s] >= DVS_STABLE_DURATION_MS) {
+                            stopByBlock = true;
+                            stopReason = "speed-stable";
+                        }
+                    }
+                } else if (s <= 8) {
+                    dvsStableSinceTick[s] = 0;  // out of window, reset
+                }
+                // Position-timeout fallback: if motor jogged >1s and position
+                // barely changed (<0.01 deg), it's truly stuck at hard stop.
+                // Covers the case where speed never exceeds phase-1 threshold
+                // (motor already at stop from previous run).
+                if (!stopByBlock && s <= 8 && haveStartPosition[s] &&
+                    (nowMs - jogStartTick >= 500)) {
+                    const DWORD JOG_STALL_TIMEOUT_MS = 1000;
+                    const double JOG_STALL_POS_DELTA = 0.01;
+                    double curPos = 0;
+                    if (TryGetMechanicalActualPosition(s, curPos)) {
+                        if (jogStallSinceTick[s] == 0 ||
+                            std::fabs(curPos - jogStallLastPos[s]) > JOG_STALL_POS_DELTA) {
+                            jogStallSinceTick[s] = nowMs;
+                            jogStallLastPos[s] = curPos;
+                        } else if (nowMs - jogStallSinceTick[s] >= JOG_STALL_TIMEOUT_MS) {
+                            stopByBlock = true;
+                            stopReason = "position-timeout";
+                            metricValue = curPos;
+                            thresholdUsed = JOG_STALL_POS_DELTA;
+                        }
                     }
                 }
-                if (haveStartPosition[s] && target.haveCompressionPoint &&
-                    hasReachedMechanicalTarget(startPositions[s], actualPosition, target.compressionPoint, POSITION_TOLERANCE)) {
-                    compressionPointReached[s] = true;
-                    stopByPosition = true;
+            } else {
+                // X1S / default: torque-based block detection with debounce.
+                // Torque must exceed threshold continuously for TORQUE_DEBOUNCE_MS
+                // before triggering — avoids false positives from startup transients.
+                double torque = 0;
+                metricReady = TryGetMechanicalActualTorque(s, torque);
+                metricValue = torque;
+                thresholdUsed = torqueThreshold;
+                const bool torqueAbove = metricReady && std::fabs(torque) >= torqueThreshold;
+                if (torqueAbove) {
+                    if (s <= 8 && torqueAboveSinceTick[s] == 0) {
+                        torqueAboveSinceTick[s] = nowMs;
+                    }
+                    if (s <= 8 && (nowMs - torqueAboveSinceTick[s] >= TORQUE_DEBOUNCE_MS)) {
+                        stopByBlock = true;
+                        stopReason = "torque";
+                    }
+                } else {
+                    if (s <= 8) torqueAboveSinceTick[s] = 0;
                 }
             }
-            double speed = 0;
-            // Ensure we only compare speed if the read succeeded.
-            const bool speedReady = TryGetMechanicalActualSpeed(s, speed);
-            const bool stopBySpeed = speedReady && speed >= SPEED_THRESHOLD;
-            if (stopByPosition || stopBySpeed) {
+            if (!metricReady) {
+                if (s <= 8) blockReadFailCount[s]++;
+            }
+
+            if (stopByBlock) {
                 if (!PreparePDOForSlave(s)) return failWide(L"[AutoDownToOrigin] Failed to prepare PDO before jog stop");
                 MotionResult stopRes = motionController->JogStop(s);
                 if (!stopRes.success) {
                     PostUTF8LogToUI(CoreHelpers::WideToUtf8(stopRes.message));
-                } else if (stopByPosition) {
-                    const auto &target = compressionTargets[s];
-                    std::ostringstream oss;
-                    oss << "[AutoDownToOrigin] Slave " << s
-                        << " completed simulated compression at " << std::fixed << std::setprecision(4)
-                        << (target.haveCompressionPoint ? target.compressionPoint : actualPosition)
-                        << " (actual=" << actualPosition << ")\n";
-                    PostUTF8LogToUI(oss.str());
                 } else {
                     std::ostringstream oss;
                     oss << "[AutoDownToOrigin] Slave " << s
-                        << " released by speed threshold (actualSpeed=" << std::fixed << std::setprecision(4)
-                        << speed << ")\n";
+                        << " released by " << (stopReason ? stopReason : "block")
+                        << " (actual=" << std::fixed << std::setprecision(1)
+                        << metricValue << " thresh=" << thresholdUsed << ")\n";
                     PostUTF8LogToUI(oss.str());
                 }
                 jogStopped[s] = true;
             }
+        }
+        // Compact diagnostic: one line per interval for all still-jogging axes
+        if (diagPending) {
+            std::ostringstream diag;
+            diag << "[AutoDownToOrigin] diag";
+            for (int s = 1; s <= slaveCount; ++s) {
+                if (!jogStarted[s] || jogStopped[s]) continue;
+                uint32_t eepManD = (ecxCtx && s <= ecxCtx->slavecount) ? ecxCtx->slavelist[s].eep_man : 0;
+                const bool isDvsD = EtherCATMaster::IsDvsDrive(eepManD);
+                if (isDvsD) {
+                    double spd = 0;
+                    bool ok = TryGetMechanicalActualSpeed(s, spd);
+                    diag << " s" << s << ":spd=" << std::fixed << std::setprecision(1) << spd
+                         << (ok ? "" : "?");
+                } else {
+                    double tq = 0;
+                    bool ok = TryGetMechanicalActualTorque(s, tq);
+                    diag << " s" << s << ":tq=" << std::fixed << std::setprecision(1) << tq
+                         << (ok ? "" : "?");
+                }
+            }
+            diag << " spdTh=" << speedThreshold << " tqTh=" << torqueThreshold << "\n";
+            PostUTF8LogToUI(diag.str());
+            lastDiagLogMs = nowMs;
+            diagPending = false;
         }
         if (allReleased) break;
         if (this->autoDownToOriginAbortRequested.load()) {
@@ -959,8 +1261,11 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
             return false;
         }
         // If any slave reports an error, force an immediate stop and abort
-                if (this->anySlaveHasError.load()) {
-            PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by slave error during jog release wait\n"));
+        if (this->anySlaveHasError.load() || this->anySlaveHasInternalError.load()) {
+            const bool isCommErr = this->anySlaveHasError.load();
+            PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by ") +
+                           (isCommErr ? "communication error" : "0x603F servo fault") +
+                           " during jog release wait\n");
             if (this->motionController) {
                 MotionResult mr = this->motionController->SmoothStopAll(0.25);
                 PostUTF8LogToUI(CoreHelpers::WideToUtf8(mr.message));
@@ -973,9 +1278,32 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
             return false;
         }
         if (GetTickCount() - waitStart > SPEED_TIMEOUT_MS) {
-            PostUTF8LogToUI(std::string("[AutoDownToOrigin] Timeout while waiting for jog to settle; forcing stop\n"));
+            // Log final detection state for all active axes before forcing stop
+            {
+                std::ostringstream timeoutDiag;
+                timeoutDiag << "[AutoDownToOrigin] Timeout — final state:";
+                for (int s = 1; s <= slaveCount; ++s) {
+                    if (!jogStarted[s] || jogStopped[s]) continue;
+                    uint32_t eepManT = (ecxCtx && s <= ecxCtx->slavecount) ? ecxCtx->slavelist[s].eep_man : 0;
+                    const bool isDvsT = EtherCATMaster::IsDvsDrive(eepManT);
+                    if (isDvsT) {
+                        double spd = 0;
+                        bool ok = TryGetMechanicalActualSpeed(s, spd);
+                        timeoutDiag << " ax" << s << "=spd:" << std::fixed << std::setprecision(1) << spd
+                                    << (ok ? "" : "(fail)");
+                    } else {
+                        double tq = 0;
+                        bool ok = TryGetMechanicalActualTorque(s, tq);
+                        timeoutDiag << " ax" << s << "=tq:" << std::fixed << std::setprecision(1) << tq
+                                    << (ok ? "" : "(fail)");
+                    }
+                }
+                timeoutDiag << " spdThresh=" << speedThreshold << " tqThresh=" << torqueThreshold << "\n";
+                PostUTF8LogToUI(timeoutDiag.str());
+            }
+            PostUTF8LogToUI(std::string("[AutoDownToOrigin] Timeout while waiting for jog to settle; aborting\n"));
             cleanupJoggers();
-            break;
+            return false;
         }
         Sleep(SPEED_POLL_INTERVAL_MS);
     }
@@ -991,8 +1319,11 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
                 cleanupJoggers();
                 return false;
             }
-            if (this->anySlaveHasError.load()) {
-                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by slave error during power-off\n"));
+            if (this->anySlaveHasError.load() || this->anySlaveHasInternalError.load()) {
+                const bool isCommErr = this->anySlaveHasError.load();
+                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by ") +
+                               (isCommErr ? "communication error" : "0x603F servo fault") +
+                               " during power-off\n");
                 if (this->motionController) {
                     MotionResult mr = this->motionController->SmoothStopAll(0.25);
                     PostUTF8LogToUI(CoreHelpers::WideToUtf8(mr.message));
@@ -1019,19 +1350,25 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
         PostUTF8LogToUI(summary);
     }
 
-    // Homing is intentionally sequential to avoid RT cycle spikes from concurrent SDO workers.
-    const bool parallelHome = false;
-    if (!parallelHome) {
-        int homingSuccess = 0;
-        int homingFail = 0;
+    // Two-phase homing: (1) SDO preamble for all axes sequentially, then
+    // (2) PDO controlword staging + polling in parallel so all axes start
+    // homing in the same PDO cycle — eliminates visible start-asynchrony.
+    {
+        // Phase 1: SDO preamble (0x6060=6, 0x6098=35, 0x607C) — inherently serial
+        struct AxisPrep { int slave; bool have607c; uint32_t v607c; };
+        std::vector<AxisPrep> preps;
+        preps.reserve(slaveCount);
         for (int s = 1; s <= slaveCount; ++s) {
             if (this->autoDownToOriginAbortRequested.load()) {
                 PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by Immediate Stop before homing\n"));
                 cleanupJoggers();
                 return false;
             }
-            if (this->anySlaveHasError.load()) {
-                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by slave error before homing\n"));
+            if (this->anySlaveHasError.load() || this->anySlaveHasInternalError.load()) {
+                const bool isCommErr = this->anySlaveHasError.load();
+                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by ") +
+                               (isCommErr ? "communication error" : "0x603F servo fault") +
+                               " before homing\n");
                 if (this->motionController) {
                     MotionResult mr = this->motionController->ImmediateStopAll();
                     PostUTF8LogToUI(CoreHelpers::WideToUtf8(mr.message));
@@ -1052,32 +1389,54 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
             if (!ComputeHomeCommandValue(s, have607c, v607c)) {
                 return failUtf8("[AutoDownToOrigin] Failed to compute 0x607C value\n");
             }
-            MotionResult homeRes = motionController->HomeAsync(s, true, have607c, v607c);
-            if (homeRes.success) {
+            // Run SDO preamble now; PDO staging deferred to Phase 2
+            if (!motionController->HomePrepareSDO(s, have607c, (uint32_t)v607c)) {
+                std::string msg = "[AutoDownToOrigin] SDO preamble failed for slave " + std::to_string(s) + "\n";
+                PostUTF8LogToUI(msg);
+                return failUtf8(msg.c_str());
+            }
+            preps.push_back({s, have607c, (uint32_t)v607c});
+        }
+
+        // Phase 2: PDO staging + polling in parallel — all controlwords are
+        // staged before any axis enters the polling loop, so the drives see
+        // 0x0F/0x1F in the same PDO cycle.
+        std::vector<std::future<MotionResult>> futures;
+        futures.reserve(preps.size());
+        for (const auto& p : preps) {
+            int slaveLocal = p.slave;
+            bool hv = p.have607c;
+            uint32_t valLocal = p.v607c;
+            futures.push_back(std::async(std::launch::async, [this, slaveLocal, hv, valLocal]() {
+                // skipSdo=true: HomePrepareSDO already ran in Phase 1
+                MotionResult r = this->motionController->HomeAsync(slaveLocal, true, hv, valLocal, /*skipSdo=*/true);
+                return r;
+            }));
+        }
+
+        int homingSuccess = 0;
+        int homingFail = 0;
+        for (auto& fut : futures) {
+            if (this->autoDownToOriginAbortRequested.load()) {
+                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by Immediate Stop while waiting for homing\n"));
+                cleanupJoggers();
+                return false;
+            }
+            MotionResult r = fut.get();
+            if (r.success) {
                 homingSuccess++;
             } else {
                 homingFail++;
-                PostUTF8LogToUI(CoreHelpers::WideToUtf8(homeRes.message));
-                return failUtf8("[AutoDownToOrigin] Homing failed\n");
+                PostUTF8LogToUI(CoreHelpers::WideToUtf8(r.message));
             }
         }
         std::string summary = "[AutoDownToOrigin] Homing 完成: 成功=" + std::to_string(homingSuccess) +
                              ", 失敗=" + std::to_string(homingFail) + "\n";
         PostUTF8LogToUI(summary);
-    } else {
-        std::vector<std::future<MotionResult>> futures;
-        futures.reserve(slaveCount);
-        for (int s = 1; s <= slaveCount; ++s) {
-            if (this->autoDownToOriginAbortRequested.load()) {
-                PostUTF8LogToUI(std::string("[AutoDownToOrigin] Aborted by Immediate Stop before homing\n"));
-                cleanupJoggers();
-                return false;
-            }
-            if (!PreparePDOForSlave(s)) {
-                std::wstringstream ss; ss << L"[AutoDownToOrigin] Failed to prepare PDO mapping before homing slave " << s;
-                return failWide(ss.str());
-            }
-            std::wstring err;
+    }
+#if 0
+    // === OLD sequential + parallel homing paths (replaced by two-phase batching above) ===
+    // Homing is intentionally sequential to avoid RT cycle spikes from concurrent SDO workers.
             if (!ValidateHomePreconditions(s, err)) {
                 return failWide(err);
             }
@@ -1133,7 +1492,43 @@ bool MainWindow::RunAutoDownToOriginWorkflow() {
         }
     }
 
+#endif // 0 — old homing paths
+
     PostUTF8LogToUI(std::string("[AutoDownToOrigin] Completed jog reverse and homing for all slaves\n"));
+    // Explicit CiA402 enable sequence after homing and CSP restore:
+    //   0x06 (Shutdown) → 0x07 (Switch On) → 0x0F (Enable Operation)
+    // Each transition is flushed with a PDO cycle and a brief settle wait
+    // so strict drives (e.g. X5_7SEtherCAT) process each state change.
+    {
+        const PDOItem* cwItem = nullptr;
+        for (const auto &it : pdoDisplay.pdoItems) {
+            if (it.index == 0x6040 && it.isOutput) { cwItem = &it; break; }
+        }
+        if (cwItem && master->IsRunning()) {
+            // 0x06: Shutdown (clears any partial enable state)
+            for (int s = 1; s <= slaveCount; ++s) {
+                MotionLogic::StageControlword(master, &pdoDisplay, s, cwItem, 0x0006);
+            }
+            master->SendProcessDataOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+            // 0x07: Switch On
+            for (int s = 1; s <= slaveCount; ++s) {
+                MotionLogic::StageControlword(master, &pdoDisplay, s, cwItem, 0x0007);
+            }
+            master->SendProcessDataOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+            // 0x0F: Enable Operation
+            for (int s = 1; s <= slaveCount; ++s) {
+                MotionLogic::StageControlword(master, &pdoDisplay, s, cwItem, 0x000F);
+            }
+            master->SendProcessDataOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+
+            PostUTF8LogToUI(std::string("[AutoDownToOrigin] CiA402 enable sequence: 0x06→0x07→0x0F done\n"));
+        }
+    }
     // Clear abort flag if we completed normally
     this->autoDownToOriginAbortRequested.store(false);
     return true;

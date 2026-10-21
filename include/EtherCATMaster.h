@@ -34,6 +34,7 @@
 #include "StewartIK.h"
 #include "MachineConfigIO.h"
 #include "core/Cia402Mode.h"
+#include "core/CpuIsolation.h"
 
 // EtherCAT 從站資訊結構
 struct SlaveInfo {
@@ -47,6 +48,22 @@ struct SlaveInfo {
     uint16_t state;
     int outputBits;
     int inputBits;
+};
+
+// PDO mapping entry decoded from SDO (index:subindex:bitlen)
+struct PdoMappingEntry {
+    uint16_t index = 0;
+    uint8_t  subindex = 0;
+    uint8_t  bitLength = 0;
+};
+
+// Actual PDO mapping status read from a slave via SDO
+struct PdoMappingStatus {
+    bool valid = false;
+    uint16_t rxPdoAssigned = 0;    // e.g. 0x1600 or 0x1601 (from 0x1C12:01)
+    uint16_t txPdoAssigned = 0;    // e.g. 0x1A00 or 0x1A01 (from 0x1C13:01)
+    std::vector<PdoMappingEntry> rxEntries;
+    std::vector<PdoMappingEntry> txEntries;
 };
 
 // EtherCAT 主站類別
@@ -116,18 +133,32 @@ public:
     int GetSlaveCount() const { return slaveCount; }
     bool IsRunning() const { return isRunning; }
     bool IsInitialized() const { return isInitialized; }
+    // 網路斷線強制關閉時使用：跳過正常 shutdown 流程直接標記未初始化
+    void ForceMarkUninitialized() { isInitialized = false; }
     bool HasActiveSlaveThreads() const;
     bool HasGlobalError() const { return persistentGlobalError_.load(); }
     // Enable/disable recording of PDO 0x607A (logical target position) for diagnostics
     void EnablePDO607ARecording(bool enable) { pdo607aRecording_.store(enable, std::memory_order_relaxed); }
     void SetGlobalError() { persistentGlobalError_.store(true, std::memory_order_relaxed); }
     void ClearGlobalError() { persistentGlobalError_.store(false, std::memory_order_relaxed); }
+
+    // Cyclic operation mode (CSP=8 / CSV=9).  Read from INI [Motion] OperationMode;
+    // default is CSP.  This is the mode written to 0x6060 during PowerOn.
+    int8_t GetCyclicOperationMode() const { return cyclicOperationMode_.load(std::memory_order_relaxed); }
+    void SetCyclicOperationMode(int8_t mode) { cyclicOperationMode_.store(mode, std::memory_order_relaxed); }
+    // Returns true if the configured cyclic mode is CSP (position-driven).
+    bool IsCspMode() const { return GetCyclicOperationMode() == CoreHelpers::kCia402OperationModeCyclicSyncPosition; }
     std::vector<SlaveInfo> GetSlaveInfo();
     // Get matched ESI filename for a slave (1-indexed), empty if unknown
     std::string GetSlaveEsiFile(int slaveIndex) const;
     // Get ESI device name for a slave (1-indexed), empty if unknown
     std::string GetSlaveEsiDeviceName(int slaveIndex) const;
-    std::string GetLastError() const { return lastError; }
+    std::string GetLastError() const {
+        EnterCriticalSection(&errorCS_);
+        std::string copy = lastError;
+        LeaveCriticalSection(&errorCS_);
+        return copy;
+    }
     
     // 週期任務
     void SetCyclicCallback(std::function<void()> callback) { 
@@ -136,7 +167,7 @@ public:
     
     // 設定週期時間
     void SetCycleTime(uint32_t microseconds) { 
-        desiredCycleTime = microseconds; 
+        desiredCycleTime = microseconds;
     }
     // 取得週期時間（微秒）
     uint32_t GetDesiredCycleTime() const {
@@ -156,26 +187,53 @@ public:
     }
     
     // ========================================================================
-    // 遊戲共存模式 (Game Coexistence Mode)
-    // ========================================================================
-    // 當與 DCS、IL-2、MSFS 等飛行模擬遊戲同時運行時，設為 true。
-    // 此模式會：
-    // 1. 使用 HIGH_PRIORITY_CLASS 而非 REALTIME_PRIORITY_CLASS（避免遊戲卡頓）
-    // 2. 保持 TIME_CRITICAL 執行緒優先級（維持 EtherCAT 即時性）
-    // 預設為 true（推薦用於模擬器場景）
-    void SetGameCoexistenceMode(bool enable) { gameCoexistenceMode_ = enable; }
-    bool IsGameCoexistenceMode() const { return gameCoexistenceMode_; }
+    // Low-Latency MMF Path: 將 MMF→StewartIK→PDO filter 整條運算鏈
+    // 移入 CyclicTask（RT 核心），消除跨執行緒 staging 延遲。
+    // PDO receive 後立即運算 IK+filter 並寫入 IOmap，同一週期 send 出去。
+    // 預設啟用（PDOProcessingTask pin 到 RT 核心，同核心 cache 共享）。
+    void SetLowLatencyMmfPath(bool enable) { lowLatencyMmfPath_.store(enable, std::memory_order_relaxed); }
+    bool IsLowLatencyMmfPath() const { return lowLatencyMmfPath_.load(std::memory_order_relaxed); }
+
     
     // 診斷
     uint32_t GetCycleTime() const { return desiredCycleTime; }  // 返回期望的週期時間
     uint32_t GetActualCycleTime() const { return cycleTime; }   // 返回實際測量的週期時間
     uint32_t GetWorkingCounter() const { return (workingCounter < 0) ? 0u : (uint32_t)workingCounter; }
+    // Raw accessor: returns the SOEM working counter as-is.
+    // - EC_NOFRAME (-1) = NIC received no EtherCAT frame at all (NIC/driver issue)
+    // - 0              = frame received but no slave processed it (slave/cable issue)
+    // - >0             = normal operation
+    int32_t GetWorkingCounterRaw() const { return workingCounter; }
+    // Expected WKC for group 0: sum of outputsWKC + inputsWKC configured by SOEM.
+    // Compare against GetWorkingCounterRaw() to detect partial slave failures.
+    uint32_t GetExpectedWkc() {
+        EnterCriticalSection(&cs);
+        uint32_t exp = static_cast<uint32_t>(context.grouplist[0].outputsWKC +
+                                              context.grouplist[0].inputsWKC);
+        LeaveCriticalSection(&cs);
+        return exp;
+    }
     bool IsPDO607ARecordingEnabled() const { return pdo607aRecording_.load(std::memory_order_relaxed); }
     uint32_t GetCommsTime() const { return commsTime_.load(std::memory_order_relaxed); }        // 返回通訊工作時間 (send/receive only)
     uint64_t GetPDOSentCount() const { return pdosSentCount.load(std::memory_order_relaxed); }
     // Max observed comms time (updated from cyclic thread in a lock-free manner)
     uint32_t GetMaxObservedCommsTime() const { return maxObservedCommsTime.load(std::memory_order_relaxed); }
+    uint32_t GetMaxRecvTimeUs() const { return maxRecvTimeUs_.load(std::memory_order_relaxed); }
     void ResetMaxObservedCommsTime() { maxObservedCommsTime.store(0, std::memory_order_relaxed); }
+
+    // ── Cycle spike diagnostics ──
+    // Records which phase (comms vs idle-wait) was dominant during the last
+    // cycle-time spike (>5 ms).  Returns: 0=no spike, 1=comms phase, 2=idle phase.
+    uint32_t GetLastSpikePhase() const { return lastSpikePhase_.load(std::memory_order_relaxed); }
+    uint32_t GetLastSpikeCycleUs() const { return lastSpikeCycleUs_.load(std::memory_order_relaxed); }
+    uint32_t GetLastSpikeCommsUs() const { return lastSpikeCommsUs_.load(std::memory_order_relaxed); }
+    uint32_t GetSpikeCount() const { return spikeCount_.load(std::memory_order_relaxed); }
+    void ResetSpikeCounters() {
+        lastSpikePhase_.store(0, std::memory_order_relaxed);
+        lastSpikeCycleUs_.store(0, std::memory_order_relaxed);
+        lastSpikeCommsUs_.store(0, std::memory_order_relaxed);
+        spikeCount_.store(0, std::memory_order_relaxed);
+    }
     // Observed PDO/master cycle time in microseconds (most recently measured)
     uint32_t GetObservedCycleTimeUs() const { return observedCycleMicros_.load(std::memory_order_relaxed); }
     // Max observed cycle-to-cycle period in microseconds (high-water mark)
@@ -213,6 +271,10 @@ public:
                                 const char* callerFile = nullptr, int callerLine = 0, const char* callerFunc = nullptr);
     // Register/display helpers for PDO table values (UI/display decoupling)
     void RegisterPDODescriptors(int slaveIndex, const std::vector<PDOChannelDescriptor>& descriptors);
+    // Immediately compute pdoDisplayValues for one slave from current IOmap,
+    // avoiding the one-cycle race between RegisterPDODescriptors erase and the
+    // next async PDOProcessingTask pass.
+    void RefreshPDODisplayValues(int slaveIndex);
     bool GetPDOChannelValues(int slaveIndex, std::vector<PDOChannelValue>& outValues);
 
     // ========================================================================
@@ -235,11 +297,21 @@ public:
     bool HasPendingPDOOutput(const std::string& itemName);
     // Return last computed PDO frequency (Hz) using high-resolution perf counter
     double GetLastPDOFrequencyHz() const { return lastPdoHz.load(std::memory_order_relaxed); }
+    // PDO processing task actual cycle counter (incremented per completed PDOProcessingTask cycle)
+    uint64_t GetPdoProcCycleCount() const { return pdoProcCycleCount_.load(std::memory_order_relaxed); }
+    uint32_t GetPdoProcElapsedUs() const { return pdoProcElapsedUs_.load(std::memory_order_relaxed); }
+    // Read actual PDO mapping from slave via SDO (0x1C12/0x1C13 + PDO entries).
+    // Returns true if mapping was successfully read; status is populated on success.
+    bool ReadActualPdoMapping(int slaveIdx, PdoMappingStatus& status);
+
     // Dump ESI / EEPROM for a specific slave. Returns dump as UTF-8 string.
     bool DumpESI(uint16_t slave, std::string &outDump);
     // Try runtime initialization for a slave (SDO/runtime steps) to reach OP without writing EEPROM.
     // Returns true if slave reached OP.
     bool ForceSlaveOperational(uint16_t slave, std::string &outLog);
+    // Check if all slaves are OP (0x8) with ALstatuscode==0.  Takes cs lock internally;
+    // safe to call from watchdog recovery thread after cyclic has been stopped.
+    bool AllSlavesOperationalNoAlarm();
     // Configure slave runtime PDO but don't transition to OP (stays in SAFE_OP)
     bool ConfigureSlaveRuntime(uint16_t slave, std::string &outLog);
     // Safely transition all slaves from OP to INIT before disconnecting
@@ -247,20 +319,99 @@ public:
     // Send a single processdata roundtrip (SOEM standard practice before requesting OP)
     void SendProcessDataOnce();
 
-    // SDO reader: background reader that polls a configured SDO and reports changes.
-    // StartSdoReader: spawns a background thread to periodically read SDO 0x60FD from slave 1
-    //   periodMs: polling period in milliseconds (>=1)
+    // PDO 0x60FD monitoring (was SDO reader; now PDO-cached every cycle)
+    // StartSdoReader: kept for API compatibility; the actual 0x60FD value is
+    //   now read from PDO every cycle and available via GetPdo60FD/GetPdo60FDLowByte.
+    //   periodMs: ignored (PDO updates every cycle)
     //   logCb: optional callback to receive human-readable change/diagnostic messages
     bool StartSdoReader(unsigned int periodMs, const std::function<void(const std::string&)> &logCb);
-    // Stop the background SDO reader and join thread
+    // Stop the 0x60FD monitor (no-op for PDO; kept for API compatibility)
     void StopSdoReader();
     bool IsSdoReaderRunning() const { return sdoReaderRunning.load(); }
     double GetSdoReaderLastObservedCycleMs() const { return sdoLastObservedCycleMs.load(); }
-    // Return a copy of the last-read SDO 0x60FD value (bytes). Thread-safe.
+    // Return a copy of the last-read PDO 0x60FD value (bytes). Thread-safe.
     // Returns true if a value is available (non-empty), false otherwise.
-    bool GetLastSdo60FD(std::vector<uint8_t>& out);
-    // Return the low byte of the last-read SDO 0x60FD value without copying the full buffer.
-    bool GetLastSdo60FDLowByte(uint8_t& outLowByte);
+    bool GetPdo60FD(std::vector<uint8_t>& out);
+    // Return the low byte of the last-read PDO 0x60FD value without copying the full buffer.
+    bool GetPdo60FDLowByte(uint8_t& outLowByte);
+    // Per-slave PDO cache accessors (updated every cycle by CyclicTask).
+    // slave: 1-based index. Returns true if cache is populated.
+    bool GetPdo603F(uint16_t slave, uint16_t& outErrorCode) const;
+    bool GetPdo6061(uint16_t slave, uint8_t& outModeDisplay) const;
+
+    // ========================================================================
+    // CoE Emergency (EMCY) Callback — 走 Mailbox 不受 PDO cycle time 影響
+    // ========================================================================
+    // 當從站發生錯誤時，主動推送 CoE Emergency 訊息到 Master。
+    // Emergency 訊息走 Mailbox (SM0/SM1)，不依賴 PDO，可解決
+    // 「PDO 逾時後用 PDO 讀不到 0x603F」的診斷死循環。
+    //
+    // 訊息結構 (CANopen DS301, 8 bytes after CoE header):
+    //   [0:1] Emergency Error Code (U16 LE) → 等同 0x603F
+    //   [2]   Error Register (U8)           → 等同 0x1001
+    //   [3:7] Manufacturer-specific (5 bytes)
+
+    struct EmcyInfo {
+        uint16_t slave = 0;          // 1-based slave index
+        uint16_t errorCode = 0;      // Emergency Error Code (= 0x603F value)
+        uint8_t  errorRegister = 0;  // Error Register (= 0x1001 value)
+        uint8_t  mfgField[5] = {};   // Manufacturer-specific raw bytes
+        uint64_t timestamp = 0;      // QPC timestamp (QueryPerformanceCounter)
+
+        // Decode common CiA402 error code meanings
+        bool IsNoError()      const { return errorCode == 0x0000; }
+        bool IsOverCurrent()  const { return errorCode == 0x2310 || errorCode == 0x3210; }
+        bool IsOverVoltage()  const { return errorCode == 0x3110; }
+        bool IsUnderVoltage() const { return errorCode == 0x3220; }
+        bool IsOverTempMotor() const { return errorCode == 0x4310; }
+        bool IsOverTempDrive() const { return errorCode == 0x4210; }
+        bool IsFollowingError()const { return errorCode == 0x8611; }
+        bool IsHomingError()  const { return errorCode >= 0x8A80 && errorCode <= 0x8A8F; }
+        bool IsWatchdog()     const { return errorCode == 0x6010 || errorCode == 0x8130; }
+        bool IsHallSensor()   const { return errorCode == 0x7380; }
+        bool IsEncoderComms() const { return errorCode == 0x7388; }
+
+        // Error Register bit tests (per DS301 Table 63)
+        bool HasGenericError()      const { return (errorRegister & 0x01) != 0; }
+        bool HasCurrentError()      const { return (errorRegister & 0x02) != 0; }
+        bool HasVoltageError()      const { return (errorRegister & 0x04) != 0; }
+        bool HasTemperatureError()  const { return (errorRegister & 0x08) != 0; }
+        bool HasCommsError()        const { return (errorRegister & 0x10) != 0; }
+        bool HasDeviceProfileError()const { return (errorRegister & 0x20) != 0; }
+        bool HasManufacturerError() const { return (errorRegister & 0x80) != 0; }
+    };
+
+    // EMCY callback signature: invoked from CyclicTask (RT thread) when an
+    // Emergency message is received.  Callbacks MUST be non-blocking and
+    // allocation-free.  Use atomics or lock-free queues to forward to UI threads.
+    using EmcyCallback = std::function<void(const EmcyInfo&)>;
+
+    // Register an EMCY callback for a specific slave (1-based index).
+    // Pass nullptr to unregister.  Callback is invoked from CyclicTask (RT core).
+    void SetEmcyCallback(int slaveIndex, EmcyCallback callback);
+
+    // Get the latest EMCY info for a slave (lock-free, safe from any thread).
+    // Returns false if no EMCY has been received since last poll.
+    // Pass consume=true to reset the "new data" flag after reading.
+    bool GetLatestEmcyInfo(int slaveIndex, EmcyInfo& outInfo, bool consume = false);
+
+    // Register a global EMCY callback (invoked for ALL slaves).
+    void SetGlobalEmcyCallback(EmcyCallback callback);
+
+    // Drain and process pending EMCY errors from SOEM's error ring buffer.
+    // Called automatically from CyclicTask; exposed for manual diagnostics.
+    void ProcessEmcyErrors();
+
+    // Poll slave mailbox hardware (ESC SM0/SM1) for incoming CoE Emergency
+    // messages.  Called by ProcessEmcyErrors with automatic throttling.
+    void ServiceEmcyMailbox();
+
+    // Dispatch a single EMCY event: update atomic cache + invoke callbacks.
+    void DispatchEmcy(const EmcyInfo& info);
+
+    // P1: Reset a slave's SDO mailbox counter to recover from persistent SDO failures.
+    // Safe to call from any thread; acquires sdoCS internally.
+    void ResetSlaveSDOState(uint16_t slave);
     // Enable/disable performing the SDO reads while reader thread runs
     void SetSdoReaderEnabled(bool enable) { sdoReaderEnabled.store(enable); }
     // Adjust polling period (ms) for the background SDO reader thread
@@ -282,12 +433,51 @@ public:
     bool EnableMMFOutput(const std::wstring& mappingName = L"Local\\WuEtherCAT_PDO");
     void DisableMMFOutput();
     bool IsMMFOutputEnabled() const { return mmfOutputEnabled_.load(); }
+
+    // ========================================================================
+    // IK Actual 6-DOF Pose MMF Output ("BigCat")
+    // 將正運動學計算的實際平台姿態即時寫入 Memory-Mapped File
+    // mappingName: MMF 名稱，預設 L"Local\\BigCat"
+    // 輸出頻率 = PDO 週期頻率，由 CyclicTask 在正運動學計算後寫入
+    // ========================================================================
+    bool EnablePoseMMFOutput(const std::wstring& mappingName = L"Local\\BigCat");
+    void DisablePoseMMFOutput();
+    bool IsPoseMMFOutputEnabled() const { return poseMmfEnabled_.load(std::memory_order_relaxed); }
     std::array<double, 6> GetPDOFilterInputAngles() const {
         std::array<double, 6> values{};
         for (size_t i = 0; i < values.size(); ++i) {
             values[i] = lastPdoFilterInputAngles_[i].load(std::memory_order_relaxed);
         }
         return values;
+    }
+    std::array<double, 6> GetPDOFilterInputVelocities() const {
+        std::array<double, 6> values{};
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i] = lastPdoFilterInputVelocities_[i].load(std::memory_order_relaxed);
+        }
+        return values;
+    }
+
+    // Forward Kinematics: 6-DOF pose computed from actual PDO servo angles.
+    // Written by PDOProcessingTask every cycle, read lock-free by SSE/MMF/UI.
+    // outInitialHeight: Stewart home Z; subtract from outPose.z for relative height.
+    bool GetForwardKinematicsResult(WuSOEM::Pose6D& outPose, bool& outValid, long double& outInitialHeight) const {
+        outPose = forwardKinPose_;
+        outValid = forwardKinValid_.load(std::memory_order_acquire);
+        outInitialHeight = forwardKinInitialHeight_;
+        return outValid;
+    }
+    bool IsForwardKinematicsValid() const {
+        return forwardKinValid_.load(std::memory_order_acquire);
+    }
+    // Enable / disable per-cycle forward kinematics computation.
+    // The result is meaningful only after all 6 axes complete homing;
+    // set this to true once oHomeDone becomes true.
+    void SetForwardKinematicsEnabled(bool enabled) {
+        forwardKinEnabled_.store(enabled, std::memory_order_release);
+    }
+    bool IsForwardKinematicsEnabled() const {
+        return forwardKinEnabled_.load(std::memory_order_acquire);
     }
 
     // Wait until PDO filters report velocities below `velThreshold` (mechanical units/sec)
@@ -304,6 +494,13 @@ private:
     // 內部函數
     static DWORD WINAPI CyclicThreadFunc(LPVOID param);
     void CyclicTask();
+    // MMF→StewartIK→PDO filter pipeline executed on RT core inside CyclicTask.
+    // Called between ecx_receive and ecx_send when lowLatencyMmfPath_ is active.
+    void RunMmfIkPipelineInCyclicTask(const LARGE_INTEGER& qpcNow);
+    // MMF receiver background thread: polls MMF1 on a non-RT core, writing
+    // results via seqlock for lock-free reads by the RT cyclic path.
+    static DWORD WINAPI MMFReceiverThreadFunc(LPVOID param);
+    void MMFReceiverTask();
     void CheckSlaveStates();
     void SetError(const std::string& error);
     void InitializePDOData();  // 初始化 PDO 輸出數據
@@ -315,7 +512,8 @@ private:
                           uint16_t controlWord, uint16_t statusWord,
                           double targetPos, double targetVel,
                           double actualPos, double actualVel,
-                        double pdoFilterOutput, double pdoFilterVel, double pdoFilterAcc);
+                        double pdoFilterOutput, double pdoFilterVel, double pdoFilterAcc,
+                        double filterTarget, int softStartActive, double filterTrackingError);
     
     // Per-slave cyclic thread support
     struct SlaveThreadData {
@@ -343,9 +541,7 @@ private:
     // Per-slave ESI device name (1-indexed), empty if unknown
     std::vector<std::string> slaveEsiDeviceNames_;
     
-    // 遊戲共存模式：與模擬器遊戲同時運行時，避免使用 REALTIME_PRIORITY_CLASS
-    // 預設停用（專用機模式），使用 REALTIME_PRIORITY_CLASS 獲得最佳即時性
-    bool gameCoexistenceMode_{false};
+    std::atomic<bool> lowLatencyMmfPath_{true}; // MMF→IK→PDO 預設在 CyclicTask RT 核心執行
     
     HANDLE cyclicThread;  // Legacy global cyclic thread (deprecated)
     HANDLE stopEvent;     // Legacy global stop event (deprecated)
@@ -357,7 +553,7 @@ private:
     uint32_t desiredCycleTime; // 期望的週期時間（微秒）
     // internal working counter returned by SOEM ecx_receive_processdata
     // keep signed so SOEM's -1 can be handled; public getter converts negative to 0
-    int32_t workingCounter;
+    std::atomic<int32_t> workingCounter{0};  // atomic: read by UI/watchdog thread
     std::atomic<uint32_t> commsTime_{0}; // 通訊工作時間 (microseconds): SOEM send/receive only (atomic)
     std::atomic<uint64_t> pdosSentCount{0}; // PDO 發送計數 (atomic for lock-free increment)
     uint64_t operationStartTime; // 操作開始時間 (GetTickCount64())
@@ -381,16 +577,47 @@ private:
     std::atomic<DWORD_PTR> cyclicThreadCoreMask_{0};
     
     std::string lastError;
+    mutable CRITICAL_SECTION errorCS_;   // protects lastError from concurrent SetError/GetLastError
     std::function<void()> cyclicCallback;
     
     // IO 映射緩衝區
     uint8_t IOmap[4096];
     
-    // 執行緒同步
+    // ========================================================================
+    // LOCK ORDERING HIERARCHY (must be followed by ALL code paths):
+    //   1. cs            (general state / slave list)
+    //   2. sdoCS         (SDO mailbox serialization)
+    //   3. pdoFilterCS_  (PDO filter state, violation detection)
+    //   4. pdoDataCS / pdoExchangeCS  (IOmap+stagedOutputs / SOEM port exchange)
+    //   5. emcyCS_       (EMCY callback registration — UI thread only)
+    //   6. errorCS_      (lastError diagnostic string)
+    //   7. mmfOutputCS_  (MMF output writer — PDO slave data)
+    //   8. poseMmfCS_    (IK actual pose MMF writer — BigCat)
+    //   9. simulationCS_ (simulation adapter state)
+    // NEVER acquire a lower-numbered lock while holding a higher-numbered one.
+    // pdoFilterCS_ → pdoDataCS nesting is FORBIDDEN; PDOProcessingTask defers
+    // all IOmap/stagedOutputs writes to after LeaveCriticalSection(&pdoFilterCS_).
+    // pdoDataCS and pdoExchangeCS are the SAME level and MUST NEVER be held
+    // simultaneously: CyclicTask takes pdoDataCS (IOmap), releases it, then
+    // takes pdoExchangeCS (network I/O).
+    // ========================================================================
     CRITICAL_SECTION cs;
     // SDO mailbox serialization - prevents concurrent SDO operations from different threads
     CRITICAL_SECTION sdoCS;
     std::atomic<bool> pdoExchangeActive_{false};
+    std::atomic<bool> pdoPipelinePrimed_{false};  // set true after CyclicTask priming cycles succeed
+    std::atomic<bool> inlinePdoProcessing_{true}; // Win11: merge PDO processing into CyclicTask (single-thread)
+    std::atomic<uint64_t> pdoProcCycleCount_{0};   // PDO processing task completed cycles (diagnostic)
+    std::atomic<uint32_t> pdoProcElapsedUs_{0};     // last PDO processing elapsed time (diagnostic)
+    std::atomic<uint32_t> maxRecvTimeUs_{0};      // max SOEM recv time per cycle (diagnostic)
+    std::atomic<uint32_t> pdoDiagCycleUs_{0};      // snapshot: current cycle time
+    std::atomic<uint32_t> pdoDiagMaxCycleUs_{0};   // snapshot: max cycle time
+
+    // ── Cycle spike phase tracking (updated by CyclicTask; read by UI/HTTP) ──
+    std::atomic<uint32_t> lastSpikePhase_{0};       // 0=none, 1=comms-dominated, 2=idle-dominated
+    std::atomic<uint32_t> lastSpikeCycleUs_{0};     // total cycle time during last spike (us)
+    std::atomic<uint32_t> lastSpikeCommsUs_{0};     // comms component during last spike (us)
+    std::atomic<uint32_t> spikeCount_{0};           // cumulative spike count since last reset
     std::atomic<long long> pdoIdleWindowDeadlineUs_{0};
     bool WaitForSdoIdleWindow(const std::chrono::steady_clock::time_point& deadline,
                               int minWindowUs,
@@ -414,10 +641,13 @@ private:
     bool WriteSDODuringIdleWindow(uint16_t slave, uint16_t index, uint8_t subindex,
                                   void* data, int size, int timeoutUs,
                                   bool reportFailure, std::string* errorMessage = nullptr);
+    // P1: Internal reset of slave mailbox counter (caller must hold sdoCS)
+    void ResetSlaveMbxcntLocked(uint16_t slave);
     
     // PDO 即時處理執行緒 (核心執行緒)
     HANDLE pdoProcessingThread;
     HANDLE pdoStopEvent;
+    HANDLE pdoCycleEvent;   // auto-reset: CyclicTask signals after each PDO exchange
     bool pdoThreadRunning;
     static DWORD WINAPI PDOProcessingThreadFunc(LPVOID param);
     void PDOProcessingTask();
@@ -439,6 +669,13 @@ private:
 
     // 執行緒安全的 PDO 資料緩衝區
     CRITICAL_SECTION pdoDataCS;
+    // Serializes the SOEM port PDO exchange (ecx_send/receive_processdata,
+    // ecx_writestate, ecx_readstate) across threads.  CyclicTask holds it
+    // across its (possibly blocking) send/receive so an external exchange
+    // (connect-time OP request, ForceSlaveOperational) can never run
+    // concurrently and corrupt the SOEM idxstack/tx/rx buffers.
+    // MUST NOT be held together with pdoDataCS (see lock ordering above).
+    CRITICAL_SECTION pdoExchangeCS;
     std::unordered_map<int, std::vector<uint8_t>> pdoDataSnapshots; // slaveIndex -> IO data snapshot
     std::unordered_map<std::string, std::pair<int, int32_t>> pendingPDOOutputs; // itemName -> (slaveIndex, value)
     std::unordered_map<int, std::vector<PDOChannelDescriptor>> pdoDisplayDescriptors;
@@ -465,7 +702,7 @@ private:
     std::atomic<UIDisplayCache*> uiCacheWrite{nullptr}; // RT thread writes to this
     std::atomic<uint64_t> uiCacheVersion{0}; // version counter for change detection
 
-    // SDO reader background thread and synchronization
+    // SDO reader background thread and synchronization (deprecated: 0x60FD now in PDO)
     std::thread sdoReaderThread;
     std::atomic<bool> sdoReaderRunning{false};
     std::atomic<bool> sdoReaderStop{false};
@@ -474,16 +711,112 @@ private:
     std::atomic<unsigned int> sdoReaderPeriodMs{10};
     std::atomic<bool> sdoReaderEnabled{true};
     std::atomic<bool> sdoReaderBusy{false};
-    std::vector<uint8_t> sdoLastVal; // last observed SDO value
+    std::vector<uint8_t> sdoLastVal; // last observed SDO value (now populated from PDO)
     std::atomic<double> sdoLastObservedCycleMs{0.0};
     std::function<void(const std::string&)> sdoLogCb;
     // Last wall-clock ms when SDO reader performed an actual read
     std::atomic<uint64_t> sdoReaderLastRunMs{0};
 
+    // PDO-based cache for 0x60FD Digital Inputs (updated every cycle from IOmap)
+    // Slave-1 only; stored as raw 4-byte value (little-endian, as on wire)
+    std::atomic<uint32_t> pdo60FDCache_{0};
+    std::atomic<bool> pdo60FDValid_{false};
+
+    // Per-slave PDO caches — updated every cycle by CyclicTask from IOmap inputs.
+    // Indexed 1..slaveCount. Allocated in Initialize() after slave discovery.
+    // These replace scattered per-call GetPDODataSnapshot + offset calc patterns.
+    std::unique_ptr<std::atomic<uint16_t>[]> pdo603FCache_;   // 0x603F Error Code (2B)
+    std::unique_ptr<std::atomic<uint8_t>[]>  pdo6061Cache_;   // 0x6061 Mode Display (1B)
+    std::atomic<int> pdoCacheSlaveCount_{0};
+
+    // ========================================================================
+    // CoE Emergency (EMCY) per-slave cache — updated each cycle from SOEM's
+    // error ring buffer.  Provides PDO-independent error diagnostics.
+    // ========================================================================
+    struct EmcySlot {
+        std::atomic<uint16_t> errorCode{0};       // 0x603F Emergency Error Code
+        std::atomic<uint8_t>  errorRegister{0};    // 0x1001 Error Register
+        std::atomic<uint8_t>  mfgField[5]{};       // manufacturer-specific
+        std::atomic<uint64_t> timestamp{0};        // QPC of last EMCY received
+        std::atomic<bool>     hasNewData{false};    // true = unread EMCY available
+    };
+    std::unique_ptr<EmcySlot[]> emcyCache_;        // indexed 1..slaveCount
+    EmcyCallback globalEmcyCallback_;              // invoked for all slaves
+    std::vector<EmcyCallback> emcyCallbacks_;      // per-slave callbacks (1..slaveCount)
+    CRITICAL_SECTION emcyCS_;                      // protects emcyCallbacks_ registration
+
+    // Extract 0x60FD/0x603F/0x6061 from IOmap inputs into atomic caches.
+    // Called from CyclicTask (after PDO receive) and SendProcessDataOnce.
+    // Must be called while IOmap inputs are valid (inside or after pdoDataCS receive).
+    void UpdatePdoInputCaches();
+
+    // Runtime PDO byte-offset entry: read from actual driver via SDO after PDO config.
+    struct PdoEntryOffset {
+        int byteOffset = -1;  // -1 = not found
+        int byteSize = 0;
+    };
+
+    // Per-slave runtime PDO byte offsets read from the actual driver via SDO
+    // after PDO configuration. Key = CiA402 object index (e.g. 0x6040).
+    // Negative byteOffset means "not in PDO".
+    std::vector<std::unordered_map<uint16_t, PdoEntryOffset>> pdoRuntimeOffsets_;
+    // Read actual PDO mapping from driver via SDO and populate pdoRuntimeOffsets_[slave].
+    // Must be called while slave is in PRE_OP (SDO accessible).
+    void ReadPdoOffsetsFromDriver(int slave);
+
 public:
+    // Const accessor for pdoRuntimeOffsets_
+    const std::vector<std::unordered_map<uint16_t, PdoEntryOffset>>& GetPdoRuntimeOffsets() const { return pdoRuntimeOffsets_; }
+
+    // PDO byte-offset constants for the 7-entry RxPDO / 7-entry TxPDO layout
+    // (fallback when driver SDO read is unavailable; order matches Par/Startup.csv)
+    static constexpr int kPdoRxByteSize = 17;
+    static constexpr int kPdoTxByteSize = 19;
+    // RxPDO (output) offsets:
+    static constexpr int kPdoOutOff_TargetPos    = 0;   // 0x607A, 4B
+    static constexpr int kPdoOutOff_TargetVel    = 4;   // 0x60FF, 4B
+    static constexpr int kPdoOutOff_TargetTorque = 8;   // 0x6071, 2B
+    static constexpr int kPdoOutOff_PosTorqueLim = 10;  // 0x60E0 (DVS) / 0x2019 (X1S), 2B
+    static constexpr int kPdoOutOff_NegTorqueLim = 12;  // 0x60E1 (DVS) / 0x201A (X1S), 2B
+    static constexpr int kPdoOutOff_Controlword  = 14;  // 0x6040, 2B
+    static constexpr int kPdoOutOff_ModesOfOp    = 16;  // 0x6060, 1B
+    // TxPDO (input) offsets:
+    static constexpr int kPdoInOff_ActualPos     = 0;   // 0x6064, 4B
+    static constexpr int kPdoInOff_ActualVel     = 4;   // 0x606C, 4B
+    static constexpr int kPdoInOff_ActualTorque  = 8;   // 0x6077, 2B
+    static constexpr int kPdoInOff_Statusword    = 10;  // 0x6041, 2B
+    static constexpr int kPdoInOff_ErrorCode     = 12;  // 0x603F, 2B
+    static constexpr int kPdoInOff_ModeDisplay   = 14;  // 0x6061, 1B
+    static constexpr int kPdoInOff_DigitalInputs = 15;  // 0x60FD, 4B
+
+    // X1S (Renesas ESC, vid=0x766) uses different SDO indices for torque limits
+    // than DVS drives.  The 7-entry PDO byte layout is identical (offsets 10/12).
+    static constexpr uint16_t kTorqueLimitPosIdxDvs = 0x60E0;
+    static constexpr uint16_t kTorqueLimitNegIdxDvs = 0x60E1;
+    static constexpr uint16_t kTorqueLimitPosIdxX1s = 0x2019;
+    static constexpr uint16_t kTorqueLimitNegIdxX1s = 0x201A;
+    static constexpr uint32_t kX1sVid = 0x766;
+    static constexpr uint32_t kDvsVid = 0x445653;
+    static bool IsX1sDrive(uint32_t eepMan) { return eepMan == kX1sVid; }
+    static bool IsDvsDrive(uint32_t eepMan) { return eepMan == kDvsVid; }
+    static uint16_t GetTorqueLimitPosIdx(uint32_t eepMan) { return IsX1sDrive(eepMan) ? kTorqueLimitPosIdxX1s : kTorqueLimitPosIdxDvs; }
+    static uint16_t GetTorqueLimitNegIdx(uint32_t eepMan) { return IsX1sDrive(eepMan) ? kTorqueLimitNegIdxX1s : kTorqueLimitNegIdxDvs; }
+
+    // CiA402 homing method (0x6098) per drive type.
+    // DVS (0x445653): method 35 (homing on current position).
+    // X1S (0x766):    method 35 (homing on current position).
+    static constexpr int8_t kHomingMethodDvs = 35;
+    static constexpr int8_t kHomingMethodX1s = 35;
+    static int8_t GetHomingMethod(uint32_t eepMan) { return IsX1sDrive(eepMan) ? kHomingMethodX1s : kHomingMethodDvs; }
+
+public:
+    // Write 0x6060 Modes of Operation: prefers PDO descriptor-cache lookup
+    // (drive-model-aware byte offset); falls back to Obytes heuristic, then SDO.
+    bool WriteModeOfOperation(uint16_t slave, uint8_t mode);
+
     // Perform one tick for the SDO reader; intended to be called periodically
-    // by an external thread (e.g. a consolidated error-check thread). This
-    // will perform an SDO read only when the configured period elapsed.
+    // by an external thread (e.g. a consolidated error-check thread).
+    // DEPRECATED: 0x60FD is now read from PDO every cycle; this is a no-op.
     void SdoReaderTick();
 
     // MMF1_IN reader: provide an API so UI can ask EtherCATMaster to start/stop the
@@ -494,6 +827,12 @@ public:
     bool StartMMF1In();
     void StopMMF1In();
     bool IsMMF1InRunning() const { return mmf1ReaderRunning.load(); }
+    // Start/Stop the dedicated MMF receiver thread (non-RT core, runs PollOnce
+    // independently of the PDO cycle so MMF arrival jitter never disturbs the
+    // EtherCAT control loop).
+    bool StartMMFReceiver();
+    void StopMMFReceiver();
+    bool IsMMFReceiverRunning() const { return mmfReceiverRunning_.load(std::memory_order_relaxed); }
     // MMF1 accessors (forwarded to internal MMFReader)
     std::array<float,6> GetMMF1Latest() const { return mmf1Reader.GetLatest(); }
     std::array<double,6> GetMMF1LatestVelocities() const { return mmf1Reader.GetLatestVelocities(); }
@@ -527,6 +866,25 @@ public:
     void SetMmf1PoseCoordinateSystem(Mmf1PoseCoordinateSystem c) { mmf1PoseCoordinateSystem_ = c; }
     Mmf1PoseCoordinateSystem GetMmf1PoseCoordinateSystem() const { return mmf1PoseCoordinateSystem_; }
 
+    // ========================================================================
+    // Pose6D 前置驗證層 (硬限制)
+    // ========================================================================
+    // Set pose limits for the real-time validation layer. If the incoming Pose6D
+    // exceeds any axis, the cyclic thread will freeze motion and set a warning flag.
+    void SetPose6DLimits(const WuSOEM::Pose6DLimits& limits);
+    WuSOEM::Pose6DLimits GetPose6DLimits() const;
+    // Poll warning state from the UI thread (lock-free atomic reads).
+    // Returns true if the pose limit warning is currently active (violation in
+    // the most recent cycle). The UI thread should beep when this transitions to true.
+    bool IsPose6DLimitWarningActive() const { return pose6dLimitWarning_.load(std::memory_order_relaxed); }
+    // Retrieve and consume the last violation message (thread-safe, atomic swap with empty).
+    // Returns a wstring that may be empty if no new violation occurred since last call.
+    std::wstring ConsumePose6DLimitWarningMessage();
+
+    // Pose6D 動態行程縮放（Z 位置觸發）警告狀態
+    bool IsPose6DDynamicScalingActive() const { return pose6dDynamicScaling_.load(std::memory_order_relaxed); }
+    std::wstring ConsumePose6DDynamicScalingMessage();
+
     // PDO濾波器控制 (加速度/減速度限制)
     // slaveIndex: 從站索引 (1-based)
     // maxVel: 最大速度 (角度/秒) - 對應 P3
@@ -559,7 +917,6 @@ public:
     // Each pair contains (slaveIndex, violationType). Returns true if any found.
     bool GetSlavesWithHardLimitViolations(std::vector<std::pair<int, PDOFilter::ViolationType>> &out) const;
     // 查詢全局違規狀態
-    bool IsGlobalViolationActive() const { return globalViolationActive_.load(std::memory_order_relaxed); }
     bool IsGlobalLimitingEnabled() const { return globalLimitingEnabled_.load(std::memory_order_relaxed); }
     // 重置指定從站的濾波器狀態
     void ResetPDOFilter(int slaveIndex);
@@ -625,6 +982,15 @@ public:
             }
             LeaveCriticalSection(&pdoFilterCS_);
 
+            // 清除 MMF 前置濾波 EMA 狀態，確保下次連線時從當前 MMF 值重新初始化，
+            // 而非沿用前次連線遺留的 EMA 值。若前次 EMA 值與當前實際位置 / MMF 輸入
+            // 差異過大，會導致濾波器在軟啟動期間先朝錯誤方向運動再修正，引發震盪。
+            for (int i = 0; i < 6; ++i) {
+                mmfPreFilterInit_[i] = false;
+                mmfPreFilterEma_[i] = 0.0f;
+                mmfPreFilterPrevRaw_[i] = 0.0f;
+            }
+
             // If disabling, also clear soft-start cache conservatively
             if (softStartReadyCache_) {
                 for (int i = 0; i < softStartReadyCacheSize_; ++i) softStartReadyCache_[i].store(0, std::memory_order_relaxed);
@@ -651,6 +1017,7 @@ public:
     void TriggerPDOFilterSoftStart(int slaveIndex);
     // 觸發所有從站的緩啟動
     void TriggerAllPDOFiltersSoftStart();
+
     // Query whether a specific slave's PDOFilter reports soft-start ready
     bool IsPDOFilterSoftStartReady(int slaveIndex);
     // Query whether all configured PDOFilters report soft-start ready
@@ -663,8 +1030,15 @@ public:
     // Hold current position for all PDO filters - makes filters ignore MMF setpoint
     // and track current filtered output position. Use during emergency/smooth stop.
     void HoldAllPDOFiltersPosition();
+    // Hold current position for a single PDO filter
+    void HoldPDOFilterPosition(int slaveIndex);
     // Release hold-position mode for all PDO filters
     void ReleaseAllPDOFiltersHoldPosition();
+    // Get the maximum absolute output velocity across all PDO filters.
+    // Call BEFORE HoldAllPDOFiltersPosition() to capture pre-stop speed.
+    double GetMaxFilterVelocity();
+    // Get the minimum configured max deceleration across all PDO filters.
+    double GetMinConfiguredMaxDeceleration();
     // Set/clear powerOnInProgress flag - blocks CyclicTask from writing cyclic motion commands
     void SetPowerOnInProgress(bool inProgress) { powerOnInProgress_.store(inProgress, std::memory_order_release); }
     bool IsPowerOnInProgress() const { return powerOnInProgress_.load(std::memory_order_acquire); }
@@ -695,6 +1069,8 @@ private:
         int8_t homingMethod{35};
         uint32_t softwareLimitMin{0};
         uint32_t softwareLimitMax{0};
+        int32_t softwarePositionLimitMin{0};
+        int32_t softwarePositionLimitMax{0};
         double actualPositionCounts{0.0};
         double actualVelocityCounts{0.0};
         double positionErrorIntegralCountsSec{0.0};
@@ -707,7 +1083,7 @@ private:
         double csvSettleStableSec{0.0};
         int32_t lastCsvTargetPosition{0};
         bool haveLastCsvTargetPosition{false};
-        std::array<uint8_t, 8> digitalInputs{{0x20, 0, 0, 0, 0, 0, 0, 0}};
+        std::array<uint8_t, 8> digitalInputs{{0x01, 0, 0, 0, 0, 0, 0, 0}};
     };
 
     bool InitializeSimulationLocked(const char* ifnameParam);
@@ -722,6 +1098,10 @@ private:
 
     MMFReader mmf1Reader;
     std::atomic<bool> mmf1ReaderRunning{false};
+    // Dedicated MMF receiver thread: non-RT core, polls MMF data independently.
+    std::thread mmfReceiverThread_;
+    HANDLE mmfReceiverStopEvent_{NULL};
+    std::atomic<bool> mmfReceiverRunning_{false};
 
     // MMF1 input mode: set once at startup, cyclic thread reads without synchronization
     Mmf1InputMode mmf1InputMode_{Mmf1InputMode::ServoAngle};
@@ -732,11 +1112,70 @@ private:
     // Last valid servo angles from IK (fallback on IK failure); only accessed by cyclic thread
     std::array<float, 6> lastValidServoAngles_{};
 
+    // Forward Kinematics storage: written by PDOProcessingTask, read lock-free by others.
+    // Enabled flag is set by AppController after homing completes.
+    std::atomic<bool> forwardKinEnabled_{false};
+    std::atomic<bool> forwardKinValid_{false};
+    WuSOEM::Pose6D forwardKinPose_{};
+    long double forwardKinInitialHeight_ = 450.0L;  // set alongside forwardKinPose_
+
+    // === MMF 前置濾波器 (EMA + spike clamp) ===
+    // 在 IK 轉換前淨化原始 MMF 輸入，避免雜訊/突波被 IK 非線性放大。
+    std::array<float, 6> mmfPreFilterPrevRaw_{};   // 前次原始值（突波偵測用）
+    std::array<float, 6> mmfPreFilterEma_{};        // EMA 平滑值
+    std::array<bool, 6> mmfPreFilterInit_{};        // 是否已初始化
+
+    // === Pose6D 前置驗證層狀態 ===
+    // Pose limits for the real-time validation layer (set by UI/AppController)
+    WuSOEM::Pose6DLimits pose6dLimits_{};
+    // Atomic flag: set by cyclic thread when pose limit is violated, cleared when OK
+    std::atomic<bool> pose6dLimitWarning_{false};
+    // Most recent violation message (UTF-16) - swapped atomically by UI thread
+    std::wstring pose6dLimitWarningMsg_;
+    std::mutex pose6dLimitWarningMsgMutex_;
+    // Track whether the previous cycle had a violation (for edge-triggered beep)
+    bool pose6dPrevCycleViolated_ = false;
+
+    // === Pose6D 動態行程縮放（Z 觸發）狀態 ===
+    std::atomic<bool> pose6dDynamicScaling_{false};
+    std::wstring pose6dDynamicScalingMsg_;
+    std::mutex pose6dDynamicScalingMsgMutex_;
+    bool pose6dPrevDynamicScaling_ = false;
+
+    // Lock-free flag: any PDO filter (slave 1-6) in soft-start.
+    // Updated inside pdoFilterCS_ after filter processing; read lock-free
+    // by Pose6D block to disable dynamic scaling during soft-start.
+    std::atomic<bool> pose6dAnySoftStartActive_{false};
+
     // PDO濾波器: 每個從站一個濾波器實例
     std::map<int, PDOFilter> pdoFilters_;
     std::atomic<bool> pdoFilteringEnabled_{false};
+
+    // CSV velocity-command state per axis (shared between CyclicTask RT path
+    // and PDOProcessingTask fallback; accessed only by one thread at a time
+    // depending on lowLatencyMmfPath_ flag).
+    struct CsvVelocityCmdState {
+        bool initialized{false};
+        double smoothedPositionError{0.0};
+        double smoothedActualVelocity{0.0};
+        double correctionVelocity{0.0};
+        double commandVelocity{0.0};
+        double integralError{0.0};
+        int trackingClampIntentDir{0};
+        bool wasSoftStartActive{false};
+        int prevClampDir{0};
+        void Reset() { *this = CsvVelocityCmdState{}; }
+    };
+    CsvVelocityCmdState csvVelocityCmdStates_[6]{};
+
+    // Cyclic operation mode: CSP=8 / CSV=9.  Set from INI [Motion] OperationMode
+    // before connect; read lock-free by cyclic path and PowerOn sequences.
+    std::atomic<int8_t> cyclicOperationMode_{CoreHelpers::kDefaultCyclicOperationMode};
     std::atomic<bool> powerOnInProgress_{false};  // Blocks CyclicTask motion-command writes during PowerOnAllAsync
     std::array<std::atomic<double>, 6> lastPdoFilterInputAngles_{};
+    std::array<std::atomic<double>, 6> lastPdoFilterInputVelocities_{};  // deg/s, cyclic-thread computed
+    double lastPdoFilterInputPrevAngles_[6] = {};  // previous angle for velocity calc
+    LONGLONG lastPdoFilterInputTicks_[6] = {};     // QPC ticks, cyclic-thread only
     CRITICAL_SECTION pdoFilterCS_;
     // Lightweight lock-free cache of per-slave soft-start ready flags updated by master loop.
     // Use a heap-allocated array of atomics to avoid issues with copying/moving std::atomic inside std::vector
@@ -745,12 +1184,10 @@ private:
     // Request flag set by UI to ask master to complete all soft-starts in master's context.
     std::atomic<bool> completeSoftStartRequested_{false};
     
-    // === 全局違規狀態管理 (Global Violation State) ===
-    // 任一從軸違規時，全部都當作違規；只有當全部沒有違規且持續 RECOVERY_DELAY_SEC 後才恢復
-    std::atomic<bool> globalViolationActive_{false};      // 全局違規狀態
-    std::atomic<bool> globalLimitingEnabled_{false};      // 全局限制已啟用
-    std::chrono::steady_clock::time_point globalNoViolationStartTime_;  // 全局無違規開始時間
-    bool globalNoViolationTimerActive_{false};            // 無違規計時器是否啟動
+    // === 全局違規狀態管理 ===
+    // 任一從軸動態違規（速度/加減速）時強制全部從軸啟用限制；
+    // 違規消失後立即解除。
+    std::atomic<bool> globalLimitingEnabled_{false};
 
     // DC（Distributed Clocks）相關：可選的週期漂移補償與狀態
     std::atomic<bool> enableDcDriftComp{false};
@@ -760,9 +1197,9 @@ private:
     double dcPiProportionalGain{0.20};
     double dcPiIntegralGain{0.02};
     // 循環內日誌（可能造成抖動），預設關閉
-    bool verboseCyclicLog{false};
+    bool verboseCyclicLog{true};  // enabled for Win11 diagnostics
     // SYNC0 相位百分比，預設 15%，限制在 10~20% 之間
-    int dcSyncPhasePercent{15};
+    int dcSyncPhasePercent{60};  // SYNC0 fires at 60% of cycle (frame arrives ~40-50%)
     // When repeated WKC failures occur, the master's cyclic thread increments this counter.
     // If it reaches the threshold, the master will notify UI/HTTP server to disconnect.
     std::atomic<int> networkFailureCounter{0};
@@ -771,6 +1208,32 @@ private:
     MMFWriter mmfWriter_;
     std::atomic<bool> mmfOutputEnabled_{false};
     CRITICAL_SECTION mmfOutputCS_;
+
+    // ========================================================================
+    // IK Actual 6-DOF Pose MMF Output (\"BigCat\")
+    // ========================================================================
+    struct Pose6DMMF {
+        // Backward-compatible: pose[6] at offset 0 for existing consumers.
+        // [Sway, Surge, Heave, Yaw, Roll, Pitch]
+        // Platform-local linear axes; Yaw/Pitch swapped per FlyPT convention.
+        double pose[6];
+        uint64_t sequence;    // 單調遞增序號，consumer 可偵測更新
+        uint32_t valid;       // 1 = forward kinematics 收斂
+        uint32_t reserved;    // 對齊保留
+        uint64_t timestamp;   // QPC 時間戳，consumer 可量測延遲
+    };
+    static constexpr size_t POSE_MMF_SIZE = sizeof(Pose6DMMF);
+
+private:
+    void WritePoseMMF(const WuSOEM::Pose6D& pose, bool valid, long double initialHeight, uint64_t epochMs);
+
+    HANDLE poseMmfHandle_{NULL};
+    std::atomic<Pose6DMMF*> poseMmfView_{nullptr};  // lock-free 讀取（cyclic thread 不阻塞）
+    std::atomic<uint64_t> poseMmfSeq_{0};
+    std::atomic<bool> poseMmfEnabled_{false};
+    CRITICAL_SECTION poseMmfCS_;  // 僅保護 Enable/Disable，Write 不使用
+
+public:
     // PDO in-memory circular log buffer (single-writer: PDOProcessingTask)
         // raw pointer to circular log buffer managed with VirtualAlloc
         char* pdoLogBufferBase_{nullptr};

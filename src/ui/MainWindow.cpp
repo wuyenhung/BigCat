@@ -26,16 +26,18 @@
 #include "EtherCATMaster.h"
 #include "../include/core/CoreHelpers.h"
 #include "../include/core/CpuIsolation.h"
+#include "../include/core/ShutdownGuard.h"
 #include "../include/MotionConfigIO.h"
 #include "Win32Utils.h"
 #include "HttpServer.h"
 #include "MachineConfigIO.h"
+#include "core/AppConfig.h"
 
 // --- INI helpers for persistent UI options ---------------------------------
 static std::wstring GetAppIniPath()
 {
     wchar_t buf[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\WuBigCat.ini");
+    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\BigCat.ini");
     // strip extension
     wchar_t *p = wcsrchr(buf, L'\\');
     wchar_t *dot = wcsrchr(buf, L'.');
@@ -138,85 +140,34 @@ static CycleRowLayout ComputeCycleRowLayout(int availableW)
     CycleRowLayout out{};
     if (availableW <= 0) return out;
 
-    constexpr int kPrefDesired = 80;
-    constexpr int kPrefCurrent = 280;   // slightly reduced to give more space for PDO frequency
-    constexpr int kPrefWkc = 90;        // trim width a bit more
-    constexpr int kPrefPdo = 120;       // enlarge PDO frequency column
+    // Buttons moved to adapter area — cycle row uses full width for data fields.
+    // Row 1: desired edit (fixed 80px) + current display (fill remaining)
+    // Row 2: three equal columns (PDOProc / WKC / MMF)
+    out.statusBtnW = 0;
+    out.autoBtnW = 0;
+    out.buttonGap = 0;
+    out.buttonOffset = 0;
+
+    constexpr int kDesiredW = 80;
     constexpr int kMinDesired = 48;
-    constexpr int kMinCurrent = 120;    // allow narrower when necessary
-    constexpr int kMinWkc = 50;
-    constexpr int kMinPdo = 70;         // ensure reasonable minimum for frequency display
+    constexpr int kMinCurrent = 180;
 
-    constexpr int kMinStatusBtnW = 56;
-    constexpr int kMinAutoBtnW = 56;
-    constexpr int kMinBtnGap = 6;
-    constexpr int kMinBtnOffset = 8;
-
-    int statusBtnW = out.statusBtnW;
-    int autoBtnW = out.autoBtnW;
-    int buttonGap = out.buttonGap;
-    int buttonOffset = out.buttonOffset;
-
-    int fieldBudget = availableW - (buttonOffset + statusBtnW + buttonGap + autoBtnW);
-    const int preferredFieldTotal = kPrefDesired + kPrefCurrent + kPrefWkc + kPrefPdo;
-    const int minFieldTotal = kMinDesired + kMinCurrent + kMinWkc + kMinPdo;
-
-    if (fieldBudget < preferredFieldTotal) {
-        statusBtnW = 72;
-        autoBtnW = 72;
-        buttonGap = kMinBtnGap;
-        buttonOffset = 12;
-        fieldBudget = availableW - (buttonOffset + statusBtnW + buttonGap + autoBtnW);
+    int desiredW = kDesiredW;
+    if (availableW < kDesiredW + kMinCurrent + 100) {
+        desiredW = kMinDesired;
     }
-    if (fieldBudget < minFieldTotal) {
-        statusBtnW = kMinStatusBtnW;
-        autoBtnW = kMinAutoBtnW;
-        buttonGap = kMinBtnGap;
-        buttonOffset = kMinBtnOffset;
-        fieldBudget = availableW - (buttonOffset + statusBtnW + buttonGap + autoBtnW);
-    }
+    int currentW = availableW - desiredW;
+    if (currentW < kMinCurrent) currentW = kMinCurrent;
 
-    fieldBudget = std::clamp(fieldBudget, minFieldTotal, preferredFieldTotal);
-    const int preferredExtra =
-        (kPrefDesired - kMinDesired) +
-        (kPrefCurrent - kMinCurrent) +
-        (kPrefWkc - kMinWkc) +
-        (kPrefPdo - kMinPdo);
-    int extra = fieldBudget - minFieldTotal;
-    if (extra < 0) extra = 0;
-
-    int desiredW = kMinDesired + ((preferredExtra > 0) ? (extra * (kPrefDesired - kMinDesired) / preferredExtra) : 0);
-    int currentW = kMinCurrent + ((preferredExtra > 0) ? (extra * (kPrefCurrent - kMinCurrent) / preferredExtra) : 0);
-    int wkcW = kMinWkc + ((preferredExtra > 0) ? (extra * (kPrefWkc - kMinWkc) / preferredExtra) : 0);
-    int pdoW = fieldBudget - desiredW - currentW - wkcW;
-    if (pdoW < kMinPdo) {
-        pdoW = kMinPdo;
-        int overflow = desiredW + currentW + wkcW + pdoW - fieldBudget;
-        if (overflow > 0) {
-            int reduce = std::min(overflow, std::max(0, currentW - kMinCurrent));
-            currentW -= reduce;
-            overflow -= reduce;
-        }
-        if (overflow > 0) {
-            int reduce = std::min(overflow, std::max(0, wkcW - kMinWkc));
-            wkcW -= reduce;
-            overflow -= reduce;
-        }
-        if (overflow > 0) {
-            int reduce = std::min(overflow, std::max(0, desiredW - kMinDesired));
-            desiredW -= reduce;
-            overflow -= reduce;
-        }
-    }
+    // Row 2 columns are computed independently (3 equal columns)
+    // wkcW and pdoW stored for backward compat but row 2 uses row2W/3
+    int colW = availableW / 3;
+    if (colW < 120) colW = 120;
 
     out.desiredW = desiredW;
     out.currentW = currentW;
-    out.wkcW = wkcW;
-    out.pdoW = pdoW;
-    out.statusBtnW = statusBtnW;
-    out.autoBtnW = autoBtnW;
-    out.buttonGap = buttonGap;
-    out.buttonOffset = buttonOffset;
+    out.wkcW = colW;
+    out.pdoW = colW;
     return out;
 }
 
@@ -278,7 +229,9 @@ MainWindow::MainWindow()
     // 初始化新增的 HWND 成員
     hComboAdapter = NULL;
     hEditPDOSent = NULL;
+    hEditPdoProcFreq = NULL;
     hBtnPDOSentStatus = NULL;
+    hStaticRtCore = NULL;
     hStaticHttpUrl = NULL;
     hBtnOpenHttp = NULL;
     hChkHttpServer = NULL;
@@ -288,6 +241,8 @@ MainWindow::MainWindow()
 
     // Load persisted status.log setting from INI (default = enabled)
     statusLogEnabled_.store(ReadIniBool(L"Logging", L"EnableStatusLog", true));
+    // Load external E-Stop enable setting from INI (default = enabled)
+    externalEstopEnabled_.store(AppConfig::ReadExternalEstopEnabled());
     // MMF controls moved to AutoWindow; main window no longer holds HWNDs
 
     // 初始化暗色主題
@@ -456,7 +411,10 @@ CoreHelpers::SystemStateSnapshot MainWindow::GetSystemStateSnapshot() const
     }
 
     snapshot.home_done = this->autoDownToOriginLastSuccess.load();
-    if (snapshot.error || !snapshot.ethercat_ok) snapshot.home_done = false;
+    // Only clear home_done on EtherCAT loss — not on transient errors or
+    // human-operated stops.  autoDownToOriginLastSuccess is the sole
+    // authority and is already cleared by actual homing failures.
+    if (!snapshot.ethercat_ok) snapshot.home_done = false;
 
     return snapshot;
 }
@@ -465,23 +423,23 @@ CoreHelpers::AutoActionButtonInputs MainWindow::GetAutoActionButtonInputsForWeb(
 {
     CoreHelpers::AutoActionButtonInputs inputs;
     inputs.action_gate_enabled = IsAutoProcedureUiLockActive();
-    uint8_t sdo60FD = 0;
+    uint8_t pdo60FD = 0;
     bool have60FD = false;
-    if (TryGetLastSdo60FDLowByte(sdo60FD)) {
+    if (TryGetPdo60FDLowByte(pdo60FD)) {
         have60FD = true;
     } else {
-        const int cached = lastSdo60FDLastByte.load();
+        const int cached = lastPdo60FDLastByte.load();
         if (cached != -1) {
             have60FD = true;
-            sdo60FD = static_cast<uint8_t>(cached & 0xFF);
+            pdo60FD = static_cast<uint8_t>(cached & 0xFF);
         }
     }
     if (have60FD) {
-        inputs.auto_connect_signal_active = (sdo60FD & 0x02) != 0;
-        inputs.down_to_origin_signal_active = (sdo60FD & 0x08) != 0;
-        inputs.fault_reset_signal_active = (sdo60FD & 0x40) != 0;
-        inputs.immediate_stop_signal_active = (sdo60FD & 0x01) != 0;
-        inputs.emergency_stop_signal_active = (sdo60FD & 0x20) == 0;
+        inputs.auto_connect_signal_active = (pdo60FD & 0x02) != 0;
+        inputs.down_to_origin_signal_active = (pdo60FD & 0x08) != 0;
+        inputs.fault_reset_signal_active = (pdo60FD & 0x40) != 0;
+        inputs.immediate_stop_signal_active = (pdo60FD & 0x20) != 0;
+        inputs.emergency_stop_signal_active = externalEstopEnabled_.load() && ((pdo60FD & 0x01) == 0);
     }
     inputs.immediate_stop_latched = autoImmediateStopLampLatched.load();
     inputs.emergency_stop_latched = autoEmergencyStopLampLatched.load();
@@ -596,22 +554,22 @@ bool MainWindow::IsMasterInitialized() const {
     return false;
 }
 
-bool MainWindow::TryGetLastSdo60FD(std::vector<uint8_t>& out) const {
+bool MainWindow::TryGetPdo60FD(std::vector<uint8_t>& out) const {
     if (auto* svc = AppController::GetInstance().GetEtherCATService()) {
-        return svc->GetLastSdo60FD(out);
+        return svc->GetPdo60FD(out);
     }
     if (auto* master = AppController::GetInstance().GetMaster()) {
-        return master->GetLastSdo60FD(out);
+        return master->GetPdo60FD(out);
     }
     return false;
 }
 
-bool MainWindow::TryGetLastSdo60FDLowByte(uint8_t& outLowByte) const {
+bool MainWindow::TryGetPdo60FDLowByte(uint8_t& outLowByte) const {
     if (auto* svc = AppController::GetInstance().GetEtherCATService()) {
-        return svc->GetLastSdo60FDLowByte(outLowByte);
+        return svc->GetPdo60FDLowByte(outLowByte);
     }
     if (auto* master = AppController::GetInstance().GetMaster()) {
-        return master->GetLastSdo60FDLowByte(outLowByte);
+        return master->GetPdo60FDLowByte(outLowByte);
     }
     return false;
 }
@@ -767,6 +725,12 @@ bool MainWindow::Create(HINSTANCE hInst, bool showInitially) {
     // Set process to high priority and lock to Core 4 (or available core > 0) to avoid system interrupts
     CoreHelpers::SetProcessHighPriorityAndCore4Affinity();
     
+    // Lower the main UI message-loop thread to BELOW_NORMAL so it never
+    // preempts the CyclicTask (TIME_CRITICAL) or PDOProcessingTask threads.
+    // The process class is HIGH/REALTIME, so BELOW_NORMAL = base-1 = 12,
+    // well below TIME_CRITICAL at base+15 = 28.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    
     // Start background monitor to repel high-load games (DCS/VR) from our core
     CoreHelpers::CpuIsolation::StartIsolationMonitor();
     }
@@ -850,6 +814,30 @@ bool MainWindow::Create(HINSTANCE hInst, bool showInitially) {
     }
     // Update displayed HTTP URL immediately after server start (or remain stopped)
     UpdateHttpServerUrl();
+
+    // ========================================================================
+    // \u95dc\u6a5f / \u91cd\u65b0\u555f\u52d5\u9632\u8b77\uff1a\u8a3b\u518a shutdown block reason
+    // \u4e4b\u5f8c\u4efb\u4f55\u95dc\u6a5f\u3001\u91cd\u65b0\u555f\u52d5\u6216\u767b\u51fa\u90fd\u6703\u5148\u8a62\u554f\u672c\u8996\u7a97\uff08WM_QUERYENDSESSION\uff09\uff0c
+    // \u7531 ShutdownGuard \u6c7a\u5b9a\u662f\u5426\u6514\u622a\u3002\u958b\u95dc\u70ba BigCat.ini [Safety] BlockSystemShutdown\u3002
+    // ========================================================================
+    {
+        std::string guardLog;
+        const bool reasonInstalled = CoreHelpers::ShutdownGuard::Install(hwnd, guardLog);
+        if (!guardLog.empty()) {
+            OutputDebugStringA((guardLog + "\n").c_str());
+        }
+        if (!CoreHelpers::ShutdownGuard::IsEnabled()) {
+            PrependStatus(L"[Safety] \u95dc\u6a5f\u5c01\u9396\u672a\u555f\u7528\uff08INI [Safety] BlockSystemShutdown=0\uff09\r\n");
+        } else if (reasonInstalled) {
+            PrependStatus(L"[Safety] \u2713 \u5df2\u5c01\u9396 Windows \u95dc\u6a5f/\u91cd\u65b0\u555f\u52d5\uff08\u7a0b\u5f0f\u57f7\u884c\u671f\u9593\uff1b\u8acb\u5148\u95dc\u9589 BigCat \u518d\u95dc\u6a5f\uff09\r\n");
+        } else {
+            // \u5c01\u9396\u4ecd\u6709\u6548\uff08WM_QUERYENDSESSION \u56de FALSE\uff09\uff0c\u53ea\u662f\u7cfb\u7d71\u95dc\u6a5f\u756b\u9762\u7121\u6cd5\u986f\u793a\u539f\u56e0\u3002
+            PrependStatus(L"[Safety] \u2713 \u5df2\u5c01\u9396 Windows \u95dc\u6a5f/\u91cd\u65b0\u555f\u52d5\uff08\u5c01\u9396\u539f\u56e0\u6587\u5b57\u8a3b\u518a\u5931\u6557\uff09\r\n");
+        }
+        PrependStatus(CoreHelpers::ShutdownGuard::IsKeepSystemAwake()
+            ? L"[Safety] \u2713 \u5df2\u9632\u6b62\u7cfb\u7d71\u9592\u7f6e\u7761\u7720\uff08\u87a2\u5e55\u4ecd\u53ef\u95dc\u9589\uff09\r\n"
+            : L"[Safety] \u9592\u7f6e\u7761\u7720\u9632\u8b77\u672a\u555f\u7528\uff08INI [Safety] KeepSystemAwake=0\uff09\r\n");
+    }
 
     // Use PrependStatus so file-write respects the runtime INI/UI toggle
     PrependStatus(L"[OK] \u5df2\u5b8c\u6210\u521d\u59cb\u5316\r\n");
@@ -1078,14 +1066,57 @@ void MainWindow::CreateAdapterControls(LayoutHelper &helper, int &y, HFONT hFont
     SetUiDisabled("start_auto", true);
     SetUiDisabled("stop_auto", true);
 
+    // 狀態視窗 / 自動視窗 buttons — placed on their own row, right-aligned
+    {
+        const int btnW = 80;
+        const int btnGap = 8;
+        int totalBtnW = btnW + btnGap + btnW;
+        int btnX = ctrlXpos + helper.ControlW() - totalBtnW;
+        if (btnX < ctrlXpos) btnX = ctrlXpos;
+        hBtnPDOSentStatus = CreateChildControl(hContentWnd, hInstance, L"BUTTON", L"狀態視窗", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, btnX, helper.Y(), btnW, 22, IDC_BTN_PDO_SENT_STATUS, hFont);
+        btnX += btnW + btnGap;
+        hBtnAutoWindow = CreateChildControl(hContentWnd, hInstance, L"BUTTON", L"自動視窗", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, btnX, helper.Y(), btnW, 22, IDC_BTN_AUTO_WINDOW, hFont);
+        SetControlEnabled(hBtnAutoWindow, true);
+        hBtnClearStatus = NULL;
+    }
     helper.NextRow(); y = helper.Y();
+
+    // IRQ CPU display for selected adapter (shows effective IRQ CPU when connected)
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"選定網卡 IRQ:", WS_VISIBLE | WS_CHILD,
+        rLabel.left, helper.Y(), LayoutConfig::labelW, 18, 0, hFont);
+    hStaticAdapterIrqCpu = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"N/A", WS_VISIBLE | WS_CHILD | SS_LEFT,
+        ctrlXpos, helper.Y(), helper.ControlW(), 36, IDC_STATIC_ADAPTER_IRQ, hFont);
+    // Multi-line IRQ display needs extra row advancement to avoid overlap with next row
+    helper.MoveDown(18);
+    helper.NextRow(); y = helper.Y();
+
+    // Show actual effective other IRQ assignments on the main screen
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"其他 IRQ:", WS_VISIBLE | WS_CHILD,
+        rLabel.left, helper.Y(), LayoutConfig::labelW, 18, 0, hFont);
+    hStaticOtherIrqAssignments = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"N/A", WS_VISIBLE | WS_CHILD | SS_LEFT,
+        ctrlXpos, helper.Y(), helper.ControlW(), 36, IDC_STATIC_OTHER_IRQS, hFont);
+    // Multi-line IRQ display needs extra row advancement to avoid overlap with next row
+    helper.MoveDown(18);
+    helper.NextRow(); y = helper.Y();
+
+    // RT core display — auto-detected physical core for SOEM cyclic thread
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"RT 核心:", WS_VISIBLE | WS_CHILD,
+        rLabel.left, helper.Y(), LayoutConfig::labelW, 18, 0, hFont);
+    hStaticRtCore = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"偵測中...", WS_VISIBLE | WS_CHILD | SS_LEFTNOWORDWRAP,
+        ctrlXpos, helper.Y(), helper.ControlW(), 18, IDC_STATIC_RT_CORE, hFont);
+    helper.NextRow(); y = helper.Y();
+    helper.NextRow(); y = helper.Y();
+
+    // PopulateAdapters() above may have called SetSelectedAdapter() before these
+    // controls existed.  Force an IRQ display update for the currently selected
+    // adapter so the startup view shows actual IRQ info immediately.
+    PostMessageW(hwnd, WM_USER_REFRESH_IRQ_DISPLAY, 0, 0);
 }
 
-// Helper: create cycle row controls (distributed columns and buttons)
+// Helper: create cycle row controls — split across two rows (buttons moved to adapter area)
 void MainWindow::CreateCycleControls(LayoutHelper &helper, int &y, int clientW, HFONT hFont) {
     const int left = LayoutConfig::left;
     const int labelW = LayoutConfig::labelW;
-    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"設定週期 (ms):", WS_VISIBLE | WS_CHILD, left, helper.Y(), labelW, 20, 0, hFont);
 
     int rowX = helper.ControlX();
     const int rightInset = GetScrollSafeRightInset();
@@ -1094,48 +1125,68 @@ void MainWindow::CreateCycleControls(LayoutHelper &helper, int &y, int clientW, 
     CycleRowLayout cycleLayout = ComputeCycleRowLayout(rowW);
     int desiredW = cycleLayout.desiredW;
     int currentW = cycleLayout.currentW;
-    int wkcW = cycleLayout.wkcW;
-    int pdoW = cycleLayout.pdoW;
+
+    // --- Row 1: 設定期望週期 + 即時通訊與週期量測 ---
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"設定期望週期 (ms):", WS_VISIBLE | WS_CHILD, left, helper.Y(), labelW, 20, 0, hFont);
 
     int x = rowX;
     int desiredEditW = std::max(32, desiredW - 8);
     hEditCycleTime = CreateChildControl(hContentWnd, hInstance, L"EDIT", L"2", WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_NUMBER, x, helper.Y(), desiredEditW, 22, IDC_EDIT_CYCLE_TIME, hFont);
     x += desiredW;
 
-    int curLabelW = 44;
+    int curLabelW = 120;
     int curEditW = std::max(8, currentW - curLabelW - 6);
-    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"實際", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), curLabelW, 22, IDC_STATIC_CYCLE_ACTUAL_LABEL, hFont);
-    // Use a STATIC control for display-only (no input). Keep the same ID
-    // so existing WM_SETTEXT calls continue to work.
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"即時通訊與週期量測:", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), curLabelW, 22, IDC_STATIC_CYCLE_ACTUAL_LABEL, hFont);
     hEditCurrentCycleTime = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"N/A", WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT, x + 4 + curLabelW + 6, helper.Y(), curEditW, 22, IDC_EDIT_CURRENT_CYCLE_TIME, hFont);
-    x += currentW;
 
-    int wkcLabelW = 40;
-    int wkcEditW = std::max(8, wkcW - wkcLabelW - 6);
-    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"WKC", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), wkcLabelW, 22, IDC_STATIC_CYCLE_WKC_LABEL, hFont);
+    helper.NextRow(); y = helper.Y();
+
+    // --- Row 2: PDOProc 頻率 + 工作計數器 (WKC) + MMF 更新頻率 ---
+    // Column widths weighted by label length: PDOProc 8 : WKC 11 : MMF 9
+    int row2W = rowW;
+    const int weightSum = 8 + 11 + 9;
+    int colW[3] = {
+        row2W * 8 / weightSum,
+        row2W * 11 / weightSum,
+        row2W * 9 / weightSum
+    };
+    // Distribute rounding remainder to the widest column (WKC)
+    int colSum = colW[0] + colW[1] + colW[2];
+    if (colSum < row2W) colW[1] += (row2W - colSum);
+    // Enforce minimum per-column to prevent text clipping/wrapping
+    for (int i = 0; i < 3; ++i) if (colW[i] < 180) colW[i] = 180;
+
+    x = rowX;
+
+    // PDOProc 頻率 (col 0)
+    int pdoProcLabelW = 90;
+    int pdoProcEditW = std::max(8, colW[0] - pdoProcLabelW - 6);
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"PDOProc 頻率:", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), pdoProcLabelW, 22, IDC_STATIC_PDO_PROC_LABEL, hFont);
+    hEditPdoProcFreq = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"等待中...", WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT, x + 4 + pdoProcLabelW + 6, helper.Y(), pdoProcEditW, 22, IDC_EDIT_PDO_PROC_FREQ, hFont);
+    x += colW[0];
+
+    // 工作計數器 (WKC) (col 1) — wider label to prevent wrapping
+    int wkcLabelW = 130;
+    int wkcEditW = std::max(8, colW[1] - wkcLabelW - 6);
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"工作計數器 (WKC):", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), wkcLabelW, 22, IDC_STATIC_CYCLE_WKC_LABEL, hFont);
     hEditWKC = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"0", WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT, x + 4 + wkcLabelW + 6, helper.Y(), wkcEditW, 22, IDC_EDIT_WKC, hFont);
-    x += wkcW;
+    x += colW[1];
 
-    int pdoLabelW = 50;  // shrink label to free space for value
-    int pdoEditW = std::max(8, pdoW - pdoLabelW - 6);
-    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"MMF頻率:", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), pdoLabelW, 22, IDC_STATIC_PDO_SENT_LABEL, hFont);
-    hEditPDOSent = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"00000000", WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT, x + 4 + pdoLabelW + 6, helper.Y(), pdoEditW, 22, 2010, hFont);
-    x += pdoW;
+    // MMF 更新頻率 (col 2) — wider label to prevent wrapping
+    int pdoLabelW = 100;
+    int pdoEditW = std::max(8, colW[2] - pdoLabelW - 6);
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"MMF 更新頻率:", WS_VISIBLE | WS_CHILD | SS_RIGHT, x + 4, helper.Y(), pdoLabelW, 22, IDC_STATIC_PDO_SENT_LABEL, hFont);
+    hEditPDOSent = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"等待連線...", WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT, x + 4 + pdoLabelW + 6, helper.Y(), pdoEditW, 22, 2010, hFont);
 
-    // Place buttons after the last control with a fixed gap to prevent overlap
-    // and ensure they stay visible and aligned with the data fields.
-    int btnAreaX = x + cycleLayout.buttonOffset;
-    hBtnPDOSentStatus = CreateChildControl(hContentWnd, hInstance, L"BUTTON", L"狀態視窗", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, btnAreaX, helper.Y(), cycleLayout.statusBtnW, 22, IDC_BTN_PDO_SENT_STATUS, hFont);
-    btnAreaX += cycleLayout.statusBtnW + cycleLayout.buttonGap;
-    // Auto Window toggle button (placed to the right of 狀態視窗)
-    hBtnAutoWindow = CreateChildControl(hContentWnd, hInstance, L"BUTTON", L"自動視窗", WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, btnAreaX, helper.Y(), cycleLayout.autoBtnW, 22, IDC_BTN_AUTO_WINDOW, hFont);
-    // Always enable the Auto Window toggle on the main PC UI — let user open it from main screen
-    SetControlEnabled(hBtnAutoWindow, true);
-    btnAreaX += cycleLayout.autoBtnW + cycleLayout.buttonGap;
-    // Clear Status button is moved into the status child window. Main window keeps the handle as NULL until child creates/parents it.
-    hBtnClearStatus = NULL;
-    btnAreaX += 100 + 8;
-    // Move to next row only once (avoid double-spacing before slave list).
+    helper.NextRow(); y = helper.Y();
+
+    // --- Row 3: 除錯 URL 提醒 (診斷用 /ui_state) ---
+    CreateChildControl(hContentWnd, hInstance, L"STATIC", L"除錯:", WS_VISIBLE | WS_CHILD | SS_RIGHT, rowX + 4, helper.Y(), 50, 22, 0, hFont);
+    CreateChildControl(hContentWnd, hInstance, L"STATIC",
+        L"http://localhost:8080/ui_state （遠端使用電腦IP:8080/ui_state）",
+        WS_VISIBLE | WS_CHILD | SS_SIMPLE | SS_LEFT,
+        rowX + 60, helper.Y(), rowW - 60, 22, 0, hFont);
+
     helper.NextRow(); y = helper.Y();
 }
 
@@ -1183,6 +1234,23 @@ void MainWindow::CreateSlaveListControls(LayoutHelper &helper, int &y, int clien
     if (hChkStartupAutoSeq && IsWindow(hChkStartupAutoSeq)) {
         bool autoSeq = ReadIniBool(L"Startup", L"AutoTrigger", true);
         SendMessage(hChkStartupAutoSeq, BM_SETCHECK, autoSeq ? BST_CHECKED : BST_UNCHECKED, 0);
+    }
+    chkX += chkW + 8;
+    // IK 實際 6DoF 姿態 MMF 輸出勾選框
+    // 標籤使用 INI 中的 PoseOutputName 以便識別 MMF 映射名稱
+    if (hChkMMFPoseOutput == NULL) {
+        wchar_t nameBuf[256] = {0};
+        GetPrivateProfileStringW(L"MMF", L"PoseOutputName", L"motionRigPose", nameBuf, 256, GetAppIniPath().c_str());
+        std::wstring mmfLabel(nameBuf);
+        if (mmfLabel.empty()) mmfLabel = L"motionRigPose";
+        std::wstring label = L"6DoF姿態輸出MMF(" + mmfLabel + L")";
+        hChkMMFPoseOutput = CreateChildControl(hContentWnd, hInstance, L"BUTTON", label.c_str(), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, chkX, helper.Y(), chkW, chkH, IDC_CHK_MMF_POSE_OUTPUT, hFont);
+    }
+    if (hChkMMFPoseOutput && IsWindow(hChkMMFPoseOutput)) {
+        bool poseMmf = ReadIniBool(L"MMF", L"EnablePoseOutput", false);
+        SendMessage(hChkMMFPoseOutput, BM_SETCHECK, poseMmf ? BST_CHECKED : BST_UNCHECKED, 0);
+        SetControlEnabled(hChkMMFPoseOutput, true);
+        // EnablePoseMMFOutput will be called after homing completes (in AutoWindow)
     }
 
     // Move to next row after startup checkboxes before creating the slave list
@@ -1247,6 +1315,14 @@ void MainWindow::CreateSlaveListControls(LayoutHelper &helper, int &y, int clien
         SendMessageW(hComboSlaves, CB_SETCURSEL, 0, 0);
     }
     helper.NextRow(); y = helper.Y();
+
+    // PDO Mapping status display (below slave selector)
+    {
+        int pdoMapW = listWidth;
+        if (pdoMapW < 200) pdoMapW = 200;
+        hStaticPdoMapping = CreateChildControl(hContentWnd, hInstance, L"STATIC", L"", WS_VISIBLE | WS_CHILD | SS_LEFT, left, helper.Y(), pdoMapW, 36, 0, hFont);
+        helper.MoveDown(36); y = helper.Y();
+    }
 }
 
 // Helper: create SDO controls and listview (buttons + ESI controls)
@@ -1995,21 +2071,48 @@ void MainWindow::ReflowMainControls()
         if ((ptBtn.y + 22) > contentHeight) contentHeight = ptBtn.y + 22;
     }
 
-    // --- Cycle-row reflow: Desired / Current / WKC / PDO_sent / Buttons ---
+    // 狀態視窗 / 自動視窗 buttons — positioned on their own row, right-aligned
     {
-        int cycleY = 0;
+        int btnY = 0;
+        if (hComboAdapter && IsWindow(hComboAdapter)) {
+            RECT rcTmp; GetWindowRect(hComboAdapter, &rcTmp);
+            POINT ptTmp = { rcTmp.left, rcTmp.top }; ScreenToClient(hContentWnd, &ptTmp);
+            btnY = ptTmp.y + 22 + LayoutConfig::vpad;
+        } else {
+            btnY = LayoutConfig::vpad * 2;
+        }
+        const int btnW = 80;
+        const int btnGap = 8;
+        int totalBtnW = btnW + btnGap + btnW;
+        int btnX = clientW - rightMargin - totalBtnW;
+        if (btnX < ctrlX) btnX = ctrlX;
+        if (hBtnPDOSentStatus && IsWindow(hBtnPDOSentStatus))
+            SafeSetPos(hBtnPDOSentStatus, NULL, btnX, btnY, btnW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        btnX += btnW + btnGap;
+        if (hBtnAutoWindow && IsWindow(hBtnAutoWindow))
+            SafeSetPos(hBtnAutoWindow, NULL, btnX, btnY, btnW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        if ((btnY + 22) > contentHeight) contentHeight = btnY + 22;
+    }
+
+    // --- Cycle-row reflow: Row 1 (Desired + Current), Row 2 (PDOProc + WKC + MMF) ---
+    {
+        int cycleY1 = 0;
         // attempt to find current Y of existing Desired edit
         if (hEditCycleTime && IsWindow(hEditCycleTime)) {
             RECT clientRc; GetWindowRect(hEditCycleTime, &clientRc);
             POINT pt = { clientRc.left, clientRc.top }; ScreenToClient(hContentWnd, &pt);
-            cycleY = pt.y;
+            cycleY1 = pt.y;
         } else {
-            // fallback: place it after adapter row
-            cycleY = LayoutConfig::vpad;
-            if (hBtnConnect && IsWindow(hBtnConnect)) {
+            // fallback: place it after adapter + button rows
+            cycleY1 = LayoutConfig::vpad;
+            if (hBtnPDOSentStatus && IsWindow(hBtnPDOSentStatus)) {
+                RECT rcBtn{}; GetWindowRect(hBtnPDOSentStatus, &rcBtn);
+                POINT ptBtn = { rcBtn.left, rcBtn.top }; ScreenToClient(hContentWnd, &ptBtn);
+                cycleY1 = ptBtn.y + 22 + LayoutConfig::vpad;
+            } else if (hBtnConnect && IsWindow(hBtnConnect)) {
                 RECT rcBtn{}; GetWindowRect(hBtnConnect, &rcBtn);
                 POINT ptBtn = { rcBtn.left, rcBtn.top }; ScreenToClient(hContentWnd, &ptBtn);
-                cycleY = ptBtn.y + 22 + LayoutConfig::vpad;
+                cycleY1 = ptBtn.y + 22 + LayoutConfig::vpad;
             }
         }
 
@@ -2018,70 +2121,72 @@ void MainWindow::ReflowMainControls()
         CycleRowLayout cycleLayout = ComputeCycleRowLayout(cycleAvailableW);
         int desiredW = cycleLayout.desiredW;
         int currentW = cycleLayout.currentW;
-        int wkcW = cycleLayout.wkcW;
-        int pdoW = cycleLayout.pdoW;
+
+        // Row 2 column widths: weighted by label length (8:11:9)
+        const int weightSum = 8 + 11 + 9;
+        int colW[3] = {
+            cycleAvailableW * 8 / weightSum,
+            cycleAvailableW * 11 / weightSum,
+            cycleAvailableW * 9 / weightSum
+        };
+        int colSum = colW[0] + colW[1] + colW[2];
+        if (colSum < cycleAvailableW) colW[1] += (cycleAvailableW - colSum);
+        for (int i = 0; i < 3; ++i) if (colW[i] < 180) colW[i] = 180;
 
         int rowX = ctrlX;
-        int x = rowX;
-        // Use deferred window positioning to batch multiple SetWindowPos calls
-        HDWP hdwp = BeginDeferWindowPos(10); // reserve up to 10 updates
+        HDWP hdwp = BeginDeferWindowPos(12);
 
+        // --- Row 1: Desired edit + Current display ---
+        int x = rowX;
         if (hEditCycleTime && IsWindow(hEditCycleTime)) {
-            hdwp = DeferWindowPos(hdwp, hEditCycleTime, NULL, x, cycleY, std::max(32, desiredW - 8), 22, SWP_NOZORDER | SWP_NOACTIVATE);
+            hdwp = DeferWindowPos(hdwp, hEditCycleTime, NULL, x, cycleY1, std::max(32, desiredW - 8), 22, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         x += desiredW;
 
-        // Current label + edit
-        int curLabelW = 44;
+        int curLabelW = 120;
         int curEditW = std::max(8, currentW - curLabelW - 6);
-        HWND hStaticCycleActualLabelLocal = GetDlgItem(hContentWnd, IDC_STATIC_CYCLE_ACTUAL_LABEL);
-        if (hStaticCycleActualLabelLocal && IsWindow(hStaticCycleActualLabelLocal)) {
-            hdwp = DeferWindowPos(hdwp, hStaticCycleActualLabelLocal, NULL, x + 4, cycleY, curLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        if (hEditCurrentCycleTime && IsWindow(hEditCurrentCycleTime)) {
-            hdwp = DeferWindowPos(hdwp, hEditCurrentCycleTime, NULL, x + 4 + curLabelW + 6, cycleY, curEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        x += currentW;
+        HWND hLbl = GetDlgItem(hContentWnd, IDC_STATIC_CYCLE_ACTUAL_LABEL);
+        if (hLbl && IsWindow(hLbl))
+            hdwp = DeferWindowPos(hdwp, hLbl, NULL, x + 4, cycleY1, curLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (hEditCurrentCycleTime && IsWindow(hEditCurrentCycleTime))
+            hdwp = DeferWindowPos(hdwp, hEditCurrentCycleTime, NULL, x + 4 + curLabelW + 6, cycleY1, curEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
 
-        // WKC
-        int wkcLabelW = 40;
-        int wkcEditW = std::max(8, wkcW - wkcLabelW - 6);
-        HWND hStaticCycleWKCLabelLocal = GetDlgItem(hContentWnd, IDC_STATIC_CYCLE_WKC_LABEL);
-        if (hStaticCycleWKCLabelLocal && IsWindow(hStaticCycleWKCLabelLocal)) {
-            hdwp = DeferWindowPos(hdwp, hStaticCycleWKCLabelLocal, NULL, x + 4, cycleY, wkcLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        if (hEditWKC && IsWindow(hEditWKC)) {
-            hdwp = DeferWindowPos(hdwp, hEditWKC, NULL, x + 4 + wkcLabelW + 6, cycleY, wkcEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        x += wkcW;
+        int cycleY2 = cycleY1 + 22 + LayoutConfig::vpad;
 
-        // PDO_sent
-        int pdoLabelW = 70;
-        int pdoEditW = std::max(8, pdoW - pdoLabelW - 6);
-        HWND hStaticPDOSentLocal = GetDlgItem(hContentWnd, IDC_STATIC_PDO_SENT_LABEL);
-        if (hStaticPDOSentLocal && IsWindow(hStaticPDOSentLocal)) {
-            hdwp = DeferWindowPos(hdwp, hStaticPDOSentLocal, NULL, x + 4, cycleY, pdoLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        if (hEditPDOSent && IsWindow(hEditPDOSent)) {
-            hdwp = DeferWindowPos(hdwp, hEditPDOSent, NULL, x + 4 + pdoLabelW + 6, cycleY, pdoEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        x += pdoW;
+        // --- Row 2: PDOProc | WKC | MMF (weighted columns) ---
+        x = rowX;
 
-        // Buttons area - Left aligned after controls
-        int btnX = x + cycleLayout.buttonOffset;
-        if (hBtnPDOSentStatus && IsWindow(hBtnPDOSentStatus)) hdwp = DeferWindowPos(hdwp, hBtnPDOSentStatus, NULL, btnX, cycleY, cycleLayout.statusBtnW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        btnX += cycleLayout.statusBtnW + cycleLayout.buttonGap;
-        // Position the Auto Window toggle button to the right of the PDO status button
-        if (hBtnAutoWindow && IsWindow(hBtnAutoWindow)) hdwp = DeferWindowPos(hdwp, hBtnAutoWindow, NULL, btnX, cycleY, cycleLayout.autoBtnW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        btnX += cycleLayout.autoBtnW + cycleLayout.buttonGap;
-        // Only reposition ClearStatus here if it is a child of the main content window
-        if (hBtnClearStatus && IsWindow(hBtnClearStatus) && GetParent(hBtnClearStatus) == hContentWnd) hdwp = DeferWindowPos(hdwp, hBtnClearStatus, NULL, btnX, cycleY, 100, 22, SWP_NOZORDER | SWP_NOACTIVATE);
-        btnX += 100 + 8;
+        // PDOProc frequency (col 0)
+        int pdoProcLabelW = 90;
+        int pdoProcEditW = std::max(8, colW[0] - pdoProcLabelW - 6);
+        hLbl = GetDlgItem(hContentWnd, IDC_STATIC_PDO_PROC_LABEL);
+        if (hLbl && IsWindow(hLbl))
+            hdwp = DeferWindowPos(hdwp, hLbl, NULL, x + 4, cycleY2, pdoProcLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (hEditPdoProcFreq && IsWindow(hEditPdoProcFreq))
+            hdwp = DeferWindowPos(hdwp, hEditPdoProcFreq, NULL, x + 4 + pdoProcLabelW + 6, cycleY2, pdoProcEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += colW[0];
+
+        // WKC (col 1) — wider label to prevent wrapping
+        int wkcLabelW = 130;
+        int wkcEditW = std::max(8, colW[1] - wkcLabelW - 6);
+        hLbl = GetDlgItem(hContentWnd, IDC_STATIC_CYCLE_WKC_LABEL);
+        if (hLbl && IsWindow(hLbl))
+            hdwp = DeferWindowPos(hdwp, hLbl, NULL, x + 4, cycleY2, wkcLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (hEditWKC && IsWindow(hEditWKC))
+            hdwp = DeferWindowPos(hdwp, hEditWKC, NULL, x + 4 + wkcLabelW + 6, cycleY2, wkcEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        x += colW[1];
+
+        // MMF frequency (col 2) — wider label to prevent wrapping
+        int pdoLabelW = 100;
+        int pdoEditW = std::max(8, colW[2] - pdoLabelW - 6);
+        hLbl = GetDlgItem(hContentWnd, IDC_STATIC_PDO_SENT_LABEL);
+        if (hLbl && IsWindow(hLbl))
+            hdwp = DeferWindowPos(hdwp, hLbl, NULL, x + 4, cycleY2, pdoLabelW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
+        if (hEditPDOSent && IsWindow(hEditPDOSent))
+            hdwp = DeferWindowPos(hdwp, hEditPDOSent, NULL, x + 4 + pdoLabelW + 6, cycleY2, pdoEditW, 22, SWP_NOZORDER | SWP_NOACTIVATE);
 
         // Commit deferred positions
         if (hdwp) EndDeferWindowPos(hdwp);
-    
-        // Reposition Manual/Auto Mode buttons below the Status Clear button
     }
 
     // 2) ESI row: actual positioning is deferred until after SDO controls
@@ -2247,6 +2352,11 @@ void MainWindow::ReflowMainControls()
         RECT rc; GetWindowRect(hChkStartupAutoSeq, &rc);
         POINT pt = { rc.left, rc.top }; ScreenToClient(hContentWnd, &pt);
         SafeSetPos(hChkStartupAutoSeq, NULL, left + chkW + 8, pt.y, chkW, chkH, SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (hChkMMFPoseOutput && IsWindow(hChkMMFPoseOutput)) {
+        RECT rc; GetWindowRect(hChkMMFPoseOutput, &rc);
+        POINT pt = { rc.left, rc.top }; ScreenToClient(hContentWnd, &pt);
+        SafeSetPos(hChkMMFPoseOutput, NULL, left + (chkW + 8) * 2, pt.y, chkW, chkH, SWP_NOZORDER | SWP_NOACTIVATE);
     }
     if (hListSlaves) {
         // 設定 list 的 X 為 left（維持左側標籤列對齊），寬度更新為計算後的 listWidth
@@ -2584,7 +2694,9 @@ void MainWindow::ReflowPDOControls(int clientW, int &contentH_local, int left) {
     if (pdoWidth < 300) pdoWidth = 300;
     pdoDisplay.ResizeWidth(pdoWidth);
     pdoDisplay.SetTop(pdoTop);
-    pdoDisplay.RebuildPDOControls();
+    // ResizeWidth already repositions all PDO item controls; do NOT call
+    // RebuildPDOControls here — it would destroy/recreate every HWND and
+    // lose the live display values.
     ApplyAutoProcedureUiLockState();
     if ((pdoTop + pdoDisplay.GetHeight()) > contentH_local) contentH_local = pdoTop + pdoDisplay.GetHeight();
 }

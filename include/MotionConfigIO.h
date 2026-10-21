@@ -10,6 +10,7 @@ namespace MotionConfigIO {
         bool usedDefaultTemplate = false;
         bool repairedInvalidValues = false;
         bool rewroteTargetFile = false;
+        bool restartRequired = false;
         std::vector<std::string> messages;
     };
 
@@ -43,8 +44,10 @@ namespace MotionConfigIO {
                                        const std::wstring &filenameW,
                                        std::string &outLoadedFilenameUtf8);
 
-    // Load motion.xml with recovery. Missing/corrupt files fall back to motion.default.xml,
-    // and unreasonable values are replaced by defaults from that template before returning.
+    // Load motion.xml with recovery. Missing/corrupt files or unreasonable values
+    // trigger a rebuild from built-in defaults. When rebuild occurs, the file is
+    // rewritten, diagnostics->restartRequired is set, and the function returns false
+    // (caller must abort and prompt the user to restart the application).
     bool LoadMotionCacheFromFileAtPathWithDefaults(std::map<int, std::vector<std::vector<std::wstring>>> &cacheOut,
                                                    const std::wstring &filenameW,
                                                    std::string &outLoadedFilenameUtf8,

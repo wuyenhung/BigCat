@@ -85,54 +85,6 @@ void RecordDiagnostic(MotionConfigIO::MotionCacheLoadDiagnostics *diagnostics, c
     if (diagnostics) diagnostics->messages.push_back(message);
 }
 
-bool IsPrimaryMotionCacheFile(const std::wstring &filenameW)
-{
-    const std::wstring filename = std::filesystem::path(filenameW).filename().wstring();
-    return !_wcsicmp(filename.c_str(), L"motion.xml");
-}
-
-bool IsDefaultMotionCacheTemplate(const std::wstring &filenameW)
-{
-    const std::wstring filename = std::filesystem::path(filenameW).filename().wstring();
-    return !_wcsicmp(filename.c_str(), L"motion.default.xml");
-}
-
-std::wstring GetAdjacentMotionDefaultTemplatePath(const std::wstring &filenameW)
-{
-    const std::filesystem::path requested(filenameW);
-    if (!requested.has_parent_path()) return std::wstring();
-    return (requested.parent_path() / L"motion.default.xml").wstring();
-}
-
-std::wstring ResolveMotionDefaultTemplatePath(const std::wstring &filenameW)
-{
-    const std::wstring adjacentTemplate = GetAdjacentMotionDefaultTemplatePath(filenameW);
-    if (!adjacentTemplate.empty() && _wcsicmp(adjacentTemplate.c_str(), filenameW.c_str()) != 0 && FileExists(adjacentTemplate)) {
-        return adjacentTemplate;
-    }
-
-    wchar_t modulePath[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, modulePath, MAX_PATH) > 0) {
-        std::filesystem::path runtimeTemplate(modulePath);
-        runtimeTemplate = runtimeTemplate.parent_path() / L"Par" / L"motion.default.xml";
-        const std::wstring runtimeTemplateW = runtimeTemplate.wstring();
-        if (_wcsicmp(runtimeTemplateW.c_str(), filenameW.c_str()) != 0 && FileExists(runtimeTemplateW)) {
-            return runtimeTemplateW;
-        }
-    }
-
-    return std::wstring();
-}
-
-void SyncMotionDefaultTemplateSnapshot(const std::wstring &filenameW, const std::string &xml)
-{
-    if (!IsPrimaryMotionCacheFile(filenameW) || IsDefaultMotionCacheTemplate(filenameW)) return;
-    const std::wstring templatePath = GetAdjacentMotionDefaultTemplatePath(filenameW);
-    if (templatePath.empty() || _wcsicmp(templatePath.c_str(), filenameW.c_str()) == 0) return;
-    if (!EnsureParentDirectoryExists(templatePath)) return;
-    WriteUtf8TextFile(templatePath, xml);
-}
-
 bool ParseMotionCacheDocument(const tinyxml2::XMLDocument &doc, MotionCache &cacheOut)
 {
     const tinyxml2::XMLElement *root = doc.FirstChildElement("MotionCache");
@@ -254,21 +206,17 @@ bool MergeMotionCacheWithDefaults(MotionCache &cache,
 {
     bool modified = false;
 
-    for (const auto &entry : defaults) {
-        const int slaveIndex = entry.first;
-        const MotionCacheRows &defaultRows = entry.second;
+    // Only validate/repair slaves that already exist in the loaded cache.
+    // Do NOT add slaves that are only in the built-in defaults — that case
+    // is handled separately when the entire file is missing/corrupt.
+    for (auto &cacheEntry : cache) {
+        const int slaveIndex = cacheEntry.first;
+        MotionCacheRows &existingRows = cacheEntry.second;
 
-        auto cacheIt = cache.find(slaveIndex);
-        if (cacheIt == cache.end()) {
-            cache[slaveIndex] = defaultRows;
-            modified = true;
-            RecordDiagnostic(diagnostics,
-                             "slave " + std::to_string(slaveIndex) +
-                             " missing; restored from default template");
-            continue;
-        }
+        auto defaultsIt = defaults.find(slaveIndex);
+        if (defaultsIt == defaults.end()) continue;
 
-        const MotionCacheRows &existingRows = cacheIt->second;
+        const MotionCacheRows &defaultRows = defaultsIt->second;
         MotionCacheRows mergedRows;
         mergedRows.reserve(existingRows.size() + defaultRows.size());
         std::set<std::wstring> handledIndexes;
@@ -282,7 +230,7 @@ bool MergeMotionCacheWithDefaults(MotionCache &cache,
                 RecordDiagnostic(diagnostics,
                                  "slave " + std::to_string(slaveIndex) +
                                  " missing " + CoreHelpers::WideToUtf8(paramIndex) +
-                                 "; restored from default template");
+                                 "; restored from built-in defaults");
                 continue;
             }
 
@@ -304,7 +252,7 @@ bool MergeMotionCacheWithDefaults(MotionCache &cache,
             RecordDiagnostic(diagnostics,
                              "slave " + std::to_string(slaveIndex) +
                              " invalid " + CoreHelpers::WideToUtf8(paramIndex) +
-                             "; restored from default template");
+                             "; restored from built-in defaults");
         }
 
         for (const auto &existingRow : existingRows) {
@@ -317,7 +265,7 @@ bool MergeMotionCacheWithDefaults(MotionCache &cache,
             modified = true;
         }
 
-        cacheIt->second = std::move(mergedRows);
+        existingRows = std::move(mergedRows);
     }
 
     return modified;
@@ -465,6 +413,40 @@ bool LoadMotionCacheFromFileAtPath(std::map<int, std::vector<std::vector<std::ws
     return true;
 }
 
+// Build the built-in default motion cache (6 slaves, DS_P100E-7 factory defaults).
+// This replaces the former motion.default.xml file dependency.
+MotionCache BuildHardcodedDefaultMotionCache()
+{
+    // Helper: create one slave's default rows. direction=0 for odd slaves, 1 for even.
+    auto makeSlaveRows = [](int slaveIndex) {
+        MotionCacheRows rows;
+        const wchar_t* dirStr = (slaveIndex % 2 == 0) ? L"1" : L"0";
+        // clang-format off
+        rows.push_back({L"P0", L"Device Name",              L"STRING", L"DS_P100E-7",               L"Unit",       L"裝置名稱 ESI檔=DVS_ETHCAT_V1.11.xml"});
+        rows.push_back({L"P1", L"Scaling Factor numerator", L"LREAL",  L"0.0000274658203125",       L"Degree/INC", L"編碼器分子比例"});
+        rows.push_back({L"P2", L"Motor rotation direction", L"BOOL",   dirStr,                       L"Bit",        L"電機轉動方向"});
+        rows.push_back({L"P3", L"Maximum Velocity",         L"LREAL",  L"180",                       L"Unit/s",     L"最大速度"});
+        rows.push_back({L"P4", L"Maximum Acceleration",     L"LREAL",  L"900",                       L"Unit/s2",    L"最大加速度"});
+        rows.push_back({L"P5", L"Maximum Deceleration",     L"LREAL",  L"900",                       L"Unit/s2",    L"最大減速度"});
+        rows.push_back({L"P6", L"Jerk",                     L"LREAL",  L"1800",                      L"Unit/s3",    L"加加速度"});
+        rows.push_back({L"P7", L"Manual Velocity(Fast)",    L"LREAL",  L"10",                        L"Unit/s",     L"手動快速"});
+        rows.push_back({L"P8", L"Manual Velocity(Slow)",    L"LREAL",  L"5",                         L"Unit/s",     L"手動慢速"});
+        rows.push_back({L"P9", L"Minimum Position Limit",   L"LREAL",  L"-65",                       L"Unit",       L"最小位置"});
+        rows.push_back({L"P10",L"Maximum Position Limit",   L"LREAL",  L"65",                        L"Unit",       L"最大位置"});
+        rows.push_back({L"P11",L"Positive Torque Limit",    L"UINT",   L"1000",                      L"0.0%",       L"正扭力限制(依據設定的電機轉動方向)"});
+        rows.push_back({L"P12",L"Negative Torque Limit",    L"UINT",   L"700",                       L"0.0%",       L"負扭力限制(依據設定的電機轉動方向)"});
+        rows.push_back({L"P13",L"Home Offset",              L"LREAL",  L"-68",                       L"Unit",       L"原點寫入值"});
+        // clang-format on
+        return rows;
+    };
+
+    MotionCache cache;
+    for (int i = 1; i <= 6; ++i) {
+        cache[i] = makeSlaveRows(i);
+    }
+    return cache;
+}
+
 bool LoadMotionCacheFromFileAtPathWithDefaults(std::map<int, std::vector<std::vector<std::wstring>>> &cacheOut,
                                                const std::wstring &filenameW,
                                                std::string &outLoadedFilenameUtf8,
@@ -473,36 +455,49 @@ bool LoadMotionCacheFromFileAtPathWithDefaults(std::map<int, std::vector<std::ve
     outLoadedFilenameUtf8.clear();
     if (diagnostics) *diagnostics = MotionCacheLoadDiagnostics{};
 
-    MotionCache defaults;
-    const std::wstring defaultTemplatePath = ResolveMotionDefaultTemplatePath(filenameW);
-    const bool haveDefaults = !defaultTemplatePath.empty() && LoadMotionCacheFileToMap(defaultTemplatePath, defaults);
-
     MotionCache loadedCache;
     const bool loadedTarget = LoadMotionCacheFileToMap(filenameW, loadedCache);
+
     if (!loadedTarget) {
-        if (!haveDefaults) return false;
-        loadedCache = defaults;
-        if (diagnostics) diagnostics->usedDefaultTemplate = true;
-        RecordDiagnostic(diagnostics,
-                         "target file missing or corrupt; restored from default template " +
-                         CoreHelpers::WideToUtf8(defaultTemplatePath));
-    }
+        // File missing or corrupt → rebuild from built-in defaults
+        loadedCache = BuildHardcodedDefaultMotionCache();
+        if (diagnostics) {
+            diagnostics->usedDefaultTemplate = true;
+            diagnostics->restartRequired = true;
+        }
+        RecordDiagnostic(diagnostics, "target file missing or corrupt; rebuilt from built-in defaults");
 
-    bool repairedInvalidValues = false;
-    if (loadedTarget && haveDefaults) {
-        repairedInvalidValues = MergeMotionCacheWithDefaults(loadedCache, defaults, diagnostics);
-        if (diagnostics) diagnostics->repairedInvalidValues = repairedInvalidValues;
-    }
-
-    if ((!loadedTarget || repairedInvalidValues) && !filenameW.empty()) {
-        if (EnsureParentDirectoryExists(filenameW)) {
+        if (!filenameW.empty() && EnsureParentDirectoryExists(filenameW)) {
             std::string ignoredSavedFilename;
             if (SaveMotionCacheToFileAtPath(loadedCache, filenameW, ignoredSavedFilename)) {
                 if (diagnostics) diagnostics->rewroteTargetFile = true;
             }
         }
+        // Do NOT populate cacheOut — caller must abort and prompt restart
+        return false;
     }
 
+    // File loaded successfully; validate values against built-in defaults
+    MotionCache defaults = BuildHardcodedDefaultMotionCache();
+    const bool repairedInvalidValues = MergeMotionCacheWithDefaults(loadedCache, defaults, diagnostics);
+    if (diagnostics) diagnostics->repairedInvalidValues = repairedInvalidValues;
+
+    if (repairedInvalidValues) {
+        // Unreasonable values found → rebuild file, require restart
+        if (diagnostics) diagnostics->restartRequired = true;
+        RecordDiagnostic(diagnostics, "unreasonable parameter values repaired from built-in defaults");
+
+        if (!filenameW.empty() && EnsureParentDirectoryExists(filenameW)) {
+            std::string ignoredSavedFilename;
+            if (SaveMotionCacheToFileAtPath(loadedCache, filenameW, ignoredSavedFilename)) {
+                if (diagnostics) diagnostics->rewroteTargetFile = true;
+            }
+        }
+        // Do NOT populate cacheOut — caller must abort and prompt restart
+        return false;
+    }
+
+    // All good — normal path
     cacheOut = std::move(loadedCache);
     outLoadedFilenameUtf8 = CoreHelpers::WideToUtf8(filenameW);
     return true;
@@ -540,7 +535,6 @@ bool SaveMotionCacheToFileAtPath(const std::map<int, std::vector<std::vector<std
 
     std::string xml = oss.str();
     if (!WriteUtf8TextFile(filenameW, xml)) return false;
-    SyncMotionDefaultTemplateSnapshot(filenameW, xml);
     outSavedFilenameUtf8 = CoreHelpers::WideToUtf8(filenameW);
     return true;
 }

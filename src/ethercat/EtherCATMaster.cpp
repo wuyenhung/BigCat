@@ -2,7 +2,7 @@
 // EtherCAT 主站核心實作，包含通訊初始化、即時執行緒、PDO/SDO 交換與狀態管理。
 
 #include "EtherCATMaster.h"
-// #include "core/CpuIsolation.h" - removed as unused
+#include "core/CpuIsolation.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <mutex>
 #include <atomic>
+#include "core/CpuTopology.h"
 
 namespace {
     // Cached list of candidate logical-processor masks (one representative bit per physical core)
@@ -33,10 +34,17 @@ namespace {
     std::mutex g_coreCandidatesMutex;
     std::atomic<size_t> g_coreNextIndex(0);
 
-    // Core reserved for the CyclicTask – must match CpuIsolation TARGET_ETHERCAT_CORE.
+    // Core reserved for the CyclicTask – dynamically resolved from CpuIsolation.
     // All other threads allocated via round-robin must avoid this core.
-    constexpr int    kReservedCore     = 4;
-    constexpr DWORD_PTR kReservedCoreMask = (DWORD_PTR)1 << kReservedCore;
+    DWORD_PTR GetReservedCoreMask() {
+        if (CoreHelpers::CpuIsolation::IsHardIsolationActive()) {
+            DWORD_PTR m = CoreHelpers::CpuIsolation::GetRtCoreMask();
+            if (m) return m;
+        }
+        int rtCore = CoreHelpers::CpuIsolation::GetRtPhysicalCoreIndex();
+        if (rtCore >= 0 && rtCore < 64) return (DWORD_PTR)1 << rtCore;
+        return 0;
+    }
     std::atomic<bool> g_physicalEthercatAllowed{true};
     std::mutex g_physicalEthercatPolicyMutex;
     std::string g_physicalEthercatRestrictionReason;
@@ -51,41 +59,35 @@ namespace {
     DWORD_PTR available = processMask ? processMask : systemMask;
     if (available == 0) return;
 
+    // Intersect with non-RT core mask so per-slave threads are confined to
+    // the near-RT core (adjacent to RT core). This keeps cache locality with
+    // the Cyclic thread and leaves middle cores clean for DCS/game processes.
+    DWORD_PTR nonRtMask = CoreHelpers::CpuIsolation::GetNonRtCoreMask();
+    if (nonRtMask != 0) available &= nonRtMask;
+    if (available == 0) available = processMask ? processMask : systemMask;
+
     // Allow user override via environment variables:
-    //  - WUSOEM_AFFINITY_MASK: hex or decimal mask to further restrict allowed logical processors (e.g. 0x3)
-    //  - WUSOEM_MAX_CORES: decimal max number of physical-core candidates to use (e.g. 2)
-    // Query physical core groups and pick a single logical processor per core
-    DWORD len = 0;
-    BOOL ok = GetLogicalProcessorInformation(NULL, &len);
-    if (!ok && ::GetLastError() == ERROR_INSUFFICIENT_BUFFER) {
-        PSYSTEM_LOGICAL_PROCESSOR_INFORMATION info = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION)malloc(len);
-        if (info) {
-            if (GetLogicalProcessorInformation(info, &len)) {
-                DWORD count = len / sizeof(SYSTEM_LOGICAL_PROCESSOR_INFORMATION);
-                for (DWORD i = 0; i < count; ++i) {
-                    if (info[i].Relationship == RelationProcessorCore) {
-                        DWORD_PTR mask = info[i].ProcessorMask & available;
-                        if (mask) {
-                            // pick lowest set bit within this core mask
-                            DWORD_PTR pick = mask & (~mask + 1);
-                            // Skip the reserved EtherCAT core – it is exclusively
-                            // used by the CyclicTask and protected by CpuIsolation.
-                            if (pick == kReservedCoreMask) continue;
-                            g_coreCandidates.push_back(pick);
-                        }
-                    }
-                }
-            }
-            free(info);
-        }
+    //  - WUSOEM_AFFINITY_MASK: hex or decimal mask to further restrict allowed LPs
+    //  - WUSOEM_MAX_CORES: decimal max number of physical-core candidates to use
+    // Use CpuTopology to query physical core groups and pick one LP per core.
+    CoreHelpers::CpuTopology::EnsurePopulated();
+    const auto& cores = CoreHelpers::CpuTopology::Cores();
+
+    for (const auto& c : cores) {
+        if (c.lps.empty()) continue;
+        DWORD_PTR pick = ((DWORD_PTR)1 << c.lps[0]) & available;
+        if (pick == 0) continue;
+        // Skip the reserved EtherCAT core
+        if (pick & GetReservedCoreMask()) continue;
+        g_coreCandidates.push_back(pick);
     }
-    // No external env overrides: allocator will auto-limit candidates below based on available cores
-    // Fallback: if no info or none matched, pick lowest bits from available
+
+    // Fallback: if no topology data available, pick lowest bits from process mask
     if (g_coreCandidates.empty()) {
         DWORD_PTR m = available;
         while (m) {
             DWORD_PTR pick = m & (~m + 1);
-            if (pick != kReservedCoreMask)
+            if (!(pick & GetReservedCoreMask()))
                 g_coreCandidates.push_back(pick);
             m &= (m - 1); // clear lowest bit
         }
@@ -149,8 +151,9 @@ void EtherCATMaster::AutoTuneAffinityIfNeeded()
     ForceRebuildCoreCandidates();
     lastAffinityTuneMs = now;
     // Log tuning event
-    std::stringstream ss; ss << "AutoTuneAffinity: triggered (maxObs=" << maxObs << "us)";
-    SetError(ss.str());
+    char buf[96];
+    snprintf(buf, sizeof(buf), "AutoTuneAffinity: triggered (maxObs=%luus)", (unsigned long)maxObs);
+    SetError(buf);
 }
 
 EtherCATMaster::EtherCATMaster() 
@@ -173,13 +176,17 @@ EtherCATMaster::EtherCATMaster()
     memset(IOmap, 0, sizeof(IOmap));
     InitializeCriticalSection(&cs);
     InitializeCriticalSection(&pdoDataCS);
+    InitializeCriticalSection(&pdoExchangeCS);
     // initialize SDO lock
     InitializeCriticalSection(&sdoCS);
     // Initialize PDO filter lock
     InitializeCriticalSection(&pdoFilterCS_);
     // Initialize MMF output lock
     InitializeCriticalSection(&mmfOutputCS_);
+    InitializeCriticalSection(&poseMmfCS_);
     InitializeCriticalSection(&simulationCS_);
+    InitializeCriticalSection(&errorCS_);
+    InitializeCriticalSection(&emcyCS_);
     // Initialize high-resolution perf frequency for PDO timing
     LARGE_INTEGER freq; QueryPerformanceFrequency(&freq);
     perfFreqTicks = (uint64_t)freq.QuadPart;
@@ -201,12 +208,17 @@ EtherCATMaster::~EtherCATMaster() {
     Shutdown();
     DeleteCriticalSection(&cs);
     DeleteCriticalSection(&pdoDataCS);
+    DeleteCriticalSection(&pdoExchangeCS);
     // delete SDO lock
     DeleteCriticalSection(&sdoCS);
     // delete PDO filter lock
     DeleteCriticalSection(&pdoFilterCS_);
     // delete MMF output lock
     DeleteCriticalSection(&mmfOutputCS_);
+    DisablePoseMMFOutput();
+    DeleteCriticalSection(&poseMmfCS_);
     DeleteCriticalSection(&simulationCS_);
+    DeleteCriticalSection(&errorCS_);
+    DeleteCriticalSection(&emcyCS_);
 }
 

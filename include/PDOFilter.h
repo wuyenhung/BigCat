@@ -131,6 +131,8 @@ public:
     void SetPositionGain(double iGain) { iPositionGain_ = (iGain > 0.0) ? iGain : 100.0; }
     double GetPositionDeadband() const { return iPositionDeadband_; }
     void SetPositionDeadband(double db) { iPositionDeadband_ = (db >= 0.0) ? db : 0.0; }
+    double GetFeedforwardGain() const { return iFeedforwardGain_; }
+    void SetFeedforwardGain(double g) { iFeedforwardGain_ = (g >= 0.0 && g <= 2.0) ? g : 1.0; }
 
     // 獲取當前狀態 (UI/診斷介面)
     // 這些方法返回「外部可觀察」的運動量（由濾波後位置差分計算），
@@ -160,6 +162,24 @@ public:
     // 設定速度/加速度限制（立即套用）。
     // NOTE: ramp 時間的支援已移除；如需漸變行為，請實作外部節點來逐步調整限制。
     void SetLimitsWithRamp(double maxVel, double maxAccel, double maxDecel);
+
+    // Pose6D 動態行程縮放啟動時，將加減速限制降為設定值的 0.5 倍；
+    // 關閉時恢復為設定值。使用 min() 確保不覆蓋 soft-start 等更嚴格的限制。
+    void ApplyDynamicScalingAccelLimits(bool active) {
+        if (active) {
+            if (!ioDynamicScalingAccelActive_) {
+                ioDynamicScalingAccelActive_ = true;
+                iMaxAcceleration_ = (std::min)(iMaxAcceleration_, iConfiguredMaxAcceleration_ * 0.5);
+                iMaxDeceleration_ = (std::min)(iMaxDeceleration_, iConfiguredMaxDeceleration_ * 0.5);
+            }
+        } else {
+            if (ioDynamicScalingAccelActive_) {
+                ioDynamicScalingAccelActive_ = false;
+                iMaxAcceleration_ = iConfiguredMaxAcceleration_;
+                iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+            }
+        }
+    }
 
     // Query whether the local limiting state machine has engaged
     bool IsLimitingEnabled() const { return ioLimitingEnabled_; }
@@ -210,9 +230,6 @@ public:
     // 觸發 soft-start（緩啟動）
     void TriggerSoftStart();
 
-    // 清除回授錯誤狀態
-    void ClearError();
-
     // soft-start readiness 判定
     bool IsSoftStartReady() const;
 
@@ -229,10 +246,10 @@ public:
     // Release hold-position mode (allow normal setpoint tracking again)
     void ReleaseHoldPosition();
 
-    // 查詢錯誤/soft-start 狀態
-    bool IsError() const;
+    // 查詢 soft-start 狀態
     bool IsSoftStartActive() const { return ioSoftStartActive_; }
-    bool IsTrackingErrorFatal() const { return ioTrackingErrorFatalActive_; }
+    // 是否曾經觸發過軟啟動（用於判斷是否需要 pre-soft-start 輸入鎖定）
+    bool HasSoftStartEverBeenTriggered() const { return ioSoftStartEverTriggered_; }
     
     // === 違規狀態查詢 ===
     // 取得當前違規類型
@@ -300,7 +317,6 @@ private:
     
     bool ioInitialized_;          // 是否已初始化
     double ioPrevActValue_;       // 上一個實際位置，用於估算回放速度
-    bool ioErrorFlag_;            // 錯誤旗標，當回授不傳一致時設為 true
     double iMinPDO_, iMaxPDO_;    // PDO 上下限
     double ioOriginalMinPDO_, ioOriginalMaxPDO_;  // 緩啟動期間保存的原始 PDO 限制
     bool ioSoftStartLimitsAdjusted_;  // 緩啟動是否調整了限制
@@ -317,17 +333,17 @@ private:
     // 緩啟動 (Soft Start) 相關參數
     double ioSoftStartElapsedSec_;   // 緩啟動已經過的時間（秒）
     bool ioSoftStartActive_;         // 緩啟動是否啟用
+    bool ioSoftStartEverTriggered_ = false; // 曾經觸發過軟啟動（用於 pre-soft-start 輸入鎖定）
     // 使用 steady_clock 的起始時間點，以避免主執行緒延遲影響軟啟動計時
     std::chrono::steady_clock::time_point ioSoftStartStartTime_;
     
-    // 新的緩啟動策略：使用 0.2 倍加速度直到位置接近且持續 0.05 秒
     static constexpr double SOFT_START_ACCEL_RATIO = 0.2;  // 緩啟動時使用的加速度比例
     // 緩啟動時最大速度縮減比例 (0..1)。目前使用既有 0.2 再下修 0.7 倍，
     // 也就是軟啟動期間限制為設定最高速度的 14%。
     static constexpr double SOFT_START_VEL_RATIO = 0.14;
     static constexpr double SOFT_START_SETTLE_TIME = 0.20;  // 位置接近後需要持續的時間（秒）
-    static constexpr double SOFT_START_POSITION_TOLERANCE = 0.2;  // 剎車死區閥值（濾波器何時停止移動）
-    static constexpr double SOFT_START_READY_TOLERANCE = 0.5;   // Ready 判斷閥值（須大於剎車死區+伺服追隨誤差）
+    static constexpr double SOFT_START_POSITION_TOLERANCE = 0.08; // 剎車死區閥值（濾波器何時停止移動）
+    static constexpr double SOFT_START_READY_TOLERANCE = 0.15;  // Tightened from 0.5° so the asymptotic settle approach can converge closer to the target before CompleteSoftStart(); prevents the post-soft-start velocity jump
     // 在接近目標時提前減速的因子 (0..1)。已移除可動態設定API，使用內部預設值。
     double ioPositionCloseStartTime_;  // 位置開始接近的時間戳（秒）
     bool ioPositionWasClose_;          // 上一週期位置是否接近
@@ -347,7 +363,8 @@ private:
     double ioAccelRampStartDec_;   // starting decel at beginning of ramp
     double ioAccelRampStartVel_;   // starting velocity at beginning of ramp
     double iPositionGain_;             // P 增益 (Kp)
-    double iPositionDeadband_;         // position error deadband (if abs(distance) < deadband -> no correction)
+    double iPositionDeadband_;         // position error deadband
+    double iFeedforwardGain_;          // 前饋增益 (0..2, 預設 0.7) (if abs(distance) < deadband -> no correction)
 
     // Online trajectory/profile support
     double profileTargetPos_; // 當前正在追蹤的目標位置
@@ -378,14 +395,12 @@ private:
     double ioVelocityViolationStartTime_; // 速度違規開始時間（秒）
     double ioStaleViolationStartTime_;   // Stale 輸入違規開始時間（秒）
     double ioAnomalyViolationStartTime_; // 輸入異常違規開始時間（秒）
-    double ioTrackingErrorStartTime_;    // 偏差值過大開始時間（秒）
-    double ioTrackingErrorReferenceAbs_; // 偏差值基準，用於判斷 0.5 秒內是否有實質縮小
     double ioNoViolationStartTime_;  // 無違規開始時間（秒）
     double ioViolationClearStartTime_; // 違規解除計時開始時間（秒）
     bool ioViolationActive_;         // 當前是否處於違規狀態（本軸）
     bool ioLimitingEnabled_;         // 是否啟用限制（本軸，持續違規後為 true）
     bool ioGlobalLimitingForced_ = false; // 主站強制全域限制旗標：為 true 時 Filter() 不可自動解除 ioLimitingEnabled_
-    bool ioTrackingErrorFatalActive_; // 偏差值過大持續超時，需外部重置才能清除
+    bool ioDynamicScalingAccelActive_ = false; // Pose6D 動態縮放已啟動加減速限制 (0.5x)
     // Direction in which the tracking-error window clamp is currently engaged
     // on the final filter output: +1 = pinned at iActValue+window (output above
     // actual), -1 = pinned at iActValue-window (output below actual), 0 = not
@@ -443,7 +458,7 @@ private:
     double ComputeTrackingErrorWindow() const;
     
     // === 輸入移動平均線 (Input Moving Average) 用於平滑輸入訊號 ===
-    static constexpr size_t INPUT_MA_SIZE = 10;  // 輸入移動平均線窗口大小（降低以提高高頻響應）
+    static constexpr size_t INPUT_MA_SIZE = 4;  // 輸入移動平均線窗口大小（降低以提高高頻響應）
     std::array<double, INPUT_MA_SIZE> ioInputBuffer_;  // 輸入緩衝區
     size_t ioInputBufferIndex_;              // 緩衝區當前索引
     size_t ioInputBufferCount_;              // 緩衝區已填充數量
@@ -451,8 +466,6 @@ private:
     // 正常運轉預設使用 15 度偏差上限，soft-start 期間收緊到 5 度。
     static constexpr double TRACKING_ERROR_SOFT_START_MAX_DEVIATION = 5.0;
     static constexpr double TRACKING_ERROR_MAX_DEVIATION = 15.0;
-    static constexpr double TRACKING_ERROR_FATAL_DELAY_SEC = 0.5;
-    static constexpr double TRACKING_ERROR_SHRINK_TOLERANCE = 0.25;
     
     
     // PT2 filter removed: previous implementation used a 2nd-order lowpass

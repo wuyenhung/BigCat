@@ -1,4 +1,4 @@
-#include "EtherCATMaster.h"
+﻿#include "EtherCATMaster.h"
 
 #include <windows.h>
 
@@ -79,14 +79,14 @@ std::vector<PDOChannelDescriptor> CreateStandardCyclicDescriptors()
         descriptors.push_back(std::move(desc));
     };
 
-    add(L"0x6040", 0x6040, 16, true, 0);
-    add(L"0x607A", 0x607A, 32, true, 2);
-    add(L"0x60FF", 0x60FF, 32, true, 6);
-    add(L"0x6071", 0x6071, 16, true, 10);
-    add(L"0x6041", 0x6041, 16, false, 0);
-    add(L"0x6064", 0x6064, 32, false, 2);
-    add(L"0x606C", 0x606C, 32, false, 6);
-    add(L"0x6077", 0x6077, 16, false, 10);
+    add(L"0x6040", 0x6040, 16, true, EtherCATMaster::kPdoOutOff_Controlword);
+    add(L"0x607A", 0x607A, 32, true, EtherCATMaster::kPdoOutOff_TargetPos);
+    add(L"0x60FF", 0x60FF, 32, true, EtherCATMaster::kPdoOutOff_TargetVel);
+    add(L"0x6071", 0x6071, 16, true, EtherCATMaster::kPdoOutOff_TargetTorque);
+    add(L"0x6041", 0x6041, 16, false, EtherCATMaster::kPdoInOff_Statusword);
+    add(L"0x6064", 0x6064, 32, false, EtherCATMaster::kPdoInOff_ActualPos);
+    add(L"0x606C", 0x606C, 32, false, EtherCATMaster::kPdoInOff_ActualVel);
+    add(L"0x6077", 0x6077, 16, false, EtherCATMaster::kPdoInOff_ActualTorque);
     return descriptors;
 }
 
@@ -142,9 +142,9 @@ int main()
         int32_t actualPositionRaw = 0;
         int32_t actualVelocityRaw = 0;
         uint16_t movingStatus = 0;
-        if (!Check(SnapshotI32(master, inBase + 2, actualPositionRaw),
+        if (!Check(SnapshotI32(master, inBase + EtherCATMaster::kPdoInOff_ActualPos, actualPositionRaw),
                    "simulation PID response should expose actual position bytes") ||
-            !Check(SnapshotI32(master, inBase + 6, actualVelocityRaw),
+            !Check(SnapshotI32(master, inBase + EtherCATMaster::kPdoInOff_ActualVel, actualVelocityRaw),
                    "simulation PID response should expose actual velocity bytes") ||
             !Check(ReadSdoU16(master, 0x6041, movingStatus),
                    "simulation PID response should expose moving statusword")) {
@@ -168,9 +168,9 @@ int main()
     uint16_t finalStatus = 0;
     const auto settleDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1400);
     do {
-        if (!Check(SnapshotI32(master, inBase + 2, finalPositionRaw),
+        if (!Check(SnapshotI32(master, inBase + EtherCATMaster::kPdoInOff_ActualPos, finalPositionRaw),
                    "simulation PID response should keep actual position readable") ||
-            !Check(SnapshotI32(master, inBase + 6, finalVelocityRaw),
+            !Check(SnapshotI32(master, inBase + EtherCATMaster::kPdoInOff_ActualVel, finalVelocityRaw),
                    "simulation PID response should keep actual velocity readable")) {
             return EXIT_FAILURE;
         }

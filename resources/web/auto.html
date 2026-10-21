@@ -4,6 +4,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
     <title>AutoWindow Control Panel</title>
     <link rel="icon" href="ka52.ico" type="image/x-icon">
     <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
@@ -126,7 +127,10 @@
         /* Buttons Grid */
         .btn-row {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            /* 用 minmax(0,1fr)：1fr 的預設下限是 min-content，
+               譯文較長的語言（英文單字）會把欄位撐爆、把按鈕推出容器造成版面跑掉；
+               下限鎖 0 之後長單字能在按鈕內換行收斂。 */
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 16px;
             /* more breathing room between buttons */
             flex-shrink: 0;
@@ -151,6 +155,10 @@
             /* larger buttons */
             height: 18vh;
             max-height: 200px;
+            /* 多語系：容得下較長譯文（換行、不撐寬欄位） */
+            min-width: 0;
+            line-height: 1.15;
+            overflow-wrap: anywhere;
         }
 
         .btn:active {
@@ -224,7 +232,8 @@
         /* Status Lamps Grid */
         .status-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            /* 同 .btn-row：minmax(0,1fr) 避免較長譯文把欄位撐寬（見上方說明） */
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: 16px;
             /* match button row gap for visual alignment */
             align-items: stretch;
@@ -257,7 +266,7 @@
         /* Mobile: shrink the lamp label text and ensure it truncates cleanly */
         @media (max-width: 600px) {
             .status-grid {
-                grid-template-columns: 1fr 1fr;
+                grid-template-columns: repeat(2, minmax(0, 1fr));
                 gap: 8px;
             }
 
@@ -349,6 +358,12 @@
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+        }
+
+        /* 多語系：表頭讓較長譯文換行（避免被截字）；數值欄 td 仍維持單行＋省略號 */
+        th {
+            white-space: normal;
+            overflow-wrap: anywhere;
         }
 
         /* Make numeric cells more prominent */
@@ -471,7 +486,9 @@
 
             .btn {
                 padding: 20px 16px;
-                font-size: clamp(20px, 6.5vw, 32px);
+                /* 多語系：手機寬度下 32px 會讓英文單字斷在中間、按鈕高低不一；
+                   壓小字級後英文改以空格處換行，中文 4 字標籤仍維持單行。 */
+                font-size: clamp(17px, 5.2vw, 26px);
                 min-height: 96px;
                 /* even larger targets on phones */
                 height: auto;
@@ -540,12 +557,12 @@
 
         <!-- Status Lamps -->
         <div class="status-grid">
-            <div class="lamp" id="lamp-ethercat">oEtherCatOk</div>
-            <div class="lamp" id="lamp-busy">oBusy</div>
-            <div class="lamp" id="lamp-error">oError</div>
-            <div class="lamp" id="lamp-ready">oReady</div>
-            <div class="lamp" id="lamp-homedone">oHomeDone</div>
-            <div class="lamp" id="lamp-online">oOnline</div>
+            <div class="lamp" id="lamp-ethercat">EtherCAT 正常</div>
+            <div class="lamp" id="lamp-busy">忙碌</div>
+            <div class="lamp" id="lamp-error">錯誤</div>
+            <div class="lamp" id="lamp-ready">就緒</div>
+            <div class="lamp" id="lamp-homedone">原點完成</div>
+            <div class="lamp" id="lamp-online">上線</div>
         </div>
 
         <!-- Data Table -->
@@ -1100,7 +1117,8 @@
                 if (hasSlaves) {
                     for (let i = 0; i < Math.min(slaveCount, 6); i++) {
                         const sw = slaves[i].sw;
-                        if (sw !== 0x1637) allReady = false;
+                        // CiA402 Operation Enabled mask: bits 0-6=0x37 + bit9 Remote
+                        if ((sw & 0x027F) !== 0x0237) allReady = false;
                         if ((sw & 0x0008)) anyError = true; // Bit 3 is Fault
                     }
                 } else {

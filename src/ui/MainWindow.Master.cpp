@@ -74,13 +74,17 @@ bool MainWindow::AreAllSlavesReadyByStatusword() const {
     int slaveCount = master->GetSlaveCount();
     if (slaveCount <= 0) return false;
 
-    const uint32_t readyStatusword = 0x1637u;  // CiA402 Operation Enabled state
+    // CiA402 Operation Enabled: bits 0-6 = 0x37 (SO|QS|OE|VE|no-QS-active),
+    // bit 9 = Remote.  Use a mask so manufacturer-specific bits (10, 12)
+    // and target-reached (10) do not block the ready lamp.
+    constexpr uint32_t kReadyMask  = 0x027Fu;  // bits 0-6 + bit 9
+    constexpr uint32_t kReadyValue = 0x0237u;  // Operation Enabled + Remote
 
     for (int s = 1; s <= slaveCount; ++s) {
         uint32_t statusword = 0;
         bool hasVal = false;
         if (!const_cast<MainWindow*>(this)->MasterGetStatusword6041(s, statusword, hasVal) ||
-            !hasVal || statusword != readyStatusword) {
+            !hasVal || (statusword & kReadyMask) != kReadyValue) {
             return false;
         }
     }
@@ -200,6 +204,13 @@ void MainWindow::MasterStopCyclicOperation() {
 
 void MainWindow::MasterForceSlaveOperational(int slaveIndex, std::string &outLog) {
     if (auto* master = AppController::GetInstance().GetMaster()) master->ForceSlaveOperational((uint16_t)slaveIndex, outLog);
+}
+
+bool MainWindow::MasterAllSlavesOperationalNoAlarm() {
+    if (auto* master = AppController::GetInstance().GetMaster()) {
+        return master->AllSlavesOperationalNoAlarm();
+    }
+    return false;
 }
 
 bool MainWindow::MasterSendMailbox(uint16_t slave, uint8_t* data, int size) {
@@ -326,6 +337,26 @@ uint32_t MainWindow::MasterGetMaxObservedCycleMicros() const {
 void MainWindow::MasterResetMaxObservedCycleMicros() {
     if (auto* master = AppController::GetInstance().GetMaster()) master->ResetMaxObservedCycleMicros();
 }
+uint32_t MainWindow::MasterGetLastSpikePhase() const {
+    if (auto* master = AppController::GetInstance().GetMaster()) return master->GetLastSpikePhase();
+    return 0;
+}
+uint32_t MainWindow::MasterGetLastSpikeCycleUs() const {
+    if (auto* master = AppController::GetInstance().GetMaster()) return master->GetLastSpikeCycleUs();
+    return 0;
+}
+uint32_t MainWindow::MasterGetLastSpikeCommsUs() const {
+    if (auto* master = AppController::GetInstance().GetMaster()) return master->GetLastSpikeCommsUs();
+    return 0;
+}
+uint32_t MainWindow::MasterGetSpikeCount() const {
+    if (auto* master = AppController::GetInstance().GetMaster()) return master->GetSpikeCount();
+    return 0;
+}
+void MainWindow::MasterResetSpikeCounters() {
+    if (auto* master = AppController::GetInstance().GetMaster()) master->ResetSpikeCounters();
+}
+
 uint32_t MainWindow::MasterGetWorkingCounter() const {
     if (auto* master = AppController::GetInstance().GetMaster()) return master->GetWorkingCounter();
     return 0;
@@ -356,9 +387,21 @@ int MainWindow::MasterGetSlaveOutputBytes(int slaveIndex) const {
 bool MainWindow::MasterDetectWatchdogCondition() const {
     auto* master = AppController::GetInstance().GetMaster();
     if (!master) return false;
+
+    // EC_NOFRAME (-1): NIC received no EtherCAT frame at all
+    int32_t rawWkc = master->GetWorkingCounterRaw();
+    if (rawWkc < 0) return true;
+
     uint32_t wkc = master->GetWorkingCounter();
-    auto slaves = master->GetSlaveInfo();
     if (wkc == 0) return true;
+
+    // Partial WKC: some slaves not responding but others still active.
+    // This catches the scenario where WKC drops from expected (e.g. 18)
+    // to a lower non-zero value (e.g. 10) — partial slave failure.
+    uint32_t expected = master->GetExpectedWkc();
+    if (expected > 0 && wkc > 0 && wkc < expected) return true;
+
+    auto slaves = master->GetSlaveInfo();
     for (const auto &s : slaves) { if (s.state == 0x14) return true; }
     return false;
 }

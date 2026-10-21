@@ -1,201 +1,1402 @@
 {
-    "version": "2.0.0",
-    "tasks": [
-        {
-            "label": "CMake: Configure",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\run_cmake.ps1",
-                "-Action",
-                "configure",
-                "-Preset",
-                "default"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}",
-                "env": {
-                    "CTEST_OUTPUT_ON_FAILURE": "1",
-                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
-                }
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "CMake: Build Release",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\run_cmake.ps1",
-                "-Action",
-                "build",
-                "-Preset",
-                "default"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}",
-                "env": {
-                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
-                }
-            },
-            "group": {
-                "kind": "build",
-                "isDefault": true
-            },
-            "problemMatcher": [
-                "$msCompile"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "CTest: Run All",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\run_ctest.ps1",
-                "-BuildDir",
-                "${workspaceFolder}\\build",
-                "-Config",
-                "Release"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": {
-                "kind": "test",
-                "isDefault": true
-            },
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "CTest: Run Smoke",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
-                "-BuildDir",
-                "${workspaceFolder}\\build",
-                "-Config",
-                "Release"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": "test",
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "CMake: Workflow Release",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\run_cmake.ps1",
-                "-Action",
-                "workflow",
-                "-Preset",
-                "default"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}",
-                "env": {
-                    "CTEST_OUTPUT_ON_FAILURE": "1",
-                    "CMAKE_BUILD_PARALLEL_LEVEL": "8"
-                }
-            },
-            "group": "test",
-            "problemMatcher": [
-                "$msCompile"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "Build: Incremental Crash",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\build_incremental-Crash.ps1",
-                "-NonInteractive"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "group": "build",
-            "problemMatcher": [
-                "$msCompile"
-            ],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        },
-        {
-            "label": "Crash: Analyze Latest Dump",
-            "type": "process",
-            "command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "args": [
-                "-NoLogo",
-                "-NoProfile",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-                "${workspaceFolder}\\scripts\\analyze_dump_and_prepare_ai_prompt.ps1",
-                "-WorkspaceRoot",
-                "${workspaceFolder}",
-                "-BuildDir",
-                "${workspaceFolder}\\build"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": [],
-            "presentation": {
-                "reveal": "always",
-                "showReuseMessage": false
-            }
-        }
-    ]
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "CMake: Configure",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_cmake.ps1",
+				"-Action",
+				"configure",
+				"-Preset",
+				"default"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"CTEST_OUTPUT_ON_FAILURE": "1",
+					"CMAKE_BUILD_PARALLEL_LEVEL": "8"
+				}
+			},
+			"problemMatcher": []
+		},
+		{
+			"label": "CMake: Build Release",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_cmake.ps1",
+				"-Action",
+				"build",
+				"-Preset",
+				"default"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"CMAKE_BUILD_PARALLEL_LEVEL": "8"
+				}
+			},
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "CTest: Run All",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_ctest.ps1",
+				"-BuildDir",
+				"${workspaceFolder}\\build",
+				"-Config",
+				"Release"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": {
+				"kind": "test",
+				"isDefault": true
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "CTest: Run Smoke",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+				"-BuildDir",
+				"${workspaceFolder}\\build",
+				"-Config",
+				"Release"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "test",
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "CMake: Workflow Release",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_cmake.ps1",
+				"-Action",
+				"workflow",
+				"-Preset",
+				"default"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}",
+				"env": {
+					"CTEST_OUTPUT_ON_FAILURE": "1",
+					"CMAKE_BUILD_PARALLEL_LEVEL": "8"
+				}
+			},
+			"group": "test",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1",
+				"-NonInteractive"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"group": "build",
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "Crash: Analyze Latest Dump",
+			"type": "process",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_dump_and_prepare_ai_prompt.ps1",
+				"-WorkspaceRoot",
+				"${workspaceFolder}",
+				"-BuildDir",
+				"${workspaceFolder}\\build"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"showReuseMessage": false
+			}
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "${env:SystemRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1",
+				"-NonInteractive"
+			],
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Resolve Crash Symbols",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\resolve_crash.bat"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Kill BigCat processes",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\kill_bigcat.bat"
+			]
+		},
+		{
+			"label": "Force Kill and Delete BigCat",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\force_kill.bat"
+			]
+		},
+		{
+			"label": "Retest filter velocity stability",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\retest.bat"
+			]
+		},
+		{
+			"label": "Copy cdb.exe to project tools",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\copy_cdb.bat"
+			]
+		},
+		{
+			"label": "Copy all cdb tools to project",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"D:\\Wu6Dof\\PROG\\WuBigCat\\build\\copy_cdb_all.bat"
+			]
+		},
+		{
+			"label": "Cleanup temp files",
+			"type": "shell",
+			"command": "cmd.exe",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"del /f D:\\Wu6Dof\\PROG\\WuBigCat\\build\\copy_cdb.bat D:\\Wu6Dof\\PROG\\WuBigCat\\build\\copy_cdb_all.bat 2>nul & echo done"
+			]
+		},
+		{
+			"label": "Quick ETL Analysis",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_quick.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Deep ETL Analysis",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_deep.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "ETL Analysis v3",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_v3.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "ETL Python Analysis",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"-c",
+				"import os; p='D:/Wu6Dof/PROG/WuBigCat/baseline_results/etw/etw_trace_20260613_223621.etl'; s=os.path.getsize(p); print(f'ETL: {p}'); print(f'Size: {s} bytes ({s/1024/1024:.1f} MB)'); print(f'Duration: recorded ~60s with CPU+GeneralProfile'); print(f'WPR version: 10.0.19041 (built-in)'); print(); print('Open in WPA: Start -> Windows Performance Analyzer -> File -> Open'); print('Key graphs: DPC/ISR Duration, CPU Usage (Sampled), Context Switch Count')"
+			],
+			"group": "none"
+		},
+		{
+			"label": "ETW Python Summary",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"${workspaceFolder}\\scripts\\etw_summary.py"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Python Version Test",
+			"type": "shell",
+			"command": "d:\\Wu6Dof\\PROG\\WuBigCat\\.venv\\Scripts\\python.exe",
+			"args": [
+				"-c",
+				"import sys; print(sys.version)"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Sys Python Test",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"python -c \"import sys; print(sys.version)\""
+			],
+			"group": "none"
+		},
+		{
+			"label": "Check: Package Managers",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"where winget >nul 2>&1 && echo winget:YES || echo winget:NO & where choco >nul 2>&1 && echo choco:YES || echo choco:NO & where wpa >nul 2>&1 && echo wpa:YES || echo wpa:NO & where xperf >nul 2>&1 && echo xperf:YES || echo xperf:NO"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Search: ADK/PerfTools",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget search \"performance toolkit\" 2>nul & winget search \"windows adk\" 2>nul & winget search \"perfview\" 2>nul"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Search: ADK in winget",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget search -q adk --source winget 2>nul & echo --- & winget search -q perfview --source winget 2>nul"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Install: PerfView",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget install Microsoft.PerfView --accept-package-agreements --accept-source-agreements -h 2>&1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: PerfView CLI",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"where perfview & perfview /?"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: PerfView AcceptEULA",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"perfview /AcceptEULA /?"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: PerfView NoGui test",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"perfview /AcceptEULA /NoGui /?"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: PerfView ETL open",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"perfview /AcceptEULA /NoGui /ProcessFile:\"D:\\Wu6Dof\\PROG\\WuBigCat\\baseline_results\\etw\\analysis\\perfview_report\" \"D:\\Wu6Dof\\PROG\\WuBigCat\\baseline_results\\etw\\etw_trace_20260613_223621.etl\" 2>&1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "PerfView: Find help",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"perfview /AcceptEULA help 2>&1 || perfview /AcceptEULA list 2>&1 || perfview /AcceptEULA commands 2>&1 || echo TRY_OTHER & perfview /AcceptEULA open /? 2>&1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "PerfView: Open ETL (GUI)",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"start \"\" perfview /AcceptEULA \"D:\\Wu6Dof\\PROG\\WuBigCat\\baseline_results\\etw\\etw_trace_20260613_223621.etl\""
+			],
+			"group": "none"
+		},
+		{
+			"label": "Winget: Find Performance Toolkit",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget search -q \"performance toolkit\" --source winget 2>nul & winget search -q \"xperf\" --source winget 2>nul & winget search -q \"wpt\" --source winget 2>nul"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Install: Windows ADK",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget install Microsoft.WindowsADK --accept-package-agreements --accept-source-agreements -h 2>&1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Search: Windows SDK xperf",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"winget search -q \"windows sdk\" --source winget 2>nul & echo --- & dir /s /b \"C:\\Program Files*\\xperf.exe\" 2>nul & echo --- & dir /s /b \"C:\\Program Files*\\Windows Kits\\*\\xperf.exe\" 2>nul"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Capture: 5s Trace",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\capture_etw_trace.ps1",
+				"-DurationSec",
+				"5"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli.ps1",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v2",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v3",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v4",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v5",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Debug: driver parse",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-Command",
+				"$line = '       24   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00,         0   0.00, CLASSPNP.SYS'; $parts = $line -split ','; Write-Host 'Count:' $parts.Count; Write-Host 'Module:' $parts[-1].Trim(); Write-Host 'CPU0:' ($parts[0] -split '\\s+')[0]"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v6",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Debug Parse Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\build\\debug_parse.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: analyze_etl_cli v7",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_231150.etl",
+				"-ThresholdUs",
+				"100"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Test: Capture + Analyze",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\capture_etw_trace.ps1",
+				"-DurationSec",
+				"5"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Analyze: Existing ETL",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\analyze_etl_cli.ps1",
+				"-EtlPath",
+				"${workspaceFolder}\\baseline_results\\etw\\etw_trace_20260613_232138.etl"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Quick Analyze: Small ETL",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\capture_etw_trace.ps1",
+				"-DurationSec",
+				"5"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+				"-SkipBuild"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+				"-SkipBuild"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+				"-SkipBuild"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Build: Incremental Crash",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Smoke Test",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\run_smoke_tests.ps1",
+				"-SkipBuild"
+			],
+			"group": "none"
+		},
+		{
+			"label": "Monitor: CPU4 Contention",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\monitor_cpu4_contention.ps1",
+				"-IntervalSec",
+				"2",
+				"-DurationMin",
+				"10",
+				"-HighThreshold",
+				"10"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Check: NIC IRQ Interference",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\check_nic_irq_deep.ps1"
+			],
+			"problemMatcher": [],
+			"group": "none"
+		},
+		{
+			"label": "Optimize: Win11 Realtime NIC",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\optimize_win11_realtime.ps1"
+			],
+			"isBackground": false,
+			"group": "none"
+		},
+		{
+			"label": "Polish: Clean Comments",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\_polish.ps1"
+			]
+		},
+		{
+			"label": "Delete: Polish Script",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-Command",
+				"Remove-Item 'd:\\Wu6Dof\\PROG\\WuBigCat\\scripts\\_polish.ps1' -Force"
+			]
+		},
+		{
+			"label": "Polish: Remove ?? Artifacts",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\_polish.ps1"
+			]
+		},
+		{
+			"label": "Delete: Polish Script 2",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-Command",
+				"Remove-Item 'd:\\Wu6Dof\\PROG\\WuBigCat\\scripts\\_polish.ps1' -Force; Write-Host 'deleted'"
+			]
+		},
+		{
+			"label": "Polish: Final ?? Cleanup",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\_polish.ps1"
+			]
+		},
+		{
+			"label": "Delete: Polish Script 3",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-Command",
+				"Remove-Item 'd:\\Wu6Dof\\PROG\\WuBigCat\\scripts\\_polish.ps1' -Force"
+			]
+		},
+		{
+			"label": "Cleanup: Remove Temp Scripts",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-Command",
+				"Get-ChildItem 'd:\\Wu6Dof\\PROG\\WuBigCat\\scripts\\_*' | Remove-Item -Force; Write-Host 'Temp scripts cleaned'"
+			]
+		},
+		{
+			"label": "Build: Force",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoLogo",
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-File",
+				"${workspaceFolder}\\scripts\\build_incremental-Crash.ps1",
+				"-AutoKill:$false"
+			]
+		},
+		{
+			"label": "Build: Direct Ninja",
+			"type": "shell",
+			"command": "cmd",
+			"args": [
+				"/d",
+				"/s",
+				"/c",
+				"\"cd /d d:\\Wu6Dof\\PROG\\WuBigCat\\build && ninja BigCat\""
+			]
+		},
+		{
+			"label": "Build: Ninja BigCat",
+			"type": "shell",
+			"command": "cmake",
+			"args": [
+				"--build",
+				"d:\\Wu6Dof\\PROG\\WuBigCat\\build",
+				"--config",
+				"Release",
+				"--target",
+				"BigCat",
+				"--parallel",
+				"8"
+			]
+		}
+	]
 }

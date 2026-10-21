@@ -1,4 +1,5 @@
 #include "core/AppConfig.h"
+#include "core/Cia402Mode.h"
 
 #include <windows.h>
 
@@ -15,7 +16,10 @@ constexpr wchar_t kSectionLogging[] = L"Logging";
 constexpr wchar_t kSectionNetwork[] = L"Network";
 constexpr wchar_t kSectionStartup[] = L"Startup";
 constexpr wchar_t kSectionServer[] = L"Server";
+constexpr wchar_t kSectionMotion[] = L"Motion";
 constexpr wchar_t kSectionPdoFilter[] = L"PDOFilter";
+constexpr wchar_t kSectionSafety[] = L"Safety";
+constexpr wchar_t kSectionCompat[] = L"Compat";
 
 constexpr wchar_t kKeyEnableStatusLog[] = L"EnableStatusLog";
 constexpr wchar_t kKeyAutoSelectedAdapter[] = L"AutoSelectedAdapter";
@@ -23,10 +27,22 @@ constexpr wchar_t kKeyShowMainWindow[] = L"ShowMainWindow";
 constexpr wchar_t kKeyAutoTrigger[] = L"AutoTrigger";
 constexpr wchar_t kKeyEnableLocalHttpServer[] = L"EnableLocalHttpServer";
 constexpr wchar_t kKeyServerPassword[] = L"Password";
+constexpr wchar_t kKeyOperationMode[] = L"OperationMode";
+constexpr wchar_t kKeyExternalEstopEnabled[] = L"ExternalEstopEnabled";
+constexpr wchar_t kKeyReverseJogSpeedThreshold[] = L"ReverseJogSpeedThreshold";
+constexpr wchar_t kKeyReverseJogTorqueThreshold[] = L"ReverseJogTorqueThreshold";
 constexpr wchar_t kKeyVelocityThresholdScale[] = L"DynamicVelocityThresholdScale";
 constexpr wchar_t kKeyAccelerationThresholdScale[] = L"DynamicAccelerationThresholdScale";
 constexpr wchar_t kKeyVelocityViolationDelaySec[] = L"DynamicVelocityViolationDelaySec";
 constexpr wchar_t kKeyAccelerationViolationDelaySec[] = L"DynamicAccelerationViolationDelaySec";
+constexpr wchar_t kKeyBlockSystemShutdown[] = L"BlockSystemShutdown";
+constexpr wchar_t kKeyKeepSystemAwake[] = L"KeepSystemAwake";
+constexpr wchar_t kKeyBlockWindowsUpdateAutoReboot[] = L"BlockWindowsUpdateAutoReboot";
+constexpr wchar_t kKeyForceWin10Mode[] = L"ForceWin10Mode";
+constexpr wchar_t kSectionMmf[] = L"MMF";
+constexpr wchar_t kKeyMmf1InputName[] = L"InputName";
+constexpr wchar_t kBuiltinMmfInputPose6D[] = L"OUTPUT_MMF_6DOF";
+constexpr wchar_t kBuiltinMmfInputDeg[] = L"OUTPUT_MMF_DEG";
 
 bool IsMissingKey(const std::wstring& iniPath, const wchar_t* section, const wchar_t* key) {
     wchar_t buffer[64] = {0};
@@ -94,10 +110,19 @@ bool EnsureDefaultIniFile() {
     ok = WriteDefaultIfMissing(iniPath, kSectionStartup, kKeyAutoTrigger, L"1") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionServer, kKeyEnableLocalHttpServer, L"0") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionServer, kKeyServerPassword, L"1234") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionMotion, kKeyOperationMode, L"CSP") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionMotion, kKeyExternalEstopEnabled, L"1") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionMotion, kKeyReverseJogSpeedThreshold, L"-2.5") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionMotion, kKeyReverseJogTorqueThreshold, L"400") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionPdoFilter, kKeyVelocityThresholdScale, L"0.60") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionPdoFilter, kKeyAccelerationThresholdScale, L"1.20") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionPdoFilter, kKeyVelocityViolationDelaySec, L"0.50") && ok;
     ok = WriteDefaultIfMissing(iniPath, kSectionPdoFilter, kKeyAccelerationViolationDelaySec, L"0.20") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionMmf, kKeyMmf1InputName, kBuiltinMmfInputPose6D) && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionSafety, kKeyBlockSystemShutdown, L"1") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionSafety, kKeyKeepSystemAwake, L"1") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionSafety, kKeyBlockWindowsUpdateAutoReboot, L"0") && ok;
+    ok = WriteDefaultIfMissing(iniPath, kSectionCompat, kKeyForceWin10Mode, L"0") && ok;
     return ok;
 }
 
@@ -117,6 +142,16 @@ std::wstring ReadServerPassword() {
     return ReadString(kSectionServer, kKeyServerPassword, L"1234");
 }
 
+std::wstring ReadMmf1InputName(const std::wstring& fallback) {
+    const std::wstring value = ReadString(kSectionMmf, kKeyMmf1InputName, L"");
+    // A built-in name stored in the file is treated as "not overridden" so the
+    // mode-dependent default (OUTPUT_MMF_6DOF / OUTPUT_MMF_DEG) still applies.
+    if (value.empty() || value == kBuiltinMmfInputPose6D || value == kBuiltinMmfInputDeg) {
+        return fallback;
+    }
+    return value;
+}
+
 PdoFilterDynamicViolationConfig ReadPdoFilterDynamicViolationConfig() {
     EnsureDefaultIniFile();
     PdoFilterDynamicViolationConfig config;
@@ -133,6 +168,51 @@ PdoFilterDynamicViolationConfig ReadPdoFilterDynamicViolationConfig() {
         ReadDouble(kSectionPdoFilter, kKeyAccelerationViolationDelaySec, config.accelerationViolationDelaySec),
         config.accelerationViolationDelaySec);
     return config;
+}
+
+int8_t ReadCyclicOperationMode() {
+    const std::wstring iniPath = GetAppIniPath();
+    EnsureDefaultIniFile();
+    wchar_t buffer[16] = {0};
+    GetPrivateProfileStringW(kSectionMotion, kKeyOperationMode, L"CSP", buffer,
+                             static_cast<DWORD>(std::size(buffer)), iniPath.c_str());
+    std::wstring modeStr(buffer);
+    // Case-insensitive comparison
+    for (auto& ch : modeStr) {
+        ch = static_cast<wchar_t>(std::towupper(static_cast<unsigned short>(ch)));
+    }
+    if (modeStr == L"CSV" || modeStr == L"9") {
+        return CoreHelpers::kCia402OperationModeCyclicSyncVelocity;
+    }
+    // Default to CSP (including "CSP", "8", or any unrecognized value)
+    return CoreHelpers::kCia402OperationModeCyclicSyncPosition;
+}
+
+bool ReadExternalEstopEnabled() {
+    return ReadBool(kSectionMotion, kKeyExternalEstopEnabled, true);
+}
+double ReadReverseJogSpeedThreshold() {
+    return ReadDouble(kSectionMotion, kKeyReverseJogSpeedThreshold, -2.5);
+}
+
+double ReadReverseJogTorqueThreshold() {
+    return ReadDouble(kSectionMotion, kKeyReverseJogTorqueThreshold, 400.0);
+}
+
+bool ReadBlockSystemShutdown() {
+    return ReadBool(kSectionSafety, kKeyBlockSystemShutdown, true);
+}
+
+bool ReadKeepSystemAwake() {
+    return ReadBool(kSectionSafety, kKeyKeepSystemAwake, true);
+}
+
+bool ReadBlockWindowsUpdateAutoReboot() {
+    return ReadBool(kSectionSafety, kKeyBlockWindowsUpdateAutoReboot, false);
+}
+
+bool ReadForceWin10Compat() {
+    return ReadBool(kSectionCompat, kKeyForceWin10Mode, false);
 }
 
 } // namespace AppConfig

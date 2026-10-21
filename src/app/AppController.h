@@ -76,8 +76,7 @@ public:
     bool RequestStartAutoProcedure(bool showWindow);
     void RequestStopAutoProcedure();
     bool RequestAutoConnect();
-    bool RequestAutoDownToOrigin(uintptr_t requesterWindow = 0,
-                                 bool notifyAutoWindowHomeReset = false);
+    bool RequestAutoDownToOrigin(uintptr_t requesterWindow = 0);
     bool RequestAutoFaultReset(uintptr_t requesterWindow = 0);
 
     // 單一狀態快照

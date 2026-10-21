@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
     <title>STL 檔案檢視器 - 6DOF 控制</title>
     <link rel="icon" href="ka52.ico" type="image/x-icon">
     <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
@@ -66,6 +67,19 @@
                     <span>外部 MMF 輸入</span>
                 </label>
                 <span class="status-badge manual" id="inputSourceStatus">UI 手動輸入</span>
+            </div>
+
+            <!-- 顯示模型選擇 -->
+            <div class="model-select-row">
+                <div class="model-btn-group" id="modelBtnGroup"></div>
+            </div>
+
+            <!-- 旋翼動畫開關 -->
+            <div class="model-select-row">
+                <label class="input-source-toggle" for="rotorSpinToggle">
+                    <input type="checkbox" id="rotorSpinToggle" checked>
+                    <span>旋翼動畫</span>
+                </label>
             </div>
 
             <!-- 第一行：X Y Z -->
@@ -131,10 +145,12 @@
     </div>
 
     <script>
-        let scene, camera, renderer, mesh, pivot, pivotBase, controls, offsetGroup, rotGroup;
+        let scene, camera, renderer, mesh, pivot, pivotBase, controls, offsetGroup, rotGroup, yawGroup;
+        const DEFAULT_CAMERA_DISTANCE = 185; // 預設視野距離（模型約佔視窗 70%）
+        const DEFAULT_CAMERA_ROTATION = { x: 0.35, y: 0 }; // 預設視野：稍微後方俯瞰（機尾朝 +Z）
         let isDragging = false;
         let previousMousePosition = { x: 0, y: 0 };
-        let cameraRotation = { x: 0, y: 0 };
+        let cameraRotation = { ...DEFAULT_CAMERA_ROTATION };
         let cameraDistance = 100;
         const transformControlIds = ['posX', 'posY', 'posZ', 'rotX', 'rotY', 'rotZ'];
         let useExternalMmfInput = false;
@@ -143,8 +159,18 @@
         let latestMmfPoseValues = null;
 
         // 增量旋轉狀態 - 延遲初始化到 init() 函數中以確保 THREE 已加載
-        let currentAttitude; // 當前姿態
+        let currentAttitude; // 當前姿態 (Pitch/Roll，繞模型幾何中心)
+        let currentYaw;      // 當前 Yaw（繞主旋翼軸；無主旋翼的模型恆為單位四元數）
+        let yawPivotActive = false; // 是否以主旋翼軸為 Yaw 旋轉中心（直升機模型）
         let lastRotX = 0, lastRotY = 0, lastRotZ = 0;  // 上次的旋轉滑桿值
+
+        // 旋翼動畫狀態
+        // 待速轉速（RPM）：ka-52 實機飛行約 350 RPM，此處為使用者設定之待速值；
+        // 如有確切數值可直接改 ROTOR_RPM。
+        const ROTOR_RPM = 160;        // 待速轉速 (RPM)
+        const ROTOR_SPIN_SPEED = 2 * Math.PI * (ROTOR_RPM / 60); // ≈ 16.76 rad/s
+        let rotorSpinEnabled = true;  // 是否啟用主旋翼旋轉動畫
+        let rotorClock = null;        // 旋翼動畫時鐘（init 中建立）
 
         // 增量位移狀態 - 延遲初始化到 init() 函數中以確保 THREE 已加載
         let currentPosition;     // 當前位置 (相對於 pivotBase)
@@ -155,7 +181,9 @@
 
             // 初始化需要 THREE 的全局變量
             currentAttitude = new THREE.Quaternion(); // 當前姿態
+            currentYaw = new THREE.Quaternion();       // 主旋翼軸 Yaw
             currentPosition = new THREE.Vector3();     // 當前位置 (相對於 pivotBase)
+            rotorClock = new THREE.Clock();            // 旋翼動畫時鐘
 
             // 場景設定
             scene = new THREE.Scene();
@@ -174,8 +202,8 @@
             );
 
             // 調整相機位置與目標，讓地面位於視窗底部附近
-            // 假設直升機懸停高度約 50
-            cameraDistance = 150;
+            // 假設直升機懸停高度約 50；距離讓模型約佔視窗 70%
+            cameraDistance = DEFAULT_CAMERA_DISTANCE;
             camera.position.set(0, 60, cameraDistance);
 
             // 渲染器設定
@@ -197,11 +225,14 @@
             ground.receiveShadow = true;
             scene.add(ground);
 
-            // 光源
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+            // 光源（調亮：提高環境光並加入半球光補光）
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.2);
             scene.add(ambientLight);
 
-            const sunLight = new THREE.DirectionalLight(0xffffff, 1.0);
+            const hemiLight = new THREE.HemisphereLight(0xffffff, 0xffffff, 1.0);
+            scene.add(hemiLight);
+
+            const sunLight = new THREE.DirectionalLight(0xffffff, 1.5);
             sunLight.position.set(100, 200, 100);
             sunLight.castShadow = true;
             sunLight.shadow.mapSize.width = 2048;
@@ -222,15 +253,18 @@
             gridHelper.position.y = 0.1;
             scene.add(gridHelper);
 
-            // 座標軸 (世界座標)
-            const axesHelper = new THREE.AxesHelper(30);
-            scene.add(axesHelper);
+            // 座標軸 (世界座標) — 已停用：會與模型混在一起被誤認為雜物
+            // const axesHelper = new THREE.AxesHelper(30);
+            // scene.add(axesHelper);
 
             // 滑鼠控制
             setupMouseControls();
 
             // 輸入來源控制
             setupInputSourceControls();
+
+            // 旋翼動畫開關
+            setupRotorSpinToggle();
 
             // 控制面板事件
             setupControlListeners();
@@ -242,8 +276,11 @@
             // 初始更新相機
             updateCameraPosition();
 
+            // 依檔案名稱建立模型選擇按鈕
+            buildModelButtons();
+
             // 載入預設模型
-            loadDefaultSTL();
+            loadDefaultModel();
 
             animate();
         }
@@ -509,8 +546,11 @@
                 return false;
             }
 
+            // 簡化：MMF 數值直接寫入對應拉桿（含顯示），再走與手動模式
+            // 相同的 updateTransform() 路徑——該路徑已驗證正確，無需
+            // 維護獨立的絕對姿態運算。
             syncTransformInputs(latestMmfPoseValues);
-            updateTransform(latestMmfPoseValues);
+            updateTransform();
             return true;
         }
 
@@ -621,6 +661,17 @@
             updateInputSourceStatus();
         }
 
+        function setupRotorSpinToggle() {
+            const checkbox = document.getElementById('rotorSpinToggle');
+            if (!checkbox) {
+                return;
+            }
+            rotorSpinEnabled = checkbox.checked;
+            checkbox.addEventListener('change', () => {
+                rotorSpinEnabled = checkbox.checked;
+            });
+        }
+
         function setupControlListeners() {
             // 檔案載入（如果有檔案輸入元件才綁定）
 
@@ -648,197 +699,207 @@
 
 
 
-        // 從 ArrayBuffer 建立模型並加入場景（抽出成函式以供檔案選擇與預設載入共用）
-        function loadSTLBuffer(buffer) {
-            const geometry = parseSTL(buffer);
+        // 顯示模型設定：檔案名稱 -> 懸停高度（顯示名稱依檔名產生）
+        const MODEL_CONFIG = {
+            'lamborghini.glb': { hoverY: 20 },
+            'Su-57.glb': { hoverY: 50 },
+            // 直升機：rotorHub 為主旋翼軸在模型本地座標的位置，
+            // Yaw 會以主旋翼軸為中心旋轉（機體繞主旋翼軸擺動）。
+            // rotors: 旋翼節點名稱（GLB 內），speed 為角速度倍率、dir 為方向、
+            // axis 為旋轉軸（'x'|'y'|'z'，預設 'y'）；
+            // ka-52 為共軸雙旋翼（上下反向旋轉）；AH-64 主旋翼繞本地 Z（≈世界 Y）、
+            // 尾旋翼繞本地 X。主旋翼夾（node_id67）同軸同速跟轉。
+            // 註：尾槳轂 node_id63 原點離軸 0.327，不能放進 rotors 直接轉（會繞遠點公轉）；
+            //     改在載入後 attach 到 TailRotor 底下，隨尾旋翼原地轉（見 loadGLBModel）。
+            'ka-52.glb': { hoverY: 50, forwardZ: 0, rotorHub: { x: -0.1643, y: 2.2044, z: -0.0075 },
+                rotors: [
+                    { name: 'MainRotorUpper', speed: 1.0, dir: -1 },
+                    { name: 'MainRotorLower', speed: 1.0, dir: 1 }
+                ] },
+            'AH-64.glb': { hoverY: 50, forwardZ: 0, rotorHub: { x: 0.0, y: 0.1004, z: 0.0846 },
+                rotors: [
+                    { name: 'MainRotor', axis: 'z', speed: 1.0, dir: 1 },
+                    { name: 'node_id67', axis: 'z', speed: 1.0, dir: 1 },
+                    { name: 'TailRotor', axis: 'x', speed: 4.0, dir: 1 }
+                ] }
+        };
+        const DEFAULT_MODEL = 'ka-52.glb';
 
+        // 依檔案名稱建立模型按鈕（顯示名稱 = 去掉 .glb 副檔名的檔名）
+        function buildModelButtons() {
+            const group = document.getElementById('modelBtnGroup');
+            if (!group) return;
+            group.innerHTML = '';
+            Object.keys(MODEL_CONFIG).forEach((fileName) => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'model-btn';
+                btn.dataset.model = fileName;
+                btn.textContent = fileName.replace(/\.glb$/i, '');
+                btn.onclick = () => selectModel(fileName, btn);
+                if (fileName === DEFAULT_MODEL) btn.classList.add('active');
+                group.appendChild(btn);
+            });
+        }
+
+        // 移除目前場景中的模型（重設 pivot 結構）
+        function removeCurrentModel() {
             if (pivot) {
                 scene.remove(pivot);
                 pivot = null;
                 mesh = null;
                 offsetGroup = null;
                 rotGroup = null;
+                yawGroup = null;
+                yawPivotActive = false;
             }
+        }
 
-            const material = new THREE.MeshStandardMaterial({
-                color: 0xc0c0c0,
-                metalness: 0.5,
-                roughness: 0.4,
-                side: THREE.DoubleSide
-            });
-
-            mesh = new THREE.Mesh(geometry, material);
-            mesh.castShadow = true;
-            mesh.receiveShadow = true;
-
-            geometry.computeBoundingBox();
-            const center = new THREE.Vector3();
-            geometry.boundingBox.getCenter(center);
-            geometry.translate(-center.x, -center.y, -center.z);
-
-            const size = new THREE.Vector3();
-            geometry.boundingBox.getSize(size);
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const targetSize = 40;
-            const scale = targetSize / maxDim;
-            // 放大兩倍以增加物件視覺大小
-            const finalScale = scale * 3.0;
-            mesh.scale.set(finalScale, finalScale, finalScale);
-
-            // 建立三層結構：pivot (world anchor at pivotBase) -> offsetGroup (平移) -> rotGroup (旋轉中心) -> mesh
+        // 把載入的 GLB scene 掛到既有四層結構：
+        // pivot (world anchor) -> offsetGroup (平移) -> rotGroup (Pitch/Roll 中心)
+        //   -> yawGroup (Yaw 中心：主旋翼軸) -> model
+        function attachModelToPivot(model, hoverY, forwardZ = 0, yawPivot = null) {
             pivot = new THREE.Object3D();
-            pivotBase = new THREE.Vector3(0, 50, 0); // 載入新模型時也重置高度
+            pivotBase = new THREE.Vector3(0, hoverY, 0); // 各模型使用適合的懸停高度
             pivot.position.copy(pivotBase);
 
             offsetGroup = new THREE.Object3D();
-            offsetGroup = new THREE.Object3D();
-            // 預設載入時將物件往前 100 單位（若 forward 定義為 -Z，使用 -100；如需反向請改為 +100）
-            offsetGroup.position.set(0, 0, 20);
+            // 平移層：負責承載模型位移，不影響旋轉中心
+            offsetGroup.position.set(0, 0, 0);
 
             rotGroup = new THREE.Object3D();
-            rotGroup.add(mesh);
+            // 旋轉中心設在模型幾何中心：模型本體置中於 rotGroup 原點，
+            // 再以 forwardZ 位移補回原本的前移量，使模型繞自身中心旋轉。
+            rotGroup.position.set(0, 0, forwardZ);
 
+            yawGroup = new THREE.Object3D();
+            yawPivotActive = Boolean(yawPivot) && (yawPivot.lengthSq() > 1e-12);
+            if (yawPivotActive) {
+                // Yaw 旋轉中心移到主旋翼軸（機體向下偏移以維持幾何中心於 rotGroup 原點），
+                // 使直升機 Yaw 繞主旋翼軸旋轉，而不是繞模型幾何中心。
+                yawGroup.position.copy(yawPivot);
+                model.position.sub(yawPivot);
+            }
+            yawGroup.add(model);
+
+            rotGroup.add(yawGroup);
             offsetGroup.add(rotGroup);
             pivot.add(offsetGroup);
             scene.add(pivot);
 
-            // 補上 Local Axis Helper 顯示於旋轉群組上
-            const localAxes = new THREE.AxesHelper(20);
-            rotGroup.add(localAxes);
+            // Local Axis Helper — 已停用：掛在旋轉群組上會隨 Yaw 繞主軸轉，被誤認為雜物
+            // const localAxes = new THREE.AxesHelper(20);
+            // rotGroup.add(localAxes);
         }
 
-        // 嘗試載入預設檔案 (相對於本 HTML 檔案的位置)
-        function loadDefaultSTL() {
-            const rawPath = 'AttackHelicopter.stl';
-            const url = encodeURI(rawPath); // AttackHelicopter.stl (or Attack%20helicopter.stl if spaces)
-            const statusEl = document.getElementById('loadStatus');
-            if (statusEl) statusEl.textContent = '預設載入: 準備嘗試 ' + url;
-
-            async function fetchWithRetries(url, attempts = 8, delayMs = 300) {
-                for (let i = 0; i < attempts; i++) {
-                    try {
-                        if (statusEl) statusEl.textContent = `預設載入: 嘗試 ${i + 1}/${attempts} ${url}`;
-                        console.log(`預設載入嘗試 ${i + 1}/${attempts}: ${url}`);
-                        
-                        const resp = await fetch(url, { 
-                            method: 'GET',
-                            cache: 'no-cache' // 確保不使用過期快取
-                        });
-                        
-                        if (!resp.ok) throw new Error('HTTP ' + resp.status);
-                        const buf = await resp.arrayBuffer();
-                        
-                        // 驗證緩衝區不為空
-                        if (!buf || buf.byteLength === 0) {
-                            throw new Error('Retrieved empty buffer');
-                        }
-                        
-                        return { ok: true, buffer: buf };
-                    } catch (err) {
-                        console.warn(`載入嘗試 ${i + 1}/${attempts} 失敗:`, err.message);
-                        if (i < attempts - 1) {
-                            await new Promise(r => setTimeout(r, delayMs));
-                        }
-                    }
-                }
-                return { ok: false, error: '全部重試失敗' };
+        // 用 GLTFLoader 載入 .glb 模型（相對於本 HTML 檔案的位置）
+        function loadGLBModel(fileName) {
+            if (typeof THREE.GLTFLoader === 'undefined') {
+                console.error('THREE.GLTFLoader 不可用，無法載入模型:', fileName);
+                return;
             }
 
-            (async () => {
-                const result = await fetchWithRetries(url, 8, 300);
-                if (result.ok) {
-                    try {
-                        loadSTLBuffer(result.buffer);
-                        if (statusEl) statusEl.textContent = '✓ 預設載入成功: ' + url;
-                        console.log('✓ 預設 STL 已成功載入：', url, '檔案大小:', result.buffer.byteLength, 'bytes');
-                    } catch (parseErr) {
-                        if (statusEl) statusEl.textContent = '✗ 預設載入: 解析失敗 (' + parseErr.message + ')';
-                        console.error('STL 解析失敗:', parseErr);
-                    }
-                } else {
-                    if (statusEl) statusEl.textContent = '✗ 預設載入失敗 (' + result.error + ')';
-                    console.warn('預設載入失敗：', result.error);
-                }
-            })();
-        }
+            const config = MODEL_CONFIG[fileName] || { hoverY: 50 };
+            const url = encodeURI(fileName);
 
-        function parseSTL(buffer) {
-            const view = new DataView(buffer);
-            const isASCII = (function () {
-                const header = new Uint8Array(buffer, 0, 5);
-                return String.fromCharCode.apply(null, header) === 'solid';
-            })();
+            const loader = new THREE.GLTFLoader();
+            loader.load(url, (gltf) => {
+                const model = gltf.scene;
 
-            if (isASCII) {
-                return parseASCIISTL(buffer);
-            } else {
-                return parseBinarySTL(view);
-            }
-        }
+                // 以原始包圍盒計算置中與縮放，讓各模型在視野中有相近大小
+                const box = new THREE.Box3().setFromObject(model);
+                const center = new THREE.Vector3();
+                box.getCenter(center);
+                const size = new THREE.Vector3();
+                box.getSize(size);
+                const maxDim = Math.max(size.x, size.y, size.z) || 1;
 
-        function parseBinarySTL(view) {
-            const faces = view.getUint32(80, true);
-            const geometry = new THREE.BufferGeometry();
-            const vertices = [];
-            const normals = [];
+                const targetSize = 40;
+                // 放大三倍以增加物件視覺大小（再乘 0.8 縮小整體模型）
+                const finalScale = (targetSize / maxDim) * 3.0 * 0.8;
+                model.scale.setScalar(finalScale);
+                model.position.copy(center).multiplyScalar(-finalScale);
 
-            for (let i = 0; i < faces; i++) {
-                const offset = 84 + i * 50;
+                // 前移量改由 rotGroup.position 承載（見 attachModelToPivot），
+                // 模型本體維持置中於旋轉中心，確保模型繞自身幾何中心旋轉。
+                const forwardZ = Number(config.forwardZ) || 0;
 
-                const nx = view.getFloat32(offset, true);
-                const ny = view.getFloat32(offset + 4, true);
-                const nz = view.getFloat32(offset + 8, true);
-
-                for (let j = 0; j < 3; j++) {
-                    const vOffset = offset + 12 + j * 12;
-                    vertices.push(
-                        view.getFloat32(vOffset, true),
-                        view.getFloat32(vOffset + 4, true),
-                        view.getFloat32(vOffset + 8, true)
+                // 主旋翼軸：將模型本地座標的 rotorHub 換算為 rotGroup 座標的
+                // Yaw 旋轉中心。無 rotorHub 的模型維持繞幾何中心（原行為）。
+                let yawPivot = null;
+                if (config.rotorHub) {
+                    yawPivot = new THREE.Vector3(
+                        (config.rotorHub.x - center.x) * finalScale,
+                        (config.rotorHub.y - center.y) * finalScale,
+                        (config.rotorHub.z - center.z) * finalScale
                     );
-                    normals.push(nx, ny, nz);
-                }
-            }
-
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-
-            return geometry;
-        }
-
-        function parseASCIISTL(buffer) {
-            const text = new TextDecoder().decode(buffer);
-            const geometry = new THREE.BufferGeometry();
-            const vertices = [];
-            const normals = [];
-
-            const vertexPattern = /vertex\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
-            const normalPattern = /facet normal\s+([\d.eE+-]+)\s+([\d.eE+-]+)\s+([\d.eE+-]+)/g;
-
-            let match;
-            const normalMatches = [];
-            while ((match = normalPattern.exec(text)) !== null) {
-                normalMatches.push([parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3])]);
-            }
-
-            let normalIndex = 0;
-            let vertexCount = 0;
-            while ((match = vertexPattern.exec(text)) !== null) {
-                vertices.push(parseFloat(match[1]), parseFloat(match[2]), parseFloat(match[3]));
-
-                if (normalIndex < normalMatches.length) {
-                    normals.push(...normalMatches[normalIndex]);
                 }
 
-                vertexCount++;
-                if (vertexCount % 3 === 0) normalIndex++;
-            }
+                // 切換模型時遷移姿態：新模型若無主旋翼（非直升機），
+                // 將目前的 Yaw 併入 currentAttitude，避免切換後 Yaw 遺失。
+                if (!config.rotorHub) {
+                    currentAttitude.multiply(currentYaw);
+                    currentYaw = new THREE.Quaternion();
+                }
 
-            geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-            geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+                // 陰影
+                model.traverse((child) => {
+                    if (child.isMesh) {
+                        child.castShadow = true;
+                        child.receiveShadow = true;
+                    }
+                });
 
-            return geometry;
+                // 收集旋翼節點（依 GLB 節點名稱），供旋翼動畫旋轉
+                const rotors = [];
+                if (Array.isArray(config.rotors)) {
+                    config.rotors.forEach((rc) => {
+                        const obj = model.getObjectByName(rc.name);
+                        if (obj) {
+                            rotors.push({ obj: obj, axis: rc.axis || 'y', speed: (rc.dir || 1) * (rc.speed || 1) });
+                        } else {
+                            console.warn('找不到旋翼節點:', rc.name);
+                        }
+                    });
+                }
+                model.userData.rotors = rotors;
+
+                // 尾槳轂（node_id63）原地跟隨尾旋翼旋轉：
+                // 該節點原點離尾旋翼軸 0.327，直接對它做 rotation 會繞遠點公轉（雜物），
+                // 因此改掛到 TailRotor（原點在尾旋翼軸上）底下，繼承它的旋轉即可原地轉。
+                const tailHub = model.getObjectByName('node_id63');
+                const tailRotorNode = model.getObjectByName('TailRotor');
+                if (tailHub && tailRotorNode && tailHub.parent !== tailRotorNode) {
+                    model.updateMatrixWorld(true);
+                    tailRotorNode.attach(tailHub);
+                }
+
+                removeCurrentModel();
+                attachModelToPivot(model, config.hoverY, forwardZ, yawPivot);
+                mesh = model;
+
+                // 新模型載入後立即套用目前的 6DOF 姿態（位置 + 旋轉），
+                // 讓切換模型時姿態不會重設回原點。
+                updateTransform();
+
+                console.log('✓ GLB 模型已載入：', fileName);
+            }, undefined, (err) => {
+                console.error('GLB 模型載入失敗:', fileName, err);
+            });
         }
+
+        // 點選模型按鈕：切換高亮並載入對應模型
+        function selectModel(fileName, btn) {
+            document.querySelectorAll('.model-btn').forEach((b) => b.classList.remove('active'));
+            if (btn) btn.classList.add('active');
+            loadGLBModel(fileName);
+        }
+
+        // 預設載入模型
+        function loadDefaultModel() {
+            selectModel(DEFAULT_MODEL, document.querySelector('.model-btn[data-model="' + DEFAULT_MODEL + '"]'));
+        }
+
 
         function updateTransform(values = null) {
             if (!mesh) return;
@@ -874,18 +935,27 @@
                 lastRotZ = rotZ;
 
                 // 依序套用增量旋轉 (每個都繞當前的本地軸)
-                // Pitch 增量 - 繞當前 Local X
+                // Pitch 增量 - 繞當前 Local X（累加至 currentAttitude）
                 if (Math.abs(deltaPitch) > 0.0001) {
                     const currentX = new THREE.Vector3(1, 0, 0).applyQuaternion(currentAttitude);
                     const qDelta = new THREE.Quaternion().setFromAxisAngle(currentX, deltaPitch);
                     currentAttitude.premultiply(qDelta);
                 }
 
-                // Yaw 增量 - 繞當前 Local Y
-                if (Math.abs(deltaYaw) > 0.0001) {
-                    const currentY = new THREE.Vector3(0, 1, 0).applyQuaternion(currentAttitude);
-                    const qDelta = new THREE.Quaternion().setFromAxisAngle(currentY, deltaYaw);
-                    currentAttitude.premultiply(qDelta);
+                if (yawPivotActive) {
+                    // 直升機：Yaw 獨立累加，繞主旋翼軸（yawGroup 本地 Y = 機體垂直軸）
+                    if (Math.abs(deltaYaw) > 0.0001) {
+                        const qDelta = new THREE.Quaternion().setFromAxisAngle(
+                            new THREE.Vector3(0, 1, 0), deltaYaw);
+                        currentYaw.premultiply(qDelta);
+                    }
+                } else {
+                    // 一般模型：Yaw 增量 - 繞當前 Local Y
+                    if (Math.abs(deltaYaw) > 0.0001) {
+                        const currentY = new THREE.Vector3(0, 1, 0).applyQuaternion(currentAttitude);
+                        const qDelta = new THREE.Quaternion().setFromAxisAngle(currentY, deltaYaw);
+                        currentAttitude.premultiply(qDelta);
+                    }
                 }
 
                 // Roll 增量 - 繞當前 Local Z
@@ -897,6 +967,9 @@
 
                 // 正規化四元數 (避免數值誤差累積)
                 currentAttitude.normalize();
+                if (yawPivotActive) {
+                    currentYaw.normalize();
+                }
 
                 // ============================================================
                 // 增量位移模式 - 支援任意順序操作
@@ -921,16 +994,24 @@
                 // 乘上縮放因子以減小每次滑桿變化導致的移動量
                 const movementScale = 0.075; // 調整此值可微調移動靈敏度（更小，解析度更高）
                 const localDelta = new THREE.Vector3(deltaPosX, deltaPosZ, deltaPosY).multiplyScalar(movementScale);
-                const worldDelta = localDelta.applyQuaternion(currentAttitude);
+                // 位移方向隨完整姿態（含 Yaw）旋轉；一般模型 currentYaw 為單位四元數，行為不變
+                const fullAttitude = new THREE.Quaternion().copy(currentAttitude).multiply(currentYaw);
+                const worldDelta = localDelta.applyQuaternion(fullAttitude);
 
                 // 累加到當前位置
                 currentPosition.add(worldDelta);
 
                 // ============================================================
                 // 套用最終位置和旋轉
+                // 平移放 offsetGroup；Pitch/Roll 放 rotGroup（原點即模型中心）；
+                // 直升機的 Yaw 放 yawGroup（原點即主旋翼軸）。
                 // ============================================================
-                pivot.position.copy(pivotBase).add(currentPosition);
-                pivot.quaternion.copy(currentAttitude);
+                pivot.position.copy(pivotBase);
+                offsetGroup.position.copy(currentPosition);
+                rotGroup.quaternion.copy(currentAttitude);
+                if (yawPivotActive && yawGroup) {
+                    yawGroup.quaternion.copy(currentYaw);
+                }
             }
 
             updateTransformDisplay(displayValues || nextValues);
@@ -949,6 +1030,7 @@
 
             // 重置旋轉狀態
             currentAttitude = new THREE.Quaternion();
+            currentYaw = new THREE.Quaternion();
             lastRotX = 0;
             lastRotY = 0;
             lastRotZ = 0;
@@ -959,10 +1041,18 @@
             lastPosY = 0;
             lastPosZ = 0;
 
-            // 重置 pivot
+            // 重置 pivot / offsetGroup / rotGroup
             if (pivot && pivotBase) {
                 pivot.position.copy(pivotBase);
-                pivot.quaternion.copy(currentAttitude);
+                if (offsetGroup) {
+                    offsetGroup.position.set(0, 0, 0);
+                }
+                if (rotGroup) {
+                    rotGroup.quaternion.copy(currentAttitude);
+                }
+                if (yawGroup) {
+                    yawGroup.quaternion.copy(currentYaw);
+                }
             }
 
             // 更新顯示（重置為三位小數）
@@ -982,14 +1072,8 @@
         }
 
         function resetView() {
-            cameraDistance = 150;
-            cameraRotation = { x: 0, y: 0 };
-            updateCameraPosition();
-        }
-
-        function resetView() {
-            cameraDistance = 150;
-            cameraRotation = { x: 0, y: 0 };
+            cameraDistance = DEFAULT_CAMERA_DISTANCE;
+            cameraRotation = { ...DEFAULT_CAMERA_ROTATION };
             updateCameraPosition();
         }
 
@@ -1001,6 +1085,21 @@
 
         function animate() {
             requestAnimationFrame(animate);
+
+            // 旋翼旋轉動畫：繞各節點指定的本地軸（主旋翼軸）旋轉
+            if (rotorSpinEnabled && mesh && rotorClock) {
+                const rotors = mesh.userData.rotors;
+                if (rotors && rotors.length > 0) {
+                    const dt = Math.min(rotorClock.getDelta(), 0.1);
+                    const spin = ROTOR_SPIN_SPEED * dt;
+                    for (const r of rotors) {
+                        if (r.axis === 'x') r.obj.rotation.x += spin * r.speed;
+                        else if (r.axis === 'z') r.obj.rotation.z += spin * r.speed;
+                        else r.obj.rotation.y += spin * r.speed;
+                    }
+                }
+            }
+
             renderer.render(scene, camera);
         }
     </script>
@@ -1008,13 +1107,40 @@
     <script src="sidebar-menu.js"></script>
     
     <script>
+        // 載入 GLTFLoader（本機優先，失敗才用 CDN）。須在 THREE 載入後才執行，
+        // 否則 GLTFLoader 的 IIFE 會因 THREE 未定義而拋錯。
+        function loadGltfLoader(onReady) {
+            if (typeof window.THREE !== 'undefined' && typeof window.THREE.GLTFLoader !== 'undefined') {
+                onReady();
+                return;
+            }
+
+            const script = document.createElement('script');
+            script.src = 'js/GLTFLoader.js';
+            script.onload = () => onReady();
+            script.onerror = () => {
+                console.warn('Local GLTFLoader.js not found — falling back to CDN');
+                const cdn = document.createElement('script');
+                cdn.src = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js';
+                cdn.onload = () => onReady();
+                cdn.onerror = () => {
+                    console.error('GLTFLoader 載入失敗（本機與 CDN 皆不可用）');
+                    onReady();
+                };
+                document.head.appendChild(cdn);
+            };
+            document.head.appendChild(script);
+        }
+
         // 確保 Three.js 載入完成後再初始化
         async function waitForThreeAndInit() {
             if (typeof window.THREE !== 'undefined') {
-                // Three.js 已載入，檢查認證後初始化
+                // Three.js 已載入，載入 GLTFLoader 並檢查認證後初始化
                 await window.Auth.ready();
-                init();
-                const keepalive = window.Auth.createKeepalive();
+                loadGltfLoader(() => {
+                    init();
+                    const keepalive = window.Auth.createKeepalive();
+                });
             } else {
                 // Three.js 還未載入，等待後重試
                 console.log('等待 Three.js 加載...');

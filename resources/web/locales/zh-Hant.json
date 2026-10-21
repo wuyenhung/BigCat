@@ -1,0 +1,8 @@
+{
+  "code": "zh-Hant",
+  "name": "Chinese (Traditional)",
+  "nativeName": "繁體中文",
+  "fallback": null,
+  "_comment": "來源語系（原始碼即以此語言撰寫）：messages 通常留空＝直接顯示原文。若要把原文案改寫（例：更動措辭但不改程式碼），在此加 key=原文、value=改寫後文字；含 * 的 key 視為樣板。",
+  "messages": {}
+}

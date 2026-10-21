@@ -1,5 +1,6 @@
 #include "../include/StewartIK.h"
 #include <cmath>
+#include <cstdio>
 #include <sstream>
 #include <limits>
 
@@ -446,16 +447,10 @@ ForwardResult StewartIK::CalculateForward(const StewartParams &params, const std
         armEndPoints[i] = {ax, ay, az};
     }
 
-    // check servo limits
-    std::vector<std::string> errors;
-    bool valid = true;
-    for (int i=0;i<6;++i) {
-        if (std::fabsl(inputServoAngles[i]) > params.servoAngleLimit) {
-            std::ostringstream ss; ss << "力臂" << (i+1) << ": 角度 " << (double)inputServoAngles[i] << "° 超出 ±" << (double)params.servoAngleLimit << "° 限制";
-            errors.push_back(ss.str()); valid = false;
-        }
-    }
-    if (!valid) { out.valid = false; out.errors = errors; return out; }
+    // NOTE: No servo-angle limit check here.  FK computes the platform pose
+    // from *measured* servo angles (read from PDO 0x6064).  The servoAngleLimit
+    // is a safety bound for IK *output* (target angles) and should not cause FK
+    // to reject valid physical measurements.
 
     // Newton-Raphson with Levenberg-Marquardt using analytic Jacobian
     auto newtonRaphsonLM = [&](Pose6D pose, int maxIter, long double tol)->std::tuple<Pose6D,bool,long double> {
@@ -619,6 +614,123 @@ ForwardResult StewartIK::CalculateForward(const StewartParams &params, const std
         out.errors.push_back(ss.str());
         return out;
     }
+}
+
+// ========================================================================
+// Pose6D 前置驗證層實作
+// ========================================================================
+Pose6DValidationResult StewartIK::ValidatePose6D(
+    const Pose6D& pose,
+    long double initialHeight,
+    const Pose6DLimits& limits) {
+    Pose6DValidationResult result;
+    result.valid = true;
+
+    // 計算相對位移（相對於初始高度）
+    const long double dx = pose.x;
+    const long double dy = pose.y;
+    const long double dz = pose.z - initialHeight;
+    const long double roll = NormalizeAngleDeg(pose.roll);
+    const long double pitch = NormalizeAngleDeg(pose.pitch);
+    const long double yaw = NormalizeAngleDeg(pose.yaw);
+
+    // ---- 動態行程縮放（Z 位置觸發）----
+    // Z 達極限位置 50% 以上時，以 septic S-curve 縮小 X/Y/Roll/Pitch/Yaw 範圍。
+    // 使用 7 階 S-curve (smoothstep) 確保縮放轉折點 jerk 連續：
+    //   t = (zRatio - startRatio) / (1 - startRatio)   ← 正規化 0→1
+    //   smoothT = −20t⁷ + 70t⁶ − 84t⁵ + 35t⁴            ← septic smoothstep
+    //     s(0)=0, s(1)=1, s'/s''/s'''(0/1)=0            ← jerk 連續
+    //   zScale = 1 − smoothT × (1 − minScale)            ← 輸出 1.0 → minScale
+    // Z 達 100% 極限時，其他軸範圍縮至原始的 50%
+    // 預設常數定義於 include/StewartIK.h: Pose6DDynamicDefaults
+    long double zScale = 1.0L;
+    {
+        long double zRatio = 0.0L;
+        if (limits.maxZ > 1e-9L) {
+            zRatio = std::fabsl(dz) / limits.maxZ;
+        }
+        if (zRatio >= limits.dynamicLimitStartRatio) {
+            const long double t = (zRatio - limits.dynamicLimitStartRatio)
+                                / (1.0L - limits.dynamicLimitStartRatio);
+            // S-curve (septic smoothstep): 兩端一階/二階/三階導數皆為零，
+            // 確保縮放啟動與結束時 jerk 也連續
+            const long double t2 = t * t;
+            const long double t4 = t2 * t2;
+            const long double smoothT = t4 * (35.0L + t * (-84.0L + t * (70.0L - 20.0L * t)));
+            const long double range = 1.0L - limits.dynamicLimitMinScale;
+            zScale = 1.0L - smoothT * range;
+            if (zScale < limits.dynamicLimitMinScale)
+                zScale = limits.dynamicLimitMinScale;
+            result.dynamicScalingActive = true;
+        }
+    }
+    const long double effMaxX = limits.maxX * zScale;
+    const long double effMaxY = limits.maxY * zScale;
+    const long double effMaxRoll = limits.maxRoll * zScale;
+    const long double effMaxPitch = limits.maxPitch * zScale;
+    const long double effMaxYaw = limits.maxYaw * zScale;
+
+    auto checkExceeds = [&](long double actual, long double limit,
+                            Pose6DViolationKind kind, const wchar_t* axisName) {
+        if (std::fabsl(actual) > limit + 1e-9L) {
+            result.valid = false;
+            result.violationKind = kind;
+            result.limitValue = limit;
+            result.actualValue = actual;
+            std::array<wchar_t, 256> buf{};
+            _snwprintf_s(buf.data(), buf.size(), _TRUNCATE,
+                L"Pose6D 限制違規: %s %.1f (限制 ±%.1f), 姿態已凍結",
+                axisName, static_cast<double>(actual), static_cast<double>(limit));
+            result.messageW = buf.data();
+            // 同時產生 UTF-8 訊息用於 HTTP API
+            std::array<char, 256> buf8{};
+            _snprintf_s(buf8.data(), buf8.size(), _TRUNCATE,
+                "Pose6D limit violation: %S %.1f (limit ±%.1f), pose frozen",
+                axisName, static_cast<double>(actual), static_cast<double>(limit));
+            result.message = buf8.data();
+            return true;
+        }
+        return false;
+    };
+
+    // 輔助：飽和（clamp）到有效限制
+    auto saturate = [](long double val, long double limit) {
+        if (val > limit) return limit;
+        if (val < -limit) return -limit;
+        return val;
+    };
+
+    // 先以動態縮放有效範圍飽和，產生 clampedPose
+    result.clampedPose.x = saturate(pose.x, effMaxX);
+    result.clampedPose.y = saturate(pose.y, effMaxY);
+    result.clampedPose.z = pose.z;  // Z 本身不縮放
+    result.clampedPose.roll = saturate(roll, effMaxRoll);
+    result.clampedPose.pitch = saturate(pitch, effMaxPitch);
+    result.clampedPose.yaw = saturate(yaw, effMaxYaw);
+
+    // ---- 硬限制檢查 ----
+    // 動態縮放啟用時：對飽和後的值做硬限制檢查（飽和值不可能超出原始限制，
+    //   因為 effMax ≤ max），避免 raw 輸入在動態縮放區域內觸發不必要的凍結。
+    // 非動態縮放時：對原始值做硬限制檢查（原行為，超出凍結），
+    //   以保持硬限制的安全警示語意。
+    // Z 軸不參與縮放，始終以原始 dz 為準。
+    if (result.dynamicScalingActive) {
+        if (checkExceeds(result.clampedPose.x, limits.maxX, Pose6DViolationKind::X, L"X")) return result;
+        if (checkExceeds(result.clampedPose.y, limits.maxY, Pose6DViolationKind::Y, L"Y")) return result;
+        if (checkExceeds(dz, limits.maxZ, Pose6DViolationKind::Z, L"Z")) return result;
+        if (checkExceeds(result.clampedPose.roll, limits.maxRoll, Pose6DViolationKind::Roll, L"Roll")) return result;
+        if (checkExceeds(result.clampedPose.pitch, limits.maxPitch, Pose6DViolationKind::Pitch, L"Pitch")) return result;
+        if (checkExceeds(result.clampedPose.yaw, limits.maxYaw, Pose6DViolationKind::Yaw, L"Yaw")) return result;
+    } else {
+        if (checkExceeds(dx, limits.maxX, Pose6DViolationKind::X, L"X")) return result;
+        if (checkExceeds(dy, limits.maxY, Pose6DViolationKind::Y, L"Y")) return result;
+        if (checkExceeds(dz, limits.maxZ, Pose6DViolationKind::Z, L"Z")) return result;
+        if (checkExceeds(roll, limits.maxRoll, Pose6DViolationKind::Roll, L"Roll")) return result;
+        if (checkExceeds(pitch, limits.maxPitch, Pose6DViolationKind::Pitch, L"Pitch")) return result;
+        if (checkExceeds(yaw, limits.maxYaw, Pose6DViolationKind::Yaw, L"Yaw")) return result;
+    }
+
+    return result;
 }
 
 } // namespace WuSOEM

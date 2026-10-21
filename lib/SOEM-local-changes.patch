@@ -1,0 +1,340 @@
+diff --git a/osal/win32/osal_defs.h b/osal/win32/osal_defs.h
+index 18abebf..652e30c 100644
+--- a/osal/win32/osal_defs.h
++++ b/osal/win32/osal_defs.h
+@@ -11,7 +11,9 @@
+ extern "C" {
+ #endif
+ 
++#ifndef WIN32_LEAN_AND_MEAN
+ #define WIN32_LEAN_AND_MEAN // Exclude some conflicting definitions in windows header
++#endif
+ #include <windows.h>
+ #include <time.h>
+ // define if debug printf is needed
+diff --git a/oshw/win32/nicdrv.c b/oshw/win32/nicdrv.c
+index 957d6dd..edf76a8 100644
+--- a/oshw/win32/nicdrv.c
++++ b/oshw/win32/nicdrv.c
+@@ -131,7 +131,7 @@ int ecx_setupnic(ecx_portt *port, const char *ifname, int secondary)
+    *psock = pcap_open(ifname, 65536, PCAP_OPENFLAG_PROMISCUOUS | PCAP_OPENFLAG_MAX_RESPONSIVENESS | PCAP_OPENFLAG_NOCAPTURE_LOCAL, -1, NULL, errbuf);
+    if (NULL == *psock)
+    {
+-      printf("interface %s could not open with pcap\n", ifname);
++      printf("interface %s could not open with pcap: %s\n", ifname, errbuf);
+       return 0;
+    }
+ 
+diff --git a/oshw/win32/nicdrv.h b/oshw/win32/nicdrv.h
+index f51dd75..5d04207 100644
+--- a/oshw/win32/nicdrv.h
++++ b/oshw/win32/nicdrv.h
+@@ -16,7 +16,10 @@
+ extern "C" {
+ #endif
+ 
++// HAVE_REMOTE may be defined via compiler flags (CMake). Guard to avoid redefinition warnings.
++#ifndef HAVE_REMOTE
+ #define HAVE_REMOTE
++#endif
+ 
+ #include <pcap.h>
+ #include <Packet32.h>
+diff --git a/src/ec_coe.c b/src/ec_coe.c
+index 12682ea..8a4ba68 100644
+--- a/src/ec_coe.c
++++ b/src/ec_coe.c
+@@ -138,28 +138,36 @@ int ecx_SDOread(ecx_contextt *context, uint16 slave, uint16 index, uint8 subinde
+    SDOp->MbxHeader.address = htoes(0x0000);
+    SDOp->MbxHeader.priority = 0x00;
+    /* get new mailbox count value, used as session handle */
+-   cnt = ec_nextmbxcnt(context->slavelist[slave].mbx_cnt);
+-   context->slavelist[slave].mbx_cnt = cnt;
+-   SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
+-   SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
+-   if (CA)
+    {
+-      SDOp->Command = ECT_SDO_UP_REQ_CA; /* upload request complete access */
+-   }
+-   else
+-   {
+-      SDOp->Command = ECT_SDO_UP_REQ; /* upload request normal */
+-   }
+-   SDOp->Index = htoes(index);
+-   if (CA && (subindex > 1))
+-   {
+-      subindex = 1;
++      uint8 prev_mbx_cnt = context->slavelist[slave].mbx_cnt;
++      cnt = ec_nextmbxcnt(context->slavelist[slave].mbx_cnt);
++      context->slavelist[slave].mbx_cnt = cnt;
++      SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
++      SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
++      if (CA)
++      {
++         SDOp->Command = ECT_SDO_UP_REQ_CA; /* upload request complete access */
++      }
++      else
++      {
++         SDOp->Command = ECT_SDO_UP_REQ; /* upload request normal */
++      }
++      SDOp->Index = htoes(index);
++      if (CA && (subindex > 1))
++      {
++         subindex = 1;
++      }
++      SDOp->SubIndex = subindex;
++      SDOp->ldata[0] = 0;
++      /* send CoE request to slave */
++      wkc = ecx_mbxsend(context, slave, MbxOut, EC_TIMEOUTTXM);
++      MbxOut = NULL;
++      if (wkc <= 0)
++      {
++         /* mbxsend failed: rollback counter to prevent slave SDO desync */
++         context->slavelist[slave].mbx_cnt = prev_mbx_cnt;
++      }
+    }
+-   SDOp->SubIndex = subindex;
+-   SDOp->ldata[0] = 0;
+-   /* send CoE request to slave */
+-   wkc = ecx_mbxsend(context, slave, MbxOut, EC_TIMEOUTTXM);
+-   MbxOut = NULL;
+    if (wkc > 0) /* succeeded to place mailbox in slave ? */
+    {
+       /* read slave response */
+@@ -225,17 +233,25 @@ int ecx_SDOread(ecx_contextt *context, uint16 slave, uint16 index, uint8 subinde
+                         SDOp->MbxHeader.length = htoes(0x000a);
+                         SDOp->MbxHeader.address = htoes(0x0000);
+                         SDOp->MbxHeader.priority = 0x00;
+-                        cnt = ec_nextmbxcnt(context->slavelist[slave].mbx_cnt);
+-                        context->slavelist[slave].mbx_cnt = cnt;
+-                        SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
+-                        SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
+-                        SDOp->Command = ECT_SDO_SEG_UP_REQ + toggle;                   /* segment upload request */
+-                        SDOp->Index = htoes(index);
+-                        SDOp->SubIndex = subindex;
+-                        SDOp->ldata[0] = 0;
+-                        /* send segmented upload request to slave */
+-                        wkc = ecx_mbxsend(context, slave, MbxOut, EC_TIMEOUTTXM);
+-                        MbxOut = NULL;
++                        {
++                           uint8 prev_mbx_cnt_seg = context->slavelist[slave].mbx_cnt;
++                           cnt = ec_nextmbxcnt(context->slavelist[slave].mbx_cnt);
++                           context->slavelist[slave].mbx_cnt = cnt;
++                           SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
++                           SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
++                           SDOp->Command = ECT_SDO_SEG_UP_REQ + toggle;                   /* segment upload request */
++                           SDOp->Index = htoes(index);
++                           SDOp->SubIndex = subindex;
++                           SDOp->ldata[0] = 0;
++                           /* send segmented upload request to slave */
++                           wkc = ecx_mbxsend(context, slave, MbxOut, EC_TIMEOUTTXM);
++                           MbxOut = NULL;
++                           if (wkc <= 0)
++                           {
++                              /* mbxsend failed: rollback counter */
++                              context->slavelist[slave].mbx_cnt = prev_mbx_cnt_seg;
++                           }
++                        }
+                         if (wkc > 0)
+                         {
+                            if (MbxIn) ecx_dropmbx(context, MbxIn);
+@@ -366,19 +382,27 @@ int ecx_SDOwrite(ecx_contextt *context, uint16 Slave, uint16 Index, uint8 SubInd
+       SDOp->MbxHeader.address = htoes(0x0000);
+       SDOp->MbxHeader.priority = 0x00;
+       /* get new mailbox counter, used for session handle */
+-      cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
+-      context->slavelist[Slave].mbx_cnt = cnt;
+-      SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt);  /* CoE */
+-      SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));         /* number 9bits service upper 4 bits */
+-      SDOp->Command = ECT_SDO_DOWN_EXP | (((4 - psize) << 2) & 0x0c); /* expedited SDO download transfer */
+-      SDOp->Index = htoes(Index);
+-      SDOp->SubIndex = SubIndex;
+-      hp = p;
+-      /* copy parameter data to mailbox */
+-      memcpy(&SDOp->ldata[0], hp, psize);
+-      /* send mailbox SDO download request to slave */
+-      wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
+-      MbxOut = NULL;
++      {
++         uint8 prev_mbx_cnt = context->slavelist[Slave].mbx_cnt;
++         cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
++         context->slavelist[Slave].mbx_cnt = cnt;
++         SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt);  /* CoE */
++         SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));         /* number 9bits service upper 4 bits */
++         SDOp->Command = ECT_SDO_DOWN_EXP | (((4 - psize) << 2) & 0x0c); /* expedited SDO download transfer */
++         SDOp->Index = htoes(Index);
++         SDOp->SubIndex = SubIndex;
++         hp = p;
++         /* copy parameter data to mailbox */
++         memcpy(&SDOp->ldata[0], hp, psize);
++         /* send mailbox SDO download request to slave */
++         wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
++         MbxOut = NULL;
++         if (wkc <= 0)
++         {
++            /* mbxsend failed: rollback counter to prevent slave SDO desync */
++            context->slavelist[Slave].mbx_cnt = prev_mbx_cnt;
++         }
++      }
+       if (wkc > 0)
+       {
+          if (MbxIn) ecx_dropmbx(context, MbxIn);
+@@ -425,33 +449,41 @@ int ecx_SDOwrite(ecx_contextt *context, uint16 Slave, uint16 Index, uint8 SubInd
+       SDOp->MbxHeader.address = htoes(0x0000);
+       SDOp->MbxHeader.priority = 0x00;
+       /* get new mailbox counter, used for session handle */
+-      cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
+-      context->slavelist[Slave].mbx_cnt = cnt;
+-      SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
+-      SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits */
+-      if (CA)
+       {
+-         SDOp->Command = ECT_SDO_DOWN_INIT_CA; /* Complete Access, normal SDO init download transfer */
+-      }
+-      else
+-      {
+-         SDOp->Command = ECT_SDO_DOWN_INIT; /* normal SDO init download transfer */
+-      }
+-      SDOp->Index = htoes(Index);
+-      SDOp->SubIndex = SubIndex;
+-      if (CA && (SubIndex > 1))
+-      {
+-         SDOp->SubIndex = 1;
++         uint8 prev_mbx_cnt2 = context->slavelist[Slave].mbx_cnt;
++         cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
++         context->slavelist[Slave].mbx_cnt = cnt;
++         SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
++         SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits */
++         if (CA)
++         {
++            SDOp->Command = ECT_SDO_DOWN_INIT_CA; /* Complete Access, normal SDO init download transfer */
++         }
++         else
++         {
++            SDOp->Command = ECT_SDO_DOWN_INIT; /* normal SDO init download transfer */
++         }
++         SDOp->Index = htoes(Index);
++         SDOp->SubIndex = SubIndex;
++         if (CA && (SubIndex > 1))
++         {
++            SDOp->SubIndex = 1;
++         }
++         SDOp->ldata[0] = htoel(psize);
++         hp = p;
++         /* copy parameter data to mailbox */
++         memcpy(&SDOp->ldata[1], hp, framedatasize);
++         hp += framedatasize;
++         psize -= framedatasize;
++         /* send mailbox SDO download request to slave */
++         wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
++         MbxOut = NULL;
++         if (wkc <= 0)
++         {
++            /* mbxsend failed: rollback counter to prevent slave SDO desync */
++            context->slavelist[Slave].mbx_cnt = prev_mbx_cnt2;
++         }
+       }
+-      SDOp->ldata[0] = htoel(psize);
+-      hp = p;
+-      /* copy parameter data to mailbox */
+-      memcpy(&SDOp->ldata[1], hp, framedatasize);
+-      hp += framedatasize;
+-      psize -= framedatasize;
+-      /* send mailbox SDO download request to slave */
+-      wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
+-      MbxOut = NULL;
+       if (wkc > 0)
+       {
+          if (MbxIn) ecx_dropmbx(context, MbxIn);
+@@ -502,19 +534,27 @@ int ecx_SDOwrite(ecx_contextt *context, uint16 Slave, uint16 Index, uint8 SubInd
+                   SDOp->MbxHeader.address = htoes(0x0000);
+                   SDOp->MbxHeader.priority = 0x00;
+                   /* get new mailbox counter value */
+-                  cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
+-                  context->slavelist[Slave].mbx_cnt = cnt;
+-                  SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
+-                  SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
+-                  SDOp->Command = SDOp->Command + toggle;                        /* add toggle bit to command byte */
+-                  /* copy parameter data to mailbox */
+-                  memcpy(&SDOp->Index, hp, framedatasize);
+-                  /* update parameter buffer pointer */
+-                  hp += framedatasize;
+-                  psize -= framedatasize;
+-                  /* send SDO download request */
+-                  wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
+-                  MbxOut = NULL;
++                  {
++                     uint8 prev_mbx_cnt_seg = context->slavelist[Slave].mbx_cnt;
++                     cnt = ec_nextmbxcnt(context->slavelist[Slave].mbx_cnt);
++                     context->slavelist[Slave].mbx_cnt = cnt;
++                     SDOp->MbxHeader.mbxtype = ECT_MBXT_COE + MBX_HDR_SET_CNT(cnt); /* CoE */
++                     SDOp->CANOpen = htoes(0x000 + (ECT_COES_SDOREQ << 12));        /* number 9bits service upper 4 bits (SDO request) */
++                     SDOp->Command = SDOp->Command + toggle;                        /* add toggle bit to command byte */
++                     /* copy parameter data to mailbox */
++                     memcpy(&SDOp->Index, hp, framedatasize);
++                     /* update parameter buffer pointer */
++                     hp += framedatasize;
++                     psize -= framedatasize;
++                     /* send SDO download request */
++                     wkc = ecx_mbxsend(context, Slave, MbxOut, EC_TIMEOUTTXM);
++                     MbxOut = NULL;
++                     if (wkc <= 0)
++                     {
++                        /* mbxsend failed: rollback counter */
++                        context->slavelist[Slave].mbx_cnt = prev_mbx_cnt_seg;
++                     }
++                  }
+                   if (wkc > 0)
+                   {
+                      if (MbxIn) ecx_dropmbx(context, MbxIn);
+diff --git a/src/ec_main.c b/src/ec_main.c
+index df1acbd..6e924d1 100644
+--- a/src/ec_main.c
++++ b/src/ec_main.c
+@@ -1664,9 +1664,23 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int ti
+       {
+          mbxro = slavelist->mbx_ro;
+          mbxin = ecx_getmbx(context);
++         if (mbxin == NULL)
++         {
++            /* Mailbox pool exhausted — cannot receive. */
++            wkc = 0;
++         }
++         else
++         {
+          mbxh = (ec_mbxheadert *)mbxin;
+          do
+          {
++            if (mbxin == NULL)
++            {
++               /* mbxin was dropped by an earlier error/emergency branch;
++                * no buffer available to retry — fail the receive. */
++               wkc = 0;
++               break;
++            }
+             wkc = ecx_FPRD(&context->port, configadr, mbxro, mbxl, mbxin, EC_TIMEOUTRET); /* get mailbox */
+             if ((wkc > 0) && ((mbxh->mbxtype & 0x0f) == 0x00))                            /* Mailbox error response? */
+             {
+@@ -1727,6 +1741,12 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int ti
+             }
+             else /* read mailbox lost */
+             {
++               if (mbxin == NULL)
++               {
++                  /* mbxin was dropped by an earlier error/emergency branch;
++                   * no buffer available to retry — fail the receive. */
++                  break;
++               }
+                do /* read extended mailbox status */
+                {
+                   wkc2 = ecx_readmbxstatusex(context, slave, &SMstatex);
+@@ -1750,7 +1770,8 @@ int ecx_mbxreceive(ecx_contextt *context, uint16 slave, ec_mbxbuft **mbx, int ti
+             }
+          } while ((wkc <= 0) && (osal_timer_is_expired(&timer) == FALSE)); /* if WKC<=0 repeat */
+          if (mbxin) ecx_dropmbx(context, mbxin);
+-      }
++         } /* end else mbxin != NULL */
++      } /* end if SMstat & 0x08 */
+       else /* no read mailbox available */
+       {
+          if (wkc > 0)

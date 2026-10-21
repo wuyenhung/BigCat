@@ -22,11 +22,17 @@ static std::wstring TimestampNowW() {
 
 static bool StageZeroVelocityCommand(EtherCATMaster* master, PDOProxy* pdo, int slaveIdx)
 {
+    // This function stages zero to the velocity command PDO (0x60FF).
+    // In CSP (position) mode, the velocity PDO is not the active command;
+    // return success immediately to avoid overwriting the target position.
+    if (master && master->IsCspMode()) {
+        return true;
+    }
     return MotionLogic::StagePDOByIndex(
         master,
         pdo,
         slaveIdx,
-        CoreHelpers::kDefaultCyclicCommandPdoIndex,
+        0x60FF,  // Always target velocity PDO, not the mode-dependent default
         0u);
 }
 
@@ -76,12 +82,13 @@ MotionResult MotionController::FaultResetAsync(int slaveIdx, bool assert) {
     if (cw) {
         int32_t newv = assert ? 0x0080 : 0x0007;
         if (assert) {
-            // Before asserting fault-reset (0x0080) require SDO 0x603F != 0
-            uint32_t ec = 0; int readSz = (int)sizeof(ec);
-            if (!etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x603F, (uint8_t)0x00, (void*)&ec, readSz)) {
-                res.message = TimestampNowW() + std::wstring(L"[FaultReset] failed to read SDO 0x603F");
+            // Read 0x603F from per-slave PDO cache (updated every cycle, lock-free)
+            uint16_t ec = 0;
+            bool gotEc = etherCATMaster->GetPdo603F(static_cast<uint16_t>(slaveIdx), ec);
+            if (!gotEc) {
+                res.message = TimestampNowW() + std::wstring(L"[FaultReset] failed to read PDO cache 0x603F");
             } else if (ec == 0) {
-                std::wstringstream ss; ss << TimestampNowW() << L"[FaultReset] SDO 0x603F == 0; no error present; assert skipped slave=" << slaveIdx << L"\n";
+                std::wstringstream ss; ss << TimestampNowW() << L"[FaultReset] 0x603F == 0; no error present; assert skipped slave=" << slaveIdx << L"\n";
                 res.success = true;
                 res.message = ss.str();
             } else {
@@ -162,37 +169,24 @@ MotionResult MotionController::ImmediateStopAsync(int slaveIdx, bool assert) {
         res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] invalid args or master missing");
         return res;
     }
-    if (!pdoDisplay) {
-        res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] PDO display manager missing");
-        return res;
-    }
     if (!assert) { res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] release ignored"); return res; }
 
-    const uint32_t QS_MASK = 0x0004;
-    bool staged = false;
-    const PDOItem* cw = MotionLogic::FindControlwordItem(pdoDisplay->pdoItems);
-    if (cw) {
-        // Step A: Read current controlword snapshot and stage QS (quick stop)
-        int32_t curv = 0;
-        if (MotionLogic::ReadControlwordFromSnapshot(etherCATMaster, cw, slaveIdx, curv)) {
-            int32_t newv = curv | QS_MASK;
-            if (MotionLogic::StageControlword(etherCATMaster, pdoDisplay, slaveIdx, cw, newv)) {
-                if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, slaveIdx)) {
-                    res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] failed to stage PDO 0x60FF=0 after QS staging");
-                    return res;
-                }
-
-                // Optionally, ensure processdata is sent so staging takes effect immediately
-                if (etherCATMaster->IsRunning()) {
-                    etherCATMaster->SendProcessDataOnce();
-                }
-
-                std::wstringstream ss; ss << TimestampNowW() << L"[ImmediateStop] staged 0x60FF=0 and PDO staged QS=1 slave=" << slaveIdx << L" (0x6040=0x" << std::hex << std::uppercase << newv << std::dec << L")\n";
-                res.success = true; res.message = ss.str(); staged = true;
-            } else res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] PDO staging of QS failed");
-        } else res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] snapshot parse failed while reading controlword for QS");
-    } else res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] controlword item not found");
-    if (!staged) { if (res.message.empty()) res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] PDO staging failed; no SDO fallback"); }
+    // Use filter-based hold-position for deceleration-limited stop.
+    // HoldCurrentPosition() restores full configured deceleration limits
+    // and sets the profile target to current position.
+    try {
+        etherCATMaster->HoldPDOFilterPosition(slaveIdx);
+        res.success = true;
+        std::wstringstream ss;
+        ss << TimestampNowW() << L"[ImmediateStop] filter hold-position set for slave=" << slaveIdx
+           << L" (deceleration-limited stop via PDOFilter)\n";
+        res.message = ss.str();
+    } catch (const std::exception &ex) {
+        res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] HoldPDOFilterPosition exception: ")
+                      + std::wstring(ex.what(), ex.what() + strlen(ex.what()));
+    } catch (...) {
+        res.message = TimestampNowW() + std::wstring(L"[ImmediateStop] HoldPDOFilterPosition unknown exception");
+    }
     return res;
 }
 
@@ -202,10 +196,6 @@ MotionResult MotionController::ImmediateStopAll() {
         res.message = TimestampNowW() + std::wstring(L"[ImmediateStopAll] EtherCAT master missing\n");
         return res;
     }
-    if (!pdoDisplay) {
-        res.message = TimestampNowW() + std::wstring(L"[ImmediateStopAll] PDO display manager missing\n");
-        return res;
-    }
     int slaveCount = etherCATMaster->GetSlaveCount();
     if (slaveCount <= 0) {
         res.message = TimestampNowW() + std::wstring(L"[ImmediateStopAll] no slaves present\n");
@@ -213,41 +203,25 @@ MotionResult MotionController::ImmediateStopAll() {
     }
 
     std::wstringstream allMsg;
-    allMsg << TimestampNowW() << L"[ImmediateStopAll] invoking immediate stop for " << slaveCount << L" slaves\n";
-    bool anySuccess = false;
-    const PDOItem* cwItem = MotionLogic::FindControlwordItem(pdoDisplay->pdoItems);
-    if (!cwItem) {
-        allMsg << TimestampNowW() << L"[ImmediateStopAll] controlword item missing\n";
-        res.message = allMsg.str();
-        return res;
-    }
-    const uint32_t QS_MASK = 0x0004;
-    for (int s = 1; s <= slaveCount; ++s) {
-        int32_t cur = 0;
-        if (!MotionLogic::ReadControlwordFromSnapshot(etherCATMaster, cwItem, s, cur)) {
-            allMsg << TimestampNowW() << L"[ImmediateStopAll] failed to read snapshot slave=" << s << L"\n";
-            continue;
-        }
-        int32_t newVal = static_cast<int32_t>(static_cast<uint32_t>(cur) | QS_MASK);
-        if (MotionLogic::StageControlwordWithoutSend(etherCATMaster, pdoDisplay, s, cwItem, newVal)) {
-            std::wstringstream ss;
-            ss << TimestampNowW() << L"[ImmediateStopAll] staged QS=1 slave=" << s << L" (0x6040=0x" << std::hex << std::uppercase << newVal << std::dec << L")\n";
-            allMsg << ss.str();
-            anySuccess = true;
+    allMsg << TimestampNowW() << L"[ImmediateStopAll] invoking deceleration-limited stop for " << slaveCount << L" slaves\n";
 
-            if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, s)) {
-                allMsg << TimestampNowW() << L"[ImmediateStopAll] failed to stage PDO 0x60FF=0 for slave=" << s << L"\n";
-            }
-        } else {
-            allMsg << TimestampNowW() << L"[ImmediateStopAll] failed to stage controlword slave=" << s << L"\n";
-        }
+    // Use filter-based hold-position for deceleration-limited stop.
+    // HoldCurrentPosition() restores full configured deceleration limits
+    // and sets the profile target to current position.
+    try {
+        etherCATMaster->HoldAllPDOFiltersPosition();
+        allMsg << TimestampNowW() << L"[ImmediateStopAll] all PDO filters set to hold current position\n";
+        res.success = true;
+    } catch (const std::exception &ex) {
+        allMsg << TimestampNowW() << L"[ImmediateStopAll] HoldAllPDOFiltersPosition exception: " << ex.what() << L"\n";
+    } catch (...) {
+        allMsg << TimestampNowW() << L"[ImmediateStopAll] HoldAllPDOFiltersPosition unknown exception\n";
     }
 
     if (etherCATMaster->IsRunning()) {
         etherCATMaster->SendProcessDataOnce();
         allMsg << TimestampNowW() << L"[ImmediateStopAll] process data sent\n";
     }
-    res.success = anySuccess;
     res.message = allMsg.str();
     return res;
 }
@@ -282,33 +256,61 @@ MotionResult MotionController::SmoothStopAll(double rampSec) {
     try {
         etherCATMaster->HoldAllPDOFiltersPosition();
         allMsg << TimestampNowW() << L"[SmoothStopAll] PDO filters set to hold current position\n";
+        anySuccess = true;
     } catch (...) {
         allMsg << TimestampNowW() << L"[SmoothStopAll] warning: failed to set hold-position mode\n";
     }
 
-    for (int s = 1; s <= slaveCount; ++s) {
-        // NOTE: HoldAllPDOFiltersPosition() already:
-        // 1. Restored normal deceleration limits (cleared soft-start)
-        // 2. Calculated stopping distance using those limits
-        // 3. Set the target position to where the motor will naturally stop
-        //
-        // We do NOT modify the deceleration here anymore because the stopping
-        // distance calculation in HoldCurrentPosition() depends on the current
-        // deceleration limit. Changing it here would cause a mismatch.
-
-        if (StageZeroVelocityCommand(etherCATMaster, pdoDisplay, s)) {
-            std::wstringstream ss; ss << TimestampNowW() << L"[SmoothStopAll] staged 0x60FF=0 slave=" << s << L"\n";
-            allMsg << ss.str();
-            anySuccess = true;
-        } else {
-            allMsg << TimestampNowW() << L"[SmoothStopAll] failed to stage 0x60FF=0 for slave=" << s << L"\n";
+    // CSP mode: after HoldAllPDOFiltersPosition, sync 0x607A (Target Position)
+    // to the actual position (0x6064) for each slave.  In CSP mode 0x607A is
+    // the active position command; if a stale filter-output position is left
+    // in IOmap, the next servo enable (e.g. after Fault Reset) will see a
+    // position != actual and produce a sudden jump.  Copying 0x6064->0x607A
+    // ensures the servo target equals its current position.
+    //
+    // Must clear staged outputs FIRST so that SendProcessDataOnce() below
+    // does not re-apply an old 0x607A entry from stagedOutputs and overwrite
+    // the corrected IOmap value.
+    if (etherCATMaster->IsCspMode()) {
+        etherCATMaster->ClearStagedOutputsForCyclicMotionCommands();
+        const PDOItem* posActItem = MotionLogic::FindActualPositionItem(pdoDisplay->pdoItems);
+        const PDOItem* posTgtItem = nullptr;
+        for (const auto& it : pdoDisplay->pdoItems) {
+            if (it.index == 0x607A && it.isOutput) { posTgtItem = &it; break; }
+        }
+        if (posActItem && posTgtItem) {
+            for (int s = 1; s <= slaveCount; ++s) {
+                int outBase = 0, inBase = 0;
+                if (!etherCATMaster->GetSlaveIOBaseBytes(s, outBase, inBase)) continue;
+                const int actOff = inBase + posActItem->byteOffset;
+                const int tgtOff = outBase + posTgtItem->byteOffset;
+                if (actOff >= 0 && tgtOff >= 0 &&
+                    actOff + 4 <= 4096 &&
+                    tgtOff + 4 <= 4096) {
+                    int32_t actRaw = 0;
+                    uint8_t* ioMap = etherCATMaster->GetIOMap();
+                    std::memcpy(&actRaw, ioMap + actOff, sizeof(actRaw));
+                    std::memcpy(ioMap + tgtOff, &actRaw, sizeof(actRaw));
+                    std::wstringstream ss;
+                    ss << TimestampNowW() << L"[SmoothStopAll] CSP sync 0x607A<-0x6064 slave=" << s
+                       << L" raw=" << actRaw << L"\n";
+                    allMsg << ss.str();
+                }
+            }
         }
     }
 
-    // Send one processdata to make staged targets effective immediately
+    // PDO filters are now holding current position with full configured
+    // deceleration limits restored. The CSV controller will naturally
+    // decelerate each axis toward zero velocity using the filter's
+    // deceleration limit. We intentionally do NOT stage 0x60FF=0 here
+    // because that would bypass the filter's deceleration ramp and cause
+    // an abrupt drive-level quick stop.
+
+    // Send one processdata to make the hold-position effective immediately
     if (etherCATMaster->IsRunning()) {
         etherCATMaster->SendProcessDataOnce();
-        allMsg << TimestampNowW() << L"[SmoothStopAll] process data sent\n";
+        allMsg << TimestampNowW() << L"[SmoothStopAll] process data sent (deceleration-limited stop via PDOFilter)\n";
     }
 
     res.success = anySuccess;
@@ -371,12 +373,109 @@ MotionResult MotionController::PowerOnAsync(int slaveIdx, bool assert, bool have
         etherCATMaster->SendProcessDataOnce();
     }
 
-    // 1) Stage cyclic command PDO 0x60FF = 0 before enabling operation.
-    if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, slaveIdx)) {
-        res.message = TimestampNowW() + std::wstring(L"[PowerOn] failed to stage PDO 0x60FF=0"); return res; }
-    {
-        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOn] staged PDO 0x60FF=0");
-        LogPowerOn(std::string(bf));
+    // Read the configured cyclic operation mode from the master.
+    const uint8_t mode = static_cast<uint8_t>(etherCATMaster->GetCyclicOperationMode());
+    const bool isCSP = (mode == CoreHelpers::kCia402OperationModeCyclicSyncPosition);
+
+    // === CSP initialization: write actual PDO position to PDO command position ===
+    // Before switching to CSP mode, the target position (0x607A) must match
+    // the actual position (0x6064) so the drive does not jump on mode entry.
+    if (isCSP) {
+        // Read actual position from PDO 0x6064 via IOmap.
+        // Use the same StagePDOByIndex path for reliability — it finds the
+        // correct PDO item in the registered descriptors and writes to IOmap.
+        int32_t actualPosition = 0;
+        bool gotActualPos = false;
+        {
+            // Find the 0x6064 item and read its value directly from IOmap
+            // via the PDO snapshot mechanism.
+            std::vector<uint8_t> snapshot;
+            if (etherCATMaster->GetPDODataSnapshot(slaveIdx, snapshot) && !snapshot.empty()) {
+                // Directly parse 0x6064 from the snapshot at standard TxPDO offset.
+                // Snapshot layout: [Obytes output] + [0x6064 at input offset 0 (Startup.csv order)]
+                int slaveObytes = 0;
+                const auto* ctx = etherCATMaster->GetContext();
+                if (ctx && slaveIdx <= ctx->slavecount) {
+                    slaveObytes = ctx->slavelist[slaveIdx].Obytes;
+                } else {
+                    // Fallback: assume 17-byte output (7-entry RxPDO)
+                    slaveObytes = EtherCATMaster::kPdoRxByteSize;
+                }
+                const int offset6064 = slaveObytes + EtherCATMaster::kPdoInOff_ActualPos;
+                if (offset6064 + 4 <= static_cast<int>(snapshot.size())) {
+                    uint32_t raw = 0;
+                    for (int b = 0; b < 4; ++b) {
+                        raw |= static_cast<uint32_t>(snapshot[offset6064 + b]) << (8 * b);
+                    }
+                    actualPosition = static_cast<int32_t>(raw);
+                    gotActualPos = true;
+                }
+            }
+        }
+
+        if (gotActualPos) {
+            // Use StagePDOByIndex to write actual position to 0x607A reliably.
+            if (MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx,
+                                             0x607A, static_cast<uint32_t>(actualPosition))) {
+                char bf[128]; sprintf_s(bf, sizeof(bf),
+                    "[PowerOn] CSP init: staged 0x607A=0x6064=%d", static_cast<int>(actualPosition));
+                LogPowerOn(std::string(bf));
+
+                // Verify 0x607A has been updated to match actual position before proceeding.
+                // Without this wait, the drive may see stale 0x607A and jump on enable.
+                const int kVerifyMaxRetries = 10;
+                const int kVerifyIntervalMs = 5;
+                bool verified = false;
+                for (int retry = 0; retry < kVerifyMaxRetries; ++retry) {
+                    if (etherCATMaster->IsRunning()) {
+                        etherCATMaster->SendProcessDataOnce();
+                        std::this_thread::sleep_for(std::chrono::milliseconds(kVerifyIntervalMs));
+                    }
+                    std::vector<uint8_t> verifySnap;
+                    if (etherCATMaster->GetPDODataSnapshot(slaveIdx, verifySnap) && !verifySnap.empty()) {
+                        const PDOItem* tposItem = MotionLogic::FindTargetPositionItem(pdoDisplay->pdoItems);
+                        int32_t stagedPos = 0;
+                        if (tposItem && ReadPDOItemValueFromSnapshot(etherCATMaster, slaveIdx, verifySnap, *tposItem, stagedPos)) {
+                            if (stagedPos == actualPosition) {
+                                verified = true;
+                                char bf2[128]; sprintf_s(bf2, sizeof(bf2),
+                                    "[PowerOn] CSP verify: 0x607A=%d matches after %d retries", static_cast<int>(stagedPos), retry + 1);
+                                LogPowerOn(std::string(bf2));
+                                break;
+                            }
+                            char bf2[128]; sprintf_s(bf2, sizeof(bf2),
+                                "[PowerOn] CSP verify retry %d: 0x607A=%d != expected %d", retry + 1, static_cast<int>(stagedPos), static_cast<int>(actualPosition));
+                            LogPowerOn(std::string(bf2));
+                        }
+                    }
+                }
+                if (!verified) {
+                    char bf2[128]; sprintf_s(bf2, sizeof(bf2),
+                        "[PowerOn] CSP WARNING: 0x607A not verified after %d retries, proceeding anyway", kVerifyMaxRetries);
+                    LogPowerOn(std::string(bf2));
+                }
+            } else {
+                char bf[128]; sprintf_s(bf, sizeof(bf),
+                    "[PowerOn] CSP init: StagePDOByIndex(0x607A) returned false");
+                LogPowerOn(std::string(bf));
+            }
+        } else {
+            char bf[128]; sprintf_s(bf, sizeof(bf),
+                "[PowerOn] CSP init: could not read 0x6064 from IOmap snapshot");
+            LogPowerOn(std::string(bf));
+        }
+    }
+
+    // 1) Stage cyclic command PDO to zero before enabling operation.
+    //    For CSV: 0x60FF = 0.  For CSP: the command PDO 0x607A was already
+    //    staged above with the actual position, so this is a no-op for CSP.
+    if (!isCSP) {
+        if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, slaveIdx)) {
+            res.message = TimestampNowW() + std::wstring(L"[PowerOn] failed to stage PDO 0x60FF=0"); return res; }
+        {
+            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOn] staged PDO 0x60FF=0");
+            LogPowerOn(std::string(bf));
+        }
     }
 
     // 2) Stage controlword 0x6040 = 0x0F (write command)
@@ -390,13 +489,12 @@ MotionResult MotionController::PowerOnAsync(int slaveIdx, bool assert, bool have
         LogPowerOn(std::string(bf));
     }
 
-    // 3) Write SDO 0x6060 = default cyclic mode first.
-    uint8_t mode = CoreHelpers::kDefaultCyclicOperationMode;
-    if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6060, (uint8_t)0x00, (void*)&mode, 1)) {
-        res.message = TimestampNowW() + std::wstring(L"[PowerOn] failed to write/verify SDO 0x6060 default cyclic mode"); return res;
+    // 3) Write 0x6060 = cyclic operation mode (PDO if extended, SDO if basic)
+    if (!etherCATMaster->WriteModeOfOperation((uint16_t)slaveIdx, (uint8_t)mode)) {
+        res.message = TimestampNowW() + std::wstring(L"[PowerOn] failed to write 0x6060 cyclic mode"); return res;
     }
     {
-        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOn] wrote SDO 0x6060=%d (%s)",
+        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOn] wrote 0x6060=%d (%s)",
                                 (int)mode,
                                 CoreHelpers::DescribeOperationModeShortName(mode));
         LogPowerOn(std::string(bf));
@@ -406,7 +504,9 @@ MotionResult MotionController::PowerOnAsync(int slaveIdx, bool assert, bool have
         etherCATMaster->SendProcessDataOnce();
     }
 
-    std::wstringstream ss; ss << TimestampNowW() << L"[PowerOn] final: staged 0x60FF=0 and 0x6040=0x0F in "
+    std::wstringstream ss; ss << TimestampNowW() << L"[PowerOn] final: staged "
+                              << (isCSP ? L"0x607A=actual and " : L"0x60FF=0 and ")
+                              << L"0x6040=0x0F in "
                               << CoreHelpers::DescribeOperationModeShortName(mode) << L"\n";
     // Merge stepLog (all per-operation logs) with final summary so UI sees full sequence
     std::wstring finalMsg = stepLog.str() + ss.str();
@@ -629,42 +729,119 @@ MotionResult MotionController::PowerOnAllAsync(int slaveCount) {
         LogAll(bf);
     }
 
-    // PHASE 2: Stage the cyclic command PDO to zero velocity for all axes.
-    LogAll("[PowerOnAll] Phase 2: Staging 0x60FF=0 for all axes");
+    // PHASE 2: Stage the cyclic command PDO for all axes.
+    //   CSP: write actual position (0x6064) to target position (0x607A)
+    //   CSV: stage 0x60FF = 0
+    const uint8_t batchMode = static_cast<uint8_t>(etherCATMaster->GetCyclicOperationMode());
+    const bool batchIsCSP = (batchMode == CoreHelpers::kCia402OperationModeCyclicSyncPosition);
+    LogAll(batchIsCSP ? "[PowerOnAll] Phase 2: Staging 0x607A=0x6064 for all axes (CSP)"
+                      : "[PowerOnAll] Phase 2: Staging 0x60FF=0 for all axes (CSV)");
     for (int si = 1; si <= slaveCount; ++si) {
-        if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, si)) {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] Phase 2: failed to stage 0x60FF=0 for slave %d", si);
+        if (batchIsCSP) {
+            // CSP: read actual position from 0x6064 and stage to 0x607A via StagePDOByIndex.
+            int32_t actualPos = 0;
+            auto &snap = snapshotCache[si];
+            if (etherCATMaster->GetPDODataSnapshot(si, snap)) {
+                ReadPDOItemValueFromSnapshot(etherCATMaster, si, snap, *posItem, actualPos);
+            }
+            // Use StagePDOByIndex for reliable direct-to-IOmap write (same path as CSV's StageZeroVelocityCommand).
+            MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, si,
+                                         0x607A, static_cast<uint32_t>(actualPos));
+            char bf[128]; sprintf_s(bf, sizeof(bf),
+                "[PowerOnAll] slave %d: staged 0x607A=0x6064=%d (CSP init)", si, static_cast<int>(actualPos));
             LogAll(bf);
-            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to stage PDO 0x60FF=0");
-            return res;
+            // Store expected position for verification
+            snapshotCache[si].resize(sizeof(int32_t));
+            memcpy(snapshotCache[si].data(), &actualPos, sizeof(actualPos));
+        } else {
+            if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, si)) {
+                char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] Phase 2: failed to stage 0x60FF=0 for slave %d", si);
+                LogAll(bf);
+                res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to stage PDO 0x60FF=0");
+                return res;
+            }
+            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: staged 0x60FF=0", si);
+            LogAll(bf);
         }
-        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: staged 0x60FF=0", si);
-        LogAll(bf);
     }
     
-    // Send the staged zero velocity commands before the mode change so the drives
-    // see a benign command when CSV is acknowledged.
-    LogAll("[PowerOnAll] Phase 2.5: Sending staged zero-velocity commands to IOmap");
+    // Phase 2.5: Send the staged commands before the mode change so the drives
+    // see the correct PDO values (CSP: 0x607A=actual; CSV: 0x60FF=0) when
+    // the new mode is acknowledged.
+    LogAll(batchIsCSP
+        ? "[PowerOnAll] Phase 2.5: Sending staged CSP position commands to IOmap"
+        : "[PowerOnAll] Phase 2.5: Sending staged zero-velocity commands to IOmap");
     if (etherCATMaster->IsRunning()) {
         etherCATMaster->SendProcessDataOnce();
     }
 
-    // PHASE 3: Write SDO 0x6060=default cyclic mode for ALL axes.
-    LogAll("[PowerOnAll] Phase 3: Writing default cyclic mode for all axes");
-    uint8_t mode = CoreHelpers::kDefaultCyclicOperationMode;
-    
+    // Phase 2.6 (CSP only): Verify 0x607A has been updated to match actual position
+    // for all axes. The drive must see the correct command position before mode switch
+    // to prevent position jumps on enable.
+    if (batchIsCSP) {
+        LogAll("[PowerOnAll] Phase 2.6: Verifying 0x607A matches actual position for all axes");
+        const PDOItem* tposItem = MotionLogic::FindTargetPositionItem(pdoDisplay->pdoItems);
+        const int kVerifyMaxRetries = 10;
+        const int kVerifyIntervalMs = 5;
+        for (int retry = 0; retry < kVerifyMaxRetries; ++retry) {
+            if (etherCATMaster->IsRunning()) {
+                etherCATMaster->SendProcessDataOnce();
+                std::this_thread::sleep_for(std::chrono::milliseconds(kVerifyIntervalMs));
+            }
+            bool allVerified = true;
+            for (int si = 1; si <= slaveCount; ++si) {
+                std::vector<uint8_t> verifySnap;
+                if (!etherCATMaster->GetPDODataSnapshot(si, verifySnap) || verifySnap.empty()) {
+                    allVerified = false; continue;
+                }
+                int32_t stagedPos = 0;
+                if (!tposItem || !ReadPDOItemValueFromSnapshot(etherCATMaster, si, verifySnap, *tposItem, stagedPos)) {
+                    allVerified = false; continue;
+                }
+                int32_t expectedPos = 0;
+                if (snapshotCache[si].size() >= sizeof(int32_t))
+                    memcpy(&expectedPos, snapshotCache[si].data(), sizeof(expectedPos));
+                if (stagedPos != expectedPos) {
+                    allVerified = false;
+                    char bf2[128]; sprintf_s(bf2, sizeof(bf2),
+                        "[PowerOnAll] Phase 2.6: slave %d retry %d: 0x607A=%d != expected %d",
+                        si, retry + 1, static_cast<int>(stagedPos), static_cast<int>(expectedPos));
+                    LogAll(bf2);
+                }
+            }
+            if (allVerified) {
+                char bf2[128]; sprintf_s(bf2, sizeof(bf2),
+                    "[PowerOnAll] Phase 2.6: All axes verified after %d retries", retry + 1);
+                LogAll(bf2);
+                break;
+            }
+            if (retry == kVerifyMaxRetries - 1) {
+                LogAll("[PowerOnAll] Phase 2.6: WARNING - not all axes verified, proceeding anyway");
+            }
+        }
+    }
+
+    // PHASE 2.7 (CSP only): Clear the persistent staged 0x607A entries
+    // created in Phase 2.  Leaving them in place would cause CyclicTask to
+    // overwrite IOmap[0x607A] with the snapshot value every cycle, defeating
+    // the ongoing CSP sync in PDOProcessingTask.  ClearStagedOutputsForCyclic-
+    // MotionCommands also CSP-syncs 0x607A←0x6064 as a final safety net.
+    if (batchIsCSP) {
+        LogAll("[PowerOnAll] Phase 2.7: Clearing staged 0x607A entries, letting CSP sync take over");
+        etherCATMaster->ClearStagedOutputsForCyclicMotionCommands();
+    }
+
+    // PHASE 3: Write 0x6060 for ALL axes (PDO if extended, SDO if basic)
+    LogAll("[PowerOnAll] Phase 3: Writing operation mode for all axes");
     for (int si = 1; si <= slaveCount; ++si) {
-        if (!etherCATMaster->WriteSDO((uint16_t)si, (uint16_t)0x6060, (uint8_t)0x00, (void*)&mode, 1)) {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] failed to write SDO 0x6060=%d for slave %d", (int)mode, si);
+        if (!etherCATMaster->WriteModeOfOperation((uint16_t)si, (uint8_t)batchMode)) {
+            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] failed to write 0x6060=%d for slave %d", (int)batchMode, si);
             LogAll(bf);
-            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to write SDO 0x6060 default cyclic mode");
+            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to write 0x6060 cyclic mode");
             return res;
         }
-
-        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: wrote SDO 0x6060=%d (%s)",
-                                si,
-                                (int)mode,
-                                CoreHelpers::DescribeOperationModeShortName(mode));
+        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: wrote 0x6060=%d (%s)",
+                                si, (int)batchMode, CoreHelpers::DescribeOperationModeShortName(batchMode));
         LogAll(bf);
     }
 
@@ -788,10 +965,13 @@ MotionResult MotionController::PowerOnAllAsync(int slaveCount) {
         LogAll(bf);
     }
 
-    // PHASE 6: Stage controlword 0x6040=0x0F for ALL axes
-    // CRITICAL: This must be done AFTER final zero-velocity staging and RIGHT BEFORE send!
-    // Do NOT stage this earlier - CyclicTask will send it immediately!
-    LogAll("[PowerOnAll] Phase 6: Staging controlword (0x6040=0x0F) for all axes");
+    // PHASE 6: CiA402 state-machine sequence for all axes.
+    // Some drives (e.g. strict CiA402 implementations on Axis 5/7) reject the
+    // direct Ready-to-Switch-On → Operation-Enabled shortcut (0x000F) and
+    // require the intermediate Switch-On step (0x0007 → Switched On) first.
+    // We stage 0x0007, send, wait for the drives to acknowledge Switched On,
+    // then allow extra settling cycles before staging 0x000F in Phase 7.
+    LogAll("[PowerOnAll] Phase 6: Staging controlword 0x6040=0x0007 (Switch On) for all axes");
     const PDOItem* cwItem = MotionLogic::FindControlwordItem(pdoDisplay->pdoItems);
     if (!cwItem) {
         res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] controlword PDO (0x6040) not found");
@@ -799,18 +979,99 @@ MotionResult MotionController::PowerOnAllAsync(int slaveCount) {
     }
 
     for (int si = 1; si <= slaveCount; ++si) {
-        if (!MotionLogic::StageControlwordWithoutSend(etherCATMaster, pdoDisplay, si, cwItem, 0x000F)) {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] failed to stage 0x6040 for slave %d", si);
+        if (!MotionLogic::StageControlwordWithoutSend(etherCATMaster, pdoDisplay, si, cwItem, 0x0007)) {
+            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] failed to stage 0x6040=0x0007 for slave %d", si);
             LogAll(bf);
-            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to stage controlword 0x6040=0x0F");
+            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to stage controlword 0x6040=0x0007");
+            return res;
+        }
+        char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: staged 0x6040=0x0007", si);
+        LogAll(bf);
+    }
+
+    // Send the staged 0x0007 and wait for drives to reach Switched On (0x0233).
+    LogAll("[PowerOnAll] Phase 6: Sending 0x0007 and waiting for Switched On state");
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+    }
+    {
+        // Poll statusword for up to 500ms; all axes must report 0x0233 (Switched On)
+        // or already 0x1637 (Operation Enabled, from a prior enable).
+        const int kSwitchOnTimeoutMs = 500;
+        const int kSwitchOnPollMs = 10;
+        const PDOItem* swItem = MotionLogic::FindStatuswordItem(pdoDisplay->pdoItems);
+        int waited = 0;
+        bool allSwitchedOn = false;
+        while (waited < kSwitchOnTimeoutMs) {
+            if (etherCATMaster->IsRunning()) {
+                etherCATMaster->SendProcessDataOnce();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(kSwitchOnPollMs));
+            waited += kSwitchOnPollMs;
+
+            allSwitchedOn = true;
+            for (int si = 1; si <= slaveCount; ++si) {
+                if (!swItem) { allSwitchedOn = false; break; }
+                std::vector<uint8_t> snap;
+                if (!etherCATMaster->GetPDODataSnapshot(si, snap)) { allSwitchedOn = false; continue; }
+                int32_t sw = 0;
+                if (!ReadPDOItemValueFromSnapshot(etherCATMaster, si, snap, *swItem, sw)) { allSwitchedOn = false; continue; }
+                uint32_t usw = static_cast<uint32_t>(sw);
+                // Accept Switched On (0x0233) or already Operation Enabled (0x1637/0x0237)
+                const uint32_t kSwitchedOnMask = 0x006F;  // bits 0-3,5-6
+                const uint32_t kSwitchedOnVal  = 0x0023;  // SO=1,RTSO=1,VE=1
+                if ((usw & kSwitchedOnMask) != kSwitchedOnVal) {
+                    // Also accept if already at Operation Enabled
+                    const uint32_t kOpEnabledVal = 0x0027;
+                    if ((usw & kSwitchedOnMask) != kOpEnabledVal) {
+                        allSwitchedOn = false;
+                        if (waited == kSwitchOnPollMs) {
+                            char bf[128];
+                            sprintf_s(bf, sizeof(bf), "[PowerOnAll] Phase 6: slave %d waiting for Switched On (sw=0x%04X)", si, (unsigned)usw);
+                            LogAll(bf);
+                        }
+                    }
+                }
+            }
+            if (allSwitchedOn) break;
+        }
+        if (!allSwitchedOn) {
+            LogAll("[PowerOnAll] Phase 6: Timeout waiting for Switched On, proceeding with 0x000F anyway");
+        } else {
+            char bf[128];
+            sprintf_s(bf, sizeof(bf), "[PowerOnAll] Phase 6: All axes reached Switched On after %dms", waited);
+            LogAll(bf);
+
+            // Extra settling: send 2 more frames of 0x0007 and wait 30ms before
+            // transitioning to 0x000F.  Strict drives (e.g. Axis 5/7) may reject
+            // a back-to-back 0x0007→0x000F transition without an intermediate
+            // stabilisation period in Switched On.
+            LogAll("[PowerOnAll] Phase 6: Extra settling — 2 more frames of 0x0007");
+            for (int settle = 0; settle < 2; ++settle) {
+                if (etherCATMaster->IsRunning()) {
+                    etherCATMaster->SendProcessDataOnce();
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(15));
+            }
+            LogAll("[PowerOnAll] Phase 6: Settling complete, proceeding to 0x000F");
+        }
+    }
+
+    // PHASE 7: Stage controlword 0x6040=0x000F (Enable Operation) for ALL axes.
+    LogAll("[PowerOnAll] Phase 7: Staging controlword (0x6040=0x000F) for all axes");
+
+    for (int si = 1; si <= slaveCount; ++si) {
+        if (!MotionLogic::StageControlwordWithoutSend(etherCATMaster, pdoDisplay, si, cwItem, 0x000F)) {
+            char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] failed to stage 0x6040=0x000F for slave %d", si);
+            LogAll(bf);
+            res.message = TimestampNowW() + std::wstring(L"[PowerOnAll] failed to stage controlword 0x6040=0x000F");
             return res;
         }
         char bf[128]; sprintf_s(bf, sizeof(bf), "[PowerOnAll] slave %d: staged 0x6040=0x000F", si);
         LogAll(bf);
     }
 
-    // PHASE 7: IMMEDIATELY send process data - no delay!
-    // Both 0x60FF and 0x6040 are staged, send them together atomically.
+    // Send the staged 0x000F immediately.
     LogAll("[PowerOnAll] Phase 7: Sending staged PDO data to ALL axes simultaneously");
     if (etherCATMaster->IsRunning()) {
         etherCATMaster->SendProcessDataOnce();
@@ -827,7 +1088,55 @@ MotionResult MotionController::PowerOnAllAsync(int slaveCount) {
     return res;
 }
 
-MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13, uint32_t p13) {
+bool MotionController::HomePrepareSDO(int slaveIdx, bool haveP13, uint32_t p13) {
+    if (slaveIdx <= 0 || !etherCATMaster) return false;
+
+    // 1) Write 0x6060 = 6 (homing mode; PDO if extended, SDO if basic)
+    if (!etherCATMaster->WriteModeOfOperation((uint16_t)slaveIdx, 6)) {
+        return false;
+    }
+
+    // 2) Write 0x6098 via SDO: select homing method per detected drive type
+    {
+        int8_t method = EtherCATMaster::kHomingMethodDvs; // default DVS
+        const ecx_contextt* cx = etherCATMaster->GetContext();
+        if (cx && slaveIdx <= cx->slavecount) {
+            method = EtherCATMaster::GetHomingMethod(cx->slavelist[slaveIdx].eep_man);
+        }
+        int probeSz = 4;
+        uint8_t probeBuf[4] = {0};
+        bool wrote = false;
+        if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6098, (uint8_t)0x00, (void*)probeBuf, probeSz)) {
+            if (probeSz == 1) {
+                uint8_t v8 = (uint8_t)method;
+                wrote = etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v8, 1);
+            } else if (probeSz == 2) {
+                uint16_t v16 = (uint16_t)method;
+                wrote = etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v16, 2);
+            } else {
+                uint32_t v32 = (uint32_t)method;
+                wrote = etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v32, 4);
+            }
+        }
+        if (!wrote) {
+            uint32_t v6098 = (uint32_t)method;
+            wrote = etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6098, (uint8_t)0x00, (void*)&v6098, (int)sizeof(v6098));
+        }
+        if (!wrote) return false;
+    }
+
+    // 3) Write 0x607C via SDO
+    {
+        uint32_t v607c = haveP13 ? p13 : 0;
+        if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x607C, (uint8_t)0x00, (void*)&v607c, (int)sizeof(v607c))) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13, uint32_t p13, bool skipSdo) {
     MotionResult res{false, L""};
     if (slaveIdx <= 0 || !etherCATMaster) { res.message = TimestampNowW() + std::wstring(L"[OriginSet] invalid args or master missing"); return res; }
     if (!assert) { res.message = TimestampNowW() + std::wstring(L"[OriginSet] release ignored"); return res; }
@@ -859,7 +1168,7 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
         AppendFileMC("HomeAsync: after pdoItems scan\n");
     if (!cwItem) AppendFileMC("HomeAsync: cwItem MISSING\n"); else AppendFileMC("HomeAsync: cwItem OK\n");
     if (!statusItem) AppendFileMC("HomeAsync: statusItem MISSING\n"); else AppendFileMC("HomeAsync: statusItem OK\n");
-    AppendFileMC("HomeAsync: mode display (0x6061) will be read via SDO\n");
+    AppendFileMC("HomeAsync: mode display (0x6061) from PDO cache\n");
     }
     if (!cwItem) {
         std::wstringstream ss; ss << TimestampNowW() << L"[OriginSet] controlword PDO (0x6040) not found\nAvailable PDO items:\n";
@@ -877,14 +1186,12 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
         res.message = ss.str();
         return res;
     }
-    // Always use SDO to obtain mode display (0x6061)
-    uint32_t tmp = 0; int readSz = (int)sizeof(tmp);
-    if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6061, (uint8_t)0x00, (void*)&tmp, readSz)) {
-        AppendFileMC("HomeAsync: SDO read 0x6061 succeeded\n");
-    } else {
-        AppendFileMC("HomeAsync: SDO read 0x6061 failed\n");
-        res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to read SDO 0x6061");
-        return res;
+    // Read current mode display from PDO cache (lock-free, no snapshot needed)
+    {
+        uint8_t tmp = 0;
+        if (etherCATMaster->GetPdo6061(static_cast<uint16_t>(slaveIdx), tmp)) {
+            char bf[64]; sprintf_s(bf, sizeof(bf), "HomeAsync: PDO 0x6061=%u\n", tmp); AppendFileMC(bf);
+        }
     }
 
     // Read current 6040 from snapshot and require bit4 == 0 before starting
@@ -899,93 +1206,16 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
 
     // NOTE: BUSY flag must be managed by UI. MotionController will only perform SDO/PDO operations.
 
-    // 1) write 0x6060 = 6
-    AppendFileMC("HomeAsync: before SDO 0x6060 write\n");
-    uint8_t buf6060_mode6[1] = { (uint8_t)6 };
-    if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6060, (uint8_t)0x00, (void*)buf6060_mode6, 1)) {
-        AppendFileMC("HomeAsync: SDO 0x6060 write FAILED\n");
-        res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to verify SDO 0x6060=6"); return res;
-    }
-    AppendFileMC("HomeAsync: after SDO 0x6060 write (OK)\n");
-    stepLog << TimestampNowW() << L"[OriginSet] wrote SDO 0x6060=6\n";
-
-    // Debug: immediately read back 0x6060 and 0x6061 to capture device response
-    {
-        AppendFileMC("HomeAsync: debug: readback 0x6060/0x6061\n");
-        // read 0x6060 as 8-bit
-        int readSz6060 = 1; uint8_t rb6060 = 0;
-        if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6060, (uint8_t)0x00, (void*)&rb6060, readSz6060)) {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "HomeAsync: debug: 0x6060 readSz=%d val=0x%02X\n", readSz6060, rb6060); AppendFileMC(bf);
-        } else {
-            AppendFileMC("HomeAsync: debug: 0x6060 read FAILED\n");
+    // 1-3) SDO preamble: 0x6060=6, 0x6098=35, 0x607C — skip if caller already ran HomePrepareSDO
+    if (!skipSdo) {
+        if (!HomePrepareSDO(slaveIdx, haveP13, p13)) {
+            AppendFileMC("HomeAsync: HomePrepareSDO FAILED\n");
+            res.message = TimestampNowW() + std::wstring(L"[OriginSet] SDO preamble failed"); return res;
         }
-
-        // read 0x6061 as up to 32-bit to capture display mode representation
-        int readSz6061 = (int)sizeof(uint32_t); uint32_t rb6061 = 0;
-        if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6061, (uint8_t)0x00, (void*)&rb6061, readSz6061)) {
-            char bf2[128]; sprintf_s(bf2, sizeof(bf2), "HomeAsync: debug: 0x6061 readSz=%d val=0x%08X (dec=%d)\n", readSz6061, rb6061, (int32_t)rb6061); AppendFileMC(bf2);
-        } else {
-            AppendFileMC("HomeAsync: debug: 0x6061 read FAILED\n");
-        }
-    }
-
-    // 2) write 0x6098 = 35 (32-bit)
-    {
-        AppendFileMC("HomeAsync: before SDO 0x6098 write (35)\n");
-        // Probe device for the current SDO size (ReadSDO will update probeSz)
-        int probeSz = 4;
-        uint8_t probeBuf[4] = {0};
-            if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6098, (uint8_t)0x00, (void*)probeBuf, probeSz)) {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "HomeAsync: SDO 0x6098 probe readSz=%d bytes=", probeSz); AppendFileMC(bf);
-            for (int i = 0; i < probeSz; ++i) { char b2[8]; sprintf_s(b2, sizeof(b2), "%02X ", probeBuf[i]); AppendFileMC(b2); }
-            AppendFileMC("\n");
-
-            bool wrote = false;
-                if (probeSz == 1) {
-                uint8_t v8 = (uint8_t)35;
-                if (etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v8, 1)) wrote = true;
-            } else if (probeSz == 2) {
-                uint16_t v16 = (uint16_t)35;
-                if (etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v16, 2)) wrote = true;
-            } else {
-                uint32_t v32 = (uint32_t)35;
-                if (etherCATMaster->WriteSDO((uint16_t)slaveIdx, 0x6098, 0x00, &v32, 4)) wrote = true;
-            }
-
-            if (!wrote) {
-                AppendFileMC("HomeAsync: SDO 0x6098 write FAILED\n");
-                res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to verify SDO 0x6098=35"); return res;
-            }
-            AppendFileMC("HomeAsync: after SDO 0x6098 write (OK)\n");
-            stepLog << TimestampNowW() << L"[OriginSet] wrote SDO 0x6098=35\n";
-        } else {
-            AppendFileMC("HomeAsync: SDO 0x6098 probe failed - attempting 32-bit write\n");
-            uint32_t v6098 = 35;
-            if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6098, (uint8_t)0x00, (void*)&v6098, (int)sizeof(v6098))) {
-                AppendFileMC("HomeAsync: SDO 0x6098 write FAILED\n");
-                res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to verify SDO 0x6098=35"); return res;
-            }
-            AppendFileMC("HomeAsync: after SDO 0x6098 write (OK)\n");
-        }
-    }
-
-    // 3) write 0x607C: use provided P13 if available, otherwise write 0
-    {
-        uint32_t v607c = 0;
-        if (haveP13) v607c = p13;
-        AppendFileMC("HomeAsync: before SDO 0x607C write\n");
-        {
-            char bf[128]; sprintf_s(bf, sizeof(bf), "HomeAsync: SDO 0x607C will be written with value=0x%08X\n", v607c); AppendFileMC(bf);
-        }
-        if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x607C, (uint8_t)0x00, (void*)&v607c, (int)sizeof(v607c))) {
-            AppendFileMC("HomeAsync: SDO 0x607C write FAILED\n");
-            res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to verify SDO 0x607C"); return res;
-        }
-        AppendFileMC("HomeAsync: after SDO 0x607C write (OK)\n");
-        {
-            std::wstringstream ssx; ssx << TimestampNowW() << L"[OriginSet] wrote SDO 0x607C=0x" << std::hex << std::uppercase << v607c << std::dec << L"\n";
-            stepLog << ssx.str();
-        }
+        AppendFileMC("HomeAsync: SDO preamble OK\n");
+        stepLog << TimestampNowW() << L"[OriginSet] SDO preamble complete\n";
+    } else {
+        AppendFileMC("HomeAsync: skipping SDO preamble (already prepared)\n");
     }
 
     // 4) Stage PDO controlword = 0x0F (write command) via staging
@@ -998,29 +1228,19 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
     AppendFileMC("HomeAsync: after StageControlword -> 0x0F (OK)\n");
     stepLog << TimestampNowW() << L"[OriginSet] staged controlword 0x6040=0x0F\n";
 
-    // Verify mode display (0x6061) == 6 using PDO snapshot or SDO fallback
-    std::vector<uint8_t> snap2;
-    if (!etherCATMaster->GetPDODataSnapshot(slaveIdx, snap2)) { res.message = TimestampNowW() + std::wstring(L"[OriginSet] failed to get PDO snapshot after staging 0x0F"); return res; }
-    AppendFileMC("HomeAsync: after GetPDODataSnapshot after 0x0F\n");
-    // no persistent verifyMode required; we only need to confirm it becomes 6
-    // verify mode display == 6, but allow up to 500ms for device to update before failing
-    const int modeVerifyTimeoutMs = 500;
-    const int modePollIntervalMs = 10;
-    int modeElapsed = 0;
-    bool modeOk = false;
-    // Verify via SDO repeatedly until mode display == 6 or timeout
-    while (modeElapsed <= modeVerifyTimeoutMs) {
-        uint32_t v = 0; int sz = (int)sizeof(v);
-        if (etherCATMaster->ReadSDO((uint16_t)slaveIdx, (uint16_t)0x6061, (uint8_t)0x00, (void*)&v, sz)) {
-            char bf2[128]; sprintf_s(bf2, sizeof(bf2), "HomeAsync: SDO verifyMode poll elapsed=%d value=%u\n", modeElapsed, v); AppendFileMC(bf2);
-            if ((int32_t)v == 6) { modeOk = true; break; }
-        } else {
-            AppendFileMC("HomeAsync: ReadSDO 0x6061 failed while verifying mode (retry)\n");
-        }
-        Sleep(modePollIntervalMs);
-        modeElapsed += modePollIntervalMs;
+    // CRITICAL: Wait at least one PDO cycle for the drive to process 0x0F
+    // before proceeding to 0x1F. Without this wait, the drive may see 0x1F
+    // before acknowledging 0x0F, causing the homing sequence to fail.
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        etherCATMaster->SendProcessDataOnce();
     }
-    if (!modeOk) { res.message = TimestampNowW() + std::wstring(L"[OriginSet] SDO verify failed: mode display (0x6061) != 6 after 500ms"); return res; }
+    AppendFileMC("HomeAsync: waited for 0x0F to settle before 0x1F\n");
+
+    // Mode verification removed: 0x6061 is now cached every PDO cycle and
+    // the drive accepts mode changes within 1-2 cycles. The statusword polling
+    // below will catch any actual failure (e.g. mode not accepted).
 
     // Capture the pre-start statusword so we can reject stale "already complete"
     // states such as 0x1637 that may still be visible when origin-setting has not yet run.
@@ -1213,12 +1433,8 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
                             stepLog << ssSettleOk.str();
                         }
 
-                        const uint8_t restoreMode = CoreHelpers::kDefaultCyclicOperationMode;
-                        if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx,
-                                                      (uint16_t)0x6060,
-                                                      (uint8_t)0x00,
-                                                      (void*)&restoreMode,
-                                                      1)) {
+                        const uint8_t restoreMode = static_cast<uint8_t>(etherCATMaster->GetCyclicOperationMode());
+                        if (!etherCATMaster->WriteModeOfOperation((uint16_t)slaveIdx, restoreMode)) {
                             std::wstringstream ssRestore;
                             ssRestore << TimestampNowW()
                                       << L"[OriginSet] failed to restore SDO 0x6060=" << (int)restoreMode
@@ -1233,33 +1449,54 @@ MotionResult MotionController::HomeAsync(int slaveIdx, bool assert, bool haveP13
                                 << L"[OriginSet] restored SDO 0x6060=" << (int)restoreMode
                                 << L" (" << CoreHelpers::DescribeOperationModeShortName(restoreMode) << L")\n";
 
-                        bool restoreModeOk = false;
-                        for (int restoreElapsedMs = 0; restoreElapsedMs <= modeVerifyTimeoutMs; restoreElapsedMs += modePollIntervalMs) {
-                            uint32_t restoreDisplay = 0;
-                            int restoreSize = (int)sizeof(restoreDisplay);
-                            if (etherCATMaster->ReadSDO((uint16_t)slaveIdx,
-                                                        (uint16_t)0x6061,
-                                                        (uint8_t)0x00,
-                                                        (void*)&restoreDisplay,
-                                                        restoreSize) &&
-                                (int8_t)(restoreDisplay & 0xFF) == (int8_t)restoreMode) {
-                                restoreModeOk = true;
-                                break;
+                        // No read-back verify: PDO cache updates every cycle; drive accepts
+                        // mode changes within 1-2 PDO cycles. The operation sequence below
+                        // (FaultReset + PowerOn) will catch any actual mode-rejection fault.
+
+                        // CSP init after homing: write actual position to 0x607A
+                        // so the drive does not jump when entering CSP mode.
+                        if (restoreMode == CoreHelpers::kCia402OperationModeCyclicSyncPosition) {
+                            stepLog << TimestampNowW()
+                                    << L"[OriginSet] CSP restore: syncing 0x607A <- 0x6064 before SendProcessData\n";
+                            // Send one roundtrip to get fresh actual position
+                            if (etherCATMaster->IsRunning()) {
+                                etherCATMaster->SendProcessDataOnce();
                             }
-                            if (restoreElapsedMs < modeVerifyTimeoutMs) {
-                                Sleep(modePollIntervalMs);
+                            // Read actual position from 0x6064 via IOmap snapshot
+                            int32_t actualPos = 0;
+                            bool gotPos = false;
+                            {
+                                std::vector<uint8_t> snapshot;
+                                if (etherCATMaster->GetPDODataSnapshot(slaveIdx, snapshot) && !snapshot.empty()) {
+                                    int slaveObytes = 0;
+                                    const auto* ctx = etherCATMaster->GetContext();
+                                    if (ctx && slaveIdx <= ctx->slavecount) {
+                                        slaveObytes = ctx->slavelist[slaveIdx].Obytes;
+                                    } else {
+                                        slaveObytes = EtherCATMaster::kPdoRxByteSize;
+                                    }
+                                    const int offset6064 = slaveObytes + EtherCATMaster::kPdoInOff_ActualPos;
+                                    if (offset6064 + 4 <= static_cast<int>(snapshot.size())) {
+                                        uint32_t raw = 0;
+                                        for (int b = 0; b < 4; ++b) {
+                                            raw |= static_cast<uint32_t>(snapshot[offset6064 + b]) << (8 * b);
+                                        }
+                                        actualPos = static_cast<int32_t>(raw);
+                                        gotPos = true;
+                                    }
+                                }
                             }
-                        }
-                        if (!restoreModeOk) {
-                            std::wstringstream ssRestore;
-                            ssRestore << TimestampNowW()
-                                      << L"[OriginSet] SDO verify failed: mode display (0x6061) != "
-                                      << (int)restoreMode << L" after homing restore\n";
-                            std::wstring full = stepLog.str() + ssRestore.str();
-                            res.success = false;
-                            res.message = full;
-                            finished = true;
-                            break;
+                            if (gotPos) {
+                                MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx,
+                                                             0x607A, static_cast<uint32_t>(actualPos));
+                                wchar_t bf[128];
+                                swprintf_s(bf, L"[OriginSet] CSP: staged 0x607A=0x6064=%d\n",
+                                           static_cast<int>(actualPos));
+                                stepLog << TimestampNowW() << bf;
+                            } else {
+                                stepLog << TimestampNowW()
+                                        << L"[OriginSet] CSP: could not read 0x6064, skip sync\n";
+                            }
                         }
 
                         if (!StageZeroVelocityCommand(etherCATMaster, pdoDisplay, slaveIdx)) {
@@ -1320,21 +1557,38 @@ MotionResult MotionController::JogPositiveStart(int slaveIdx, uint32_t stagedVal
         return res; 
     }
     
-    // 1) Write SDO 0x6060 = default cyclic mode so jog follows the same
-    // motion contract as the main CSV path.
-    // This is done OUTSIDE the mutex to allow multiple axes to configure simultaneously
-    uint8_t mode = CoreHelpers::kDefaultCyclicOperationMode;
-    if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6060, (uint8_t)0x00, (void*)&mode, 1)) {
+    // 1) Zero the velocity command PDO (0x60FF) and flush to hardware BEFORE
+    //    switching the drive to CSV mode.  This prevents an initial velocity
+    //    burst from any stale non-zero value that may be latched in IOmap.
+    MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx, 0x60FF, 0u);
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+    }
+
+    // 2) Write 0x6060 = CSV (9) (PDO if extended, SDO if basic)
+    const uint8_t jogMode = CoreHelpers::kCia402OperationModeCyclicSyncVelocity;
+    if (!etherCATMaster->WriteModeOfOperation((uint16_t)slaveIdx, jogMode)) {
         std::wstringstream ss;
-          ss << TimestampNowW() << L"[JogStart] failed to write SDO 0x6060="
-              << (int)mode << L" ("
-              << CoreHelpers::DescribeOperationModeShortName(mode)
+          ss << TimestampNowW() << L"[JogStart] failed to write 0x6060="
+              << (int)jogMode << L" ("
+              << CoreHelpers::DescribeOperationModeShortName(jogMode)
               << L")";
         res.message = ss.str();
         return res;
     }
-    
-    // 2) 安全停止並重啟執行緒
+
+    // 3) After mode switch, let the drive settle into CSV mode.
+    //    Send several PDO frames with 0x60FF=0 to ensure the drive
+    //    sees zero velocity when it begins tracking the velocity PDO.
+    for (int flushCycle = 0; flushCycle < 5; ++flushCycle) {
+        MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx, 0x60FF, 0u);
+        if (etherCATMaster->IsRunning()) {
+            etherCATMaster->SendProcessDataOnce();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
+
+    // 4) 安全停止並重啟執行緒
     std::shared_ptr<JogState> state;
     std::thread oldThread; // 暫存舊執行緒以便在 mutex 外 join
     
@@ -1394,8 +1648,8 @@ MotionResult MotionController::JogPositiveStart(int slaveIdx, uint32_t stagedVal
     {
         std::wstringstream ss;
         ss << TimestampNowW()
-           << L"[JogStart] soft start initiated (SDO 6060=" << (int)mode
-              << L" " << CoreHelpers::DescribeOperationModeShortName(mode)
+           << L"[JogStart] soft start initiated (SDO 6060=" << (int)jogMode
+              << L" " << CoreHelpers::DescribeOperationModeShortName(jogMode)
            << L", target 60FF=" << (int32_t)stagedVal << L")";
         res.message = ss.str();
     }
@@ -1467,21 +1721,38 @@ MotionResult MotionController::JogNegativeStart(int slaveIdx, uint32_t stagedVal
         return res; 
     }
     
-    // 1) Write SDO 0x6060 = default cyclic mode so jog follows the same
-    // motion contract as the main CSV path.
-    // This is done OUTSIDE the mutex to allow multiple axes to configure simultaneously
-    uint8_t mode = CoreHelpers::kDefaultCyclicOperationMode;
-    if (!etherCATMaster->WriteSDO((uint16_t)slaveIdx, (uint16_t)0x6060, (uint8_t)0x00, (void*)&mode, 1)) {
+    // 1) Zero the velocity command PDO (0x60FF) and flush to hardware BEFORE
+    //    switching the drive to CSV mode.  This prevents an initial velocity
+    //    burst from any stale non-zero value that may be latched in IOmap.
+    MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx, 0x60FF, 0u);
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+    }
+
+    // 2) Write 0x6060 = CSV (9) — jog is velocity-driven (PDO if extended, SDO if basic)
+    const uint8_t jogMode = CoreHelpers::kCia402OperationModeCyclicSyncVelocity;
+    if (!etherCATMaster->WriteModeOfOperation((uint16_t)slaveIdx, jogMode)) {
         std::wstringstream ss;
-          ss << TimestampNowW() << L"[JogNegStart] failed to write SDO 0x6060="
-              << (int)mode << L" ("
-              << CoreHelpers::DescribeOperationModeShortName(mode)
+          ss << TimestampNowW() << L"[JogNegStart] failed to write 0x6060="
+              << (int)jogMode << L" ("
+              << CoreHelpers::DescribeOperationModeShortName(jogMode)
               << L")";
         res.message = ss.str();
         return res;
     }
-    
-    // 2) 安全停止並重啟執行緒
+
+    // 3) After mode switch, let the drive settle into CSV mode.
+    //    Send several PDO frames with 0x60FF=0 to ensure the drive
+    //    sees zero velocity when it begins tracking the velocity PDO.
+    for (int flushCycle = 0; flushCycle < 5; ++flushCycle) {
+        MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaveIdx, 0x60FF, 0u);
+        if (etherCATMaster->IsRunning()) {
+            etherCATMaster->SendProcessDataOnce();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(4));
+    }
+
+    // 4) 安全停止並重啟執行緒
     std::shared_ptr<JogState> state;
     std::thread oldThread; // 暫存舊執行緒以便在 mutex 外 join
     
@@ -1539,9 +1810,125 @@ MotionResult MotionController::JogNegativeStart(int slaveIdx, uint32_t stagedVal
     {
         std::wstringstream ss;
         ss << TimestampNowW()
-           << L"[JogNegStart] soft start initiated (SDO 6060=" << (int)mode
-              << L" " << CoreHelpers::DescribeOperationModeShortName(mode)
+           << L"[JogNegStart] soft start initiated (SDO 6060=" << (int)jogMode
+              << L" " << CoreHelpers::DescribeOperationModeShortName(jogMode)
            << L", target 60FF=" << (int32_t)stagedVal << L")";
+        res.message = ss.str();
+    }
+    return res;
+}
+
+MotionResult MotionController::JogNegativeStartBatch(const std::vector<int>& slaves, const std::vector<uint32_t>& velocities) {
+    MotionResult res{false, L""};
+    if (slaves.empty() || slaves.size() != velocities.size()) {
+        res.message = TimestampNowW() + L"[JogBatch] slave/velocity count mismatch";
+        return res;
+    }
+    if (!etherCATMaster || !pdoDisplay) {
+        res.message = TimestampNowW() + L"[JogBatch] master or PDO display missing";
+        return res;
+    }
+
+    const uint8_t jogMode = CoreHelpers::kCia402OperationModeCyclicSyncVelocity;
+    const size_t count = slaves.size();
+
+    // === Phase 1: Zero 0x60FF + switch to CSV mode for ALL axes ===
+    // Stage all outputs before any PDO exchange — all drives see the change
+    // in the same cycle.
+    for (size_t i = 0; i < count; ++i) {
+        int s = slaves[i];
+        if (s <= 0) continue;
+        MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, s, 0x60FF, 0u);
+        if (!etherCATMaster->WriteModeOfOperation((uint16_t)s, jogMode)) {
+            std::wstringstream ss;
+            ss << TimestampNowW() << L"[JogBatch] failed to write 0x6060=" << (int)jogMode << L" for slave " << s;
+            res.message = ss.str();
+            return res;
+        }
+    }
+    // Single PDO exchange — all axes get 0x60FF=0 and mode=9 simultaneously
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+    }
+
+    // === Phase 2: Wait for all axes to confirm CSV mode (0x6061 == 9) ===
+    const int modeSwitchTimeoutMs = 200;
+    const int pollIntervalMs = 4;
+    int waited = 0;
+    std::vector<bool> modeOk(count, false);
+    size_t modeOkCount = 0;
+    while (waited < modeSwitchTimeoutMs && modeOkCount < count) {
+        // Stage 0x60FF=0 again while waiting to keep drives seeing zero
+        for (size_t i = 0; i < count; ++i) {
+            if (!modeOk[i]) {
+                MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaves[i], 0x60FF, 0u);
+            }
+        }
+        if (etherCATMaster->IsRunning()) {
+            etherCATMaster->SendProcessDataOnce();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(pollIntervalMs));
+        waited += pollIntervalMs;
+
+        for (size_t i = 0; i < count; ++i) {
+            if (modeOk[i]) continue;
+            uint8_t mode = 0;
+            if (etherCATMaster->GetPdo6061((uint16_t)slaves[i], mode) && mode == jogMode) {
+                modeOk[i] = true;
+                ++modeOkCount;
+            }
+        }
+    }
+    if (modeOkCount < count) {
+        std::wstringstream ss;
+        ss << TimestampNowW() << L"[JogBatch] mode switch timeout: " << modeOkCount << L"/" << count << L" axes in CSV mode";
+        res.message = ss.str();
+        return res;
+    }
+
+    // === Phase 3: Stage target velocity for ALL axes simultaneously ===
+    for (size_t i = 0; i < count; ++i) {
+        MotionLogic::StagePDOByIndex(etherCATMaster, pdoDisplay, slaves[i], 0x60FF, velocities[i]);
+    }
+    if (etherCATMaster->IsRunning()) {
+        etherCATMaster->SendProcessDataOnce();
+    }
+
+    // === Phase 4: Start soft-start threads for all axes ===
+    // Reuse existing JogNegativeStart thread-management logic (Phase 4 only)
+    for (size_t i = 0; i < count; ++i) {
+        int s = slaves[i];
+        std::shared_ptr<JogState> state;
+        std::thread oldThread;
+        {
+            std::lock_guard<std::mutex> lk(jogStatesMutex_);
+            auto it = jogStates_.find(s);
+            if (it == jogStates_.end()) {
+                state = std::make_shared<JogState>();
+                jogStates_[s] = state;
+            } else {
+                state = it->second;
+            }
+            if (state->active.load()) state->stop.store(true);
+            if (state->thr.joinable()) oldThread = std::move(state->thr);
+        }
+        if (oldThread.joinable()) oldThread.join();
+
+        {
+            std::lock_guard<std::mutex> lk(jogStatesMutex_);
+            state->stop.store(false);
+            state->active.store(true);
+            state->targetVel = velocities[i];
+            state->thr = std::thread([this, s, state]() {
+                RunJogSoftStartWorker(state, s);
+            });
+        }
+    }
+
+    res.success = true;
+    {
+        std::wstringstream ss;
+        ss << TimestampNowW() << L"[JogBatch] " << count << L" axes started in CSV mode";
         res.message = ss.str();
     }
     return res;

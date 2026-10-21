@@ -46,13 +46,20 @@ void FormatErrorCode603FText(bool valid, uint16_t value, wchar_t* buffer, size_t
 std::string BuildWatchdogConditionReason(int hits, int threshold)
 {
     std::ostringstream oss;
-    uint32_t wkc = 0;
     auto* master = AppController::GetInstance().GetMaster();
+    int32_t rawWkc = 0;
     if (master) {
-        wkc = master->GetWorkingCounter();
+        rawWkc = master->GetWorkingCounterRaw();
     }
     oss << "watchdog threshold reached"
-        << " (hits=" << hits << "/" << threshold << ", WKC=" << wkc;
+        << " (hits=" << hits << "/" << threshold;
+
+    // Distinguish EC_NOFRAME (NIC didn't receive anything) from real WKC=0 (slave not responding)
+    if (rawWkc < 0) {
+        oss << ", WKC=EC_NOFRAME(NIC no-frame)";
+    } else {
+        oss << ", WKC=" << (uint32_t)rawWkc;
+    }
 
     if (master) {
         const auto slaves = master->GetSlaveInfo();
@@ -102,7 +109,10 @@ void MainWindow::RequestAutomaticDisconnect(const char* logMessage, const wchar_
 }
 
 bool MainWindow::CheckAndHandleSustainedLinkLoss(ULONGLONG nowTick, const wchar_t* statusText) {
-    if (EtherCATMaster::IsSimulationAdapterSelection(currentIfName)) {
+    // Snapshot once: the selection cache is written by the UI thread and HTTP
+    // workers, so every read must be a single locked copy.
+    const std::string monitoredIfName = this->currentIfName.Copy();
+    if (EtherCATMaster::IsSimulationAdapterSelection(monitoredIfName)) {
         linkDownSinceTick = 0;
         linkLossDisconnectRequested = false;
         return false;
@@ -110,7 +120,7 @@ bool MainWindow::CheckAndHandleSustainedLinkLoss(ULONGLONG nowTick, const wchar_
 
     const auto monitoringPhase = CoreHelpers::ResolveLinkLossMonitoringPhase(
         disconnecting.load(),
-        !currentIfName.empty(),
+        !monitoredIfName.empty(),
         IsMasterInitialized(),
         workerRunning.load());
     const bool monitoringEnabled = monitoringPhase != CoreHelpers::LinkLossMonitoringPhase::Disabled;
@@ -119,7 +129,7 @@ bool MainWindow::CheckAndHandleSustainedLinkLoss(ULONGLONG nowTick, const wchar_
     bool linkUp = false;
     if (monitoringEnabled) {
         try {
-            linkUp = CoreHelpers::CheckLinkStatus(currentIfName.c_str());
+            linkUp = CoreHelpers::CheckLinkStatus(monitoredIfName.c_str());
         } catch (...) {
             linkUp = false;
         }
@@ -140,7 +150,7 @@ bool MainWindow::CheckAndHandleSustainedLinkLoss(ULONGLONG nowTick, const wchar_
 
     switch (decision.decision) {
     case CoreHelpers::LinkLossDecision::StartedTiming:
-        PostUTF8LogToUI(std::string("[LinkMonitor]") + "[" + phaseLabel + "] EtherCAT link down detected on adapter '" + currentIfName + "' - waiting 1000 ms before auto-disconnect\n");
+        PostUTF8LogToUI(std::string("[LinkMonitor]") + "[" + phaseLabel + "] EtherCAT link down detected on adapter '" + monitoredIfName + "' - waiting 1000 ms before auto-disconnect\n");
         return false;
     case CoreHelpers::LinkLossDecision::Recovered:
         PostUTF8LogToUI(std::string("[LinkMonitor]") + "[" + phaseLabel + "] EtherCAT link recovered after " + std::to_string(decision.down_duration_ms) + " ms - clearing auto-disconnect timer\n");
@@ -270,7 +280,7 @@ void MainWindow::OnTimer() {
             if (!cycleDetectReady) {
                 if (lastCycleDetectReady && hEditCurrentCycleTime && IsWindow(hEditCurrentCycleTime)) {
                     SendMessageW(hEditCurrentCycleTime, WM_SETREDRAW, FALSE, 0);
-                    SendMessageW(hEditCurrentCycleTime, WM_SETTEXT, 0, (LPARAM)L"等待 cyclic mode/PDO 就緒");
+                    SendMessageW(hEditCurrentCycleTime, WM_SETTEXT, 0, (LPARAM)L"等待 Cyclic Mode 與 PDO 就緒中...");
                     SendMessageW(hEditCurrentCycleTime, WM_SETREDRAW, TRUE, 0);
                     InvalidateRect(hEditCurrentCycleTime, NULL, TRUE);
                 }
@@ -306,21 +316,101 @@ void MainWindow::OnTimer() {
                 double comms_ms = static_cast<double>(comms_us) / 1000.0;
                 double cycle_ms = static_cast<double>(cyclePeriod_us) / 1000.0;
                 double maxCycle_ms = static_cast<double>(maxCyclePeriod_us) / 1000.0;
-                // Display format: "通訊 X.XX / 週期 Y.YY (max Z.ZZ) ms"
+                // Display format: "通訊: X.XX ms | 週期: Y.YY ms | 峰值: Z.ZZ ms"
+                // PDOProc frequency shown on separate row 2 control
                 std::wstringstream cycss;
+                uint64_t pdoProcCount = 0;
+                uint32_t pdoProcElapsed = 0;
+                if (auto* m = AppController::GetInstance().GetMaster()) {
+                    pdoProcCount = m->GetPdoProcCycleCount();
+                    pdoProcElapsed = m->GetPdoProcElapsedUs();
+                }
+                static uint64_t lastPdoProcCount = 0;
+                static auto lastPdoProcTime = std::chrono::steady_clock::now();
+                static double lastPdoProcHz = -1.0;
+                // Carry forward last known Hz to avoid flashing "等待中..."
+                // when elapsed < 200ms between ticks after first estimation.
+                double pdoProcHz = lastPdoProcHz;
+                if (pdoProcCount > 0) {
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPdoProcTime).count();
+                    if (elapsed >= 200 && lastPdoProcCount > 0) {
+                        if (pdoProcCount > lastPdoProcCount) {
+                            pdoProcHz = static_cast<double>(pdoProcCount - lastPdoProcCount) * 1000.0 / static_cast<double>(elapsed);
+                            lastPdoProcCount = pdoProcCount;
+                            lastPdoProcTime = now;
+                        } else if (elapsed >= 1000) {
+                            // No new PDO cycles for 1s — show "等待中..."
+                            pdoProcHz = 0.0;
+                        }
+                    } else if (lastPdoProcCount == 0) {
+                        // First tick after PDO processing starts — initialise baseline
+                        // and immediately estimate frequency from configured cycle time
+                        // so the display does not sit at "等待中..." for 200ms.
+                        lastPdoProcCount = pdoProcCount;
+                        lastPdoProcTime = now;
+                        uint32_t cycleUs = MasterGetCycleTime();
+                        if (cycleUs > 0) {
+                            pdoProcHz = 1000000.0 / static_cast<double>(cycleUs);
+                        } else {
+                            pdoProcHz = 0.0;   // no cycle time configured yet
+                        }
+                    }
+                } else if (lastPdoProcCount > 0) {
+                    // PDO processing stopped or reset — after a grace period show "等待中..."
+                    auto now = std::chrono::steady_clock::now();
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastPdoProcTime).count();
+                    if (elapsed >= 1000) {
+                        pdoProcHz = 0.0;
+                    }
+                }
+                // Row 1: 通訊 / 週期 / 峰值 / spike (no PDOProc)
                 cycss << std::fixed << std::setprecision(2)
-                      << L"通訊 " << comms_ms << L" / 週期 " << cycle_ms
-                      << L" (max " << maxCycle_ms << L") ms";
+                      << L"通訊: " << comms_ms << L" ms | "
+                      << L"週期: " << cycle_ms << L" ms | "
+                      << L"峰值: " << maxCycle_ms << L" ms";
+                {
+                    uint32_t spikePhase = MasterGetLastSpikePhase();
+                    uint32_t spikeCount = MasterGetSpikeCount();
+                    if (spikeCount > 0) {
+                        const wchar_t* spikeLabel = (spikePhase == 1) ? L"comms" : ((spikePhase == 2) ? L"idle" : L"?");
+                        cycss << L" | Spike# " << spikeCount << L" (" << spikeLabel << L")";
+                    }
+                }
                 // Suppress redraw during text update
                 SendMessageW(hEditCurrentCycleTime, WM_SETREDRAW, FALSE, 0);
                 SendMessageW(hEditCurrentCycleTime, WM_SETTEXT, 0, (LPARAM)cycss.str().c_str());
                 SendMessageW(hEditCurrentCycleTime, WM_SETREDRAW, TRUE, 0);
                 InvalidateRect(hEditCurrentCycleTime, NULL, TRUE);
+
+                // Row 2: PDOProc frequency (separate control)
+                if (std::abs(pdoProcHz - lastPdoProcHz) > 0.01) {
+                    lastPdoProcHz = pdoProcHz;
+                    std::wstringstream pdoProcSs;
+                    if (pdoProcHz > 0.01) {
+                        pdoProcSs << std::fixed << std::setprecision(0) << pdoProcHz << L" Hz";
+                    } else {
+                        pdoProcSs << L"等待中...";
+                    }
+                    if (hEditPdoProcFreq && IsWindow(hEditPdoProcFreq)) {
+                        SendMessageW(hEditPdoProcFreq, WM_SETREDRAW, FALSE, 0);
+                        SendMessageW(hEditPdoProcFreq, WM_SETTEXT, 0, (LPARAM)pdoProcSs.str().c_str());
+                        SendMessageW(hEditPdoProcFreq, WM_SETREDRAW, TRUE, 0);
+                        InvalidateRect(hEditPdoProcFreq, NULL, TRUE);
+                    }
+                }
             }
             }
         uint32_t desired_us = MasterGetCycleTime();
             SetCycleInfo(desired_us, comms_us, comms_us);
-            SetMaxObservedCycleTime(maxComms_us);
+            // Push actual max cycle-to-cycle period (not max comms) to web globals
+            SetMaxObservedCycleTime(MasterGetMaxObservedCycleMicros());
+            // ── Push spike diagnostics to HTTP globals ──
+            SetSpikeDiagnostics(
+                MasterGetLastSpikePhase(),
+                MasterGetLastSpikeCycleUs(),
+                MasterGetLastSpikeCommsUs(),
+                MasterGetSpikeCount());
         }
 
         int currentWKC = MasterGetWorkingCounter();
@@ -401,7 +491,7 @@ void MainWindow::OnTimer() {
         if (slaveChanged) {
             CaptureCurrentPDOInputsByName();
             if (masterRaw && pdoDisplay.RecalculateOffsetsFromSDO(masterRaw, slaveIdx)) {
-                pdoDisplay.RebuildPDOControls();
+                // RecalculateOffsetsFromSDO already calls RebuildPDOControls + ApplyCachedValues
                 RestorePDOInputsFromGlobal();
                 ApplyAutoProcedureUiLockState();
                 HWND hGroupBox = pdoDisplay.GetGroupBox();
@@ -595,7 +685,23 @@ void MainWindow::OnTimer() {
         }
     }
 
-    if (MasterDetectWatchdogCondition()) {
+    // ── Watchdog cooldown: skip detection for WATCHDOG_COOLDOWN_MS after a
+    // recovery completes, to avoid rapid re-trigger loops when WKC=0 persists
+    // transiently without actual slave faults.
+    const ULONGLONG cooldownUntil = watchdogCooldownUntil.load();
+    if (cooldownUntil != 0) {
+        if (nowTick < cooldownUntil) {
+            // Still in cooldown — reset any in-progress counter
+            if (watchdogCounter.load() != 0) {
+                watchdogCounter.store(0);
+            }
+        } else {
+            // Cooldown expired
+            watchdogCooldownUntil.store(0);
+        }
+    }
+
+    if (MasterDetectWatchdogCondition() && watchdogCooldownUntil.load() == 0) {
         int hits = ++watchdogCounter;
         // If master configured to auto-disconnect on repeated network failures,
         // and we've reached the master's threshold, issue a UI-driven disconnect
@@ -618,11 +724,33 @@ void MainWindow::OnTimer() {
             // Do not attempt recovery; UI will perform full disconnect and restore state
             return;
         }
-        if (hits >= watchdogThreshold && !recoveryRunning.load()) {
-            recoveryRunning.store(true);
-            recoveryThread = std::thread([this]() { StartWatchdogRecovery(); });
+        // ── Escalation warning: if too many recovery attempts within the window,
+        // log a diagnostic warning but continue attempting recovery (do not disconnect).
+        if (hits >= watchdogThreshold) {
+            const ULONGLONG winStart = recoveryWindowStartTick.load();
+            const int attempts = recoveryAttemptCount.load();
+            if (winStart != 0 && nowTick >= winStart &&
+                (nowTick - winStart) <= WATCHDOG_RECOVERY_WINDOW_MS &&
+                attempts >= WATCHDOG_MAX_RECOVERY_ATTEMPTS) {
+                std::ostringstream escOss;
+                escOss << "[Watchdog] WARNING: " << attempts
+                       << " recovery attempts within " << WATCHDOG_RECOVERY_WINDOW_MS
+                       << " ms — WKC=0 persists despite repeated recoveries;"
+                       << " check network cable, switch, NIC driver, or slave power";
+                PostUTF8LogToUI(escOss.str() + "\n");
+                // Reset window to allow future warnings (not a disconnect)
+                recoveryAttemptCount.store(0);
+                recoveryWindowStartTick.store(0);
+            }
+            if (!recoveryRunning.load()) {
+                recoveryRunning.store(true);
+                if (recoveryThread.joinable()) {
+                    recoveryThread.join();
+                }
+                recoveryThread = std::thread([this]() { StartWatchdogRecovery(); });
+            }
         }
-    } else {
+    } else if (!MasterDetectWatchdogCondition()) {
         const int previousHits = watchdogCounter.exchange(0);
         if (previousHits > 0) {
             PostUTF8LogToUI(std::string("[Watchdog] condition recovered before threshold (hits=") +
@@ -633,6 +761,105 @@ void MainWindow::OnTimer() {
                 NotifyEthercatError(false);
             }
         }
+    }
+
+    // ── WKC/EMCY-triggered global error → emergency stop (one-shot) ──
+    // ProcessEmcyErrors() in the RT cyclic thread sets persistentGlobalError_
+    // when WKC deviation or EMCY event is detected.  The UI timer picks this
+    // up asynchronously and triggers a safe motion stop when auto-procedure
+    // is active.  Reads lastError from the master to include the specific
+    // trigger reason (WKC value, slave#, error code) in the status window.
+    //
+    // wkcStopTriggered_ latch prevents repeated re-triggering while the
+    // global error persists.  Resets when HasGlobalError() clears.
+    if (HasPersistentEthercatErrorCause()) {
+        if (!wkcStopTriggered_.load() && IsAutoProcedureRunning() &&
+            !immediateStopBusy.load() && !disconnecting.load()) {
+            wkcStopTriggered_.store(true);
+
+            // Build diagnostic message with trigger source details
+            std::string reason;
+            if (auto* diagMaster = AppController::GetInstance().GetMaster()) {
+                std::string lastErr = diagMaster->GetLastError();
+                int32_t rawWkc = diagMaster->GetWorkingCounterRaw();
+                uint32_t expWkc = diagMaster->GetExpectedWkc();
+                char buf[256];
+                if (rawWkc < 0) {
+                    snprintf(buf, sizeof(buf),
+                        "[AutoStop] EC_NOFRAME (NIC no-frame) — triggering emergency stop"
+                        " | lastEMCY=%s\n", lastErr.c_str());
+                } else if (rawWkc == 0) {
+                    snprintf(buf, sizeof(buf),
+                        "[AutoStop] WKC=0 (no slave response) — triggering emergency stop"
+                        " | lastEMCY=%s\n", lastErr.c_str());
+                } else if (expWkc > 0 && static_cast<uint32_t>(rawWkc) < expWkc) {
+                    snprintf(buf, sizeof(buf),
+                        "[AutoStop] WKC=%d < expected=%u (partial slave loss) — triggering emergency stop"
+                        " | lastEMCY=%s\n", rawWkc, expWkc, lastErr.c_str());
+                } else {
+                    snprintf(buf, sizeof(buf),
+                        "[AutoStop] EMCY event detected — triggering emergency stop"
+                        " | lastEMCY=%s\n", lastErr.c_str());
+                }
+                reason = buf;
+            } else {
+                reason = "[AutoStop] global error latch — triggering emergency stop\n";
+            }
+            PostUTF8LogToUI(reason);
+            PostMessageW(this->GetHwnd(),
+                         WM_USER_AUTO_EMERGENCY_STOP_REQUEST,
+                         (WPARAM)0, 0);
+        }
+    } else {
+        // Global error cleared — reset latch for next occurrence
+        wkcStopTriggered_.store(false);
+    }
+
+    // ========================================================================
+    // Pose6D 前置驗證層：警告音與自動恢復
+    // ========================================================================
+    if (masterRaw) {
+        bool poseWarning = masterRaw->IsPose6DLimitWarningActive();
+        static bool prevPoseWarning = false;
+        if (poseWarning && !prevPoseWarning) {
+            // 邊緣觸發：首次進入違規狀態 → 記錄訊息 + 警告音
+            std::wstring msg = masterRaw->ConsumePose6DLimitWarningMessage();
+            if (!msg.empty()) {
+                PostUTF8LogToUI(CoreHelpers::WideToUtf8(
+                    L"[Pose6D 限制] " + msg + L"\r\n"));
+            }
+            MessageBeep(MB_ICONWARNING);
+        } else if (!poseWarning && prevPoseWarning) {
+            // 邊緣觸發：恢復正常 → 記錄恢復訊息 + 關閉警告音
+            std::wstring msg = masterRaw->ConsumePose6DLimitWarningMessage();
+            if (!msg.empty()) {
+                PostUTF8LogToUI(CoreHelpers::WideToUtf8(
+                    L"[Pose6D 限制] " + msg + L"\r\n"));
+            }
+            // 清除警告狀態（不再發出提示音）
+        }
+        prevPoseWarning = poseWarning;
+
+        // Pose6D 動態行程縮放（Z 觸發）：單次警報聲 + 訊息 log
+        bool dynScaling = masterRaw->IsPose6DDynamicScalingActive();
+        static bool prevDynScaling = false;
+        if (dynScaling && !prevDynScaling) {
+            // 邊緣觸發：動態縮放剛啟動
+            std::wstring msg = masterRaw->ConsumePose6DDynamicScalingMessage();
+            if (!msg.empty()) {
+                PostUTF8LogToUI(CoreHelpers::WideToUtf8(
+                    L"[動態縮放] " + msg + L"\r\n"));
+            }
+            MessageBeep(MB_ICONINFORMATION);
+        } else if (!dynScaling && prevDynScaling) {
+            // 邊緣觸發：動態縮放已關閉
+            std::wstring msg = masterRaw->ConsumePose6DDynamicScalingMessage();
+            if (!msg.empty()) {
+                PostUTF8LogToUI(CoreHelpers::WideToUtf8(
+                    L"[動態縮放] " + msg + L"\r\n"));
+            }
+        }
+        prevDynScaling = dynScaling;
     }
 
 }

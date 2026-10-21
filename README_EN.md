@@ -170,6 +170,7 @@ Common settings (section / key / description / default):
 - `[Startup] ShowMainWindow` — Show main window on startup (0/1) — Default: 0 (off)
 - `[Startup] AutoTrigger` — Auto-trigger startup sequence (0/1) — Default: 1 (on)
 - `[Startup] TriggerTestCrash` — Trigger test crash on startup (0/1) — Default: 0 (off)
+- `[Compat] ForceWin10Mode` — Force the Windows 10 cyclic wait strategy (0/1) — Default: 0 (off, auto-detect OS)
 - `[Logging] EnableStatusLog` — Write status messages to `logs/status.log` (0/1) — Default: 1 (on)
 
 Example `BigCat.ini`:

@@ -138,7 +138,7 @@ extern std::string g_slaveInfoCacheJson;
 extern std::mutex g_slaveSdoCacheMutex;
 extern std::unordered_map<int, std::string> g_slaveSdoCache;
 
-extern int g_httpPort;
+extern std::atomic<int> g_httpPort;  // 實際監聽埠（bind 被占用時自動跳號）
 extern std::string g_httpApiKey;
 extern std::string g_httpBindAddr;
 
@@ -190,6 +190,12 @@ extern StewartNativePlannerState g_stewartNativePlannerState;
 extern std::atomic_bool g_stewartNativePlannerRun;
 extern std::thread g_stewartNativePlannerThread;
 
+// Pose6D 硬限制：從 machine.xml 載入，由 AppController 設定，HTTP API 讀取
+extern std::mutex g_pose6dLimitsMutex;
+extern WuSOEM::Pose6DLimits g_pose6dLimits;
+void SetPose6DLimits(const WuSOEM::Pose6DLimits& limits);
+WuSOEM::Pose6DLimits GetPose6DLimits();
+
 extern std::mutex g_uiStateMutex;
 extern std::unordered_map<std::string, bool> g_uiDisabled;
 
@@ -198,6 +204,10 @@ extern uint32_t g_desiredCycleTimeUs;
 extern uint32_t g_commsTimeUs;
 extern uint32_t g_actualCycleTimeUs;
 extern uint32_t g_maxObservedCycleTimeUs;
+extern uint32_t g_spikePhase;
+extern uint32_t g_spikeCycleUs;
+extern uint32_t g_spikeCommsUs;
+extern uint32_t g_spikeCount;
 extern std::chrono::system_clock::time_point g_ignoreWin32EchoUntil;
 
 extern std::mutex g_mailboxMutex;

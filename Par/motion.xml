@@ -29,7 +29,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -53,7 +53,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>
@@ -143,7 +143,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -167,7 +167,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>
@@ -257,7 +257,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -281,7 +281,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>
@@ -371,7 +371,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -395,7 +395,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>
@@ -485,7 +485,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -509,7 +509,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>
@@ -599,7 +599,7 @@
       <Index>P3</Index>
       <Name>Maximum Velocity</Name>
       <DataType>LREAL</DataType>
-      <Value>180</Value>
+      <Value>120</Value>
       <Unit>Unit/s</Unit>
       <Desc>最大速度</Desc>
     </Param>
@@ -623,7 +623,7 @@
       <Index>P6</Index>
       <Name>Jerk</Name>
       <DataType>LREAL</DataType>
-      <Value>2500</Value>
+      <Value>1800</Value>
       <Unit>Unit/s3</Unit>
       <Desc>加加速度</Desc>
     </Param>

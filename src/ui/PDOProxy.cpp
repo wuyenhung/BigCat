@@ -13,6 +13,7 @@
 #include <commctrl.h>
 #include <algorithm>
 #include <sstream>
+#include <unordered_map>
 #include <iomanip>
 
 // Implementation of PDOProxy methods (moved out of MainWindow.cpp)
@@ -516,11 +517,76 @@ bool PDOProxy::RecalculateOffsetsFromSDO(EtherCATMaster* master, int slaveIndex)
             desc.byteOffset = it.byteOffset;
             descriptors.push_back(std::move(desc));
         }
+        // Override with runtime offsets from actual driver SDO read when available
+        const auto& rtOffs = master->GetPdoRuntimeOffsets();
+        if (slaveIndex < (int)rtOffs.size() && !rtOffs[slaveIndex].empty()) {
+            const auto& rtOff = rtOffs[slaveIndex];
+            for (auto &d : descriptors) {
+                auto it = rtOff.find(d.index);
+                if (it != rtOff.end() && it->second.byteOffset >= 0) {
+                    d.byteOffset = it->second.byteOffset;
+                    // Also update pdoItems
+                    for (auto &item : pdoItems) {
+                        if (item.index == d.index && item.subindex == d.subindex) {
+                            item.byteOffset = it->second.byteOffset;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         master->RegisterPDODescriptors(slaveIndex, descriptors);
     }
 
-    if (isInitialized) RebuildPDOControls();
+    if (isInitialized) {
+        // Skip UI rebuild when suppressed (e.g. during AutoDownToOrigin
+        // workflow) — destroying/recreating HWNDs wastes CPU and causes
+        // visible churn.  The descriptor cache is still updated above.
+        if (!suppressUIRebuild_) {
+            RebuildPDOControls();
+            // Immediately populate new controls with cached values to avoid
+            // an intermediate empty-display frame before the next timer tick.
+            ApplyCachedValues(master, slaveIndex);
+        }
+    }
     return true;
+}
+
+void PDOProxy::ApplyCachedValues(EtherCATMaster* master, int slaveIndex) {
+    if (!master || slaveIndex <= 0 || !isInitialized) return;
+    if (pdoItems.empty()) return;
+
+    std::vector<PDOChannelValue> channelValues;
+    if (!master->TryGetPDOChannelValuesLockFree(slaveIndex, channelValues)) {
+        if (!master->GetPDOChannelValues(slaveIndex, channelValues)) return;
+    }
+    if (channelValues.empty()) return;
+
+    // Build name→value map for fast lookup
+    std::unordered_map<std::wstring, const PDOChannelValue*> valueByName;
+    valueByName.reserve(channelValues.size());
+    for (const auto& val : channelValues) {
+        valueByName[val.descriptor.name] = &val;
+    }
+
+    // Apply cached values to all PDO items (both inputs and outputs) at once
+    for (auto& item : pdoItems) {
+        // Skip editable (user-writable) items — keep user-entered values
+        if (item.isEditable) continue;
+
+        auto itVal = valueByName.find(item.name);
+        if (itVal == valueByName.end() || !itVal->second->valid) continue;
+
+        const PDOChannelValue* chanVal = itVal->second;
+        std::wstring formatted = FormatValue(chanVal->rawValue, chanVal->descriptor.bitLength);
+        item.currentValue = std::to_wstring(chanVal->rawValue);
+        item.displayValue = formatted;
+
+        if (item.hValue && IsWindow(item.hValue)) {
+            SetWindowTextW(item.hValue, formatted.c_str());
+            InvalidateRect(item.hValue, NULL, FALSE);
+        }
+    }
 }
 
 bool PDOProxy::WriteToIOMap(EtherCATMaster* master, int slaveIndex, const std::wstring& itemName, int32_t value) {

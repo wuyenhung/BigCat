@@ -3,10 +3,15 @@
 
 #include <vector>
 #include <cstdint>
+#include <string>
 
 // Forward declarations to avoid circular includes
 class EtherCATMaster;
 struct PDOItem;
+
+// Get a concise Chinese description for a well-known CiA402 PDO address.
+// Returns L"" if no description is known for the (index, subindex) pair.
+std::wstring GetPdoAddressDescription(uint16_t index, uint8_t subindex);
 
 // Read a PDOItem numeric value from a per-slave snapshot (outputs-first layout).
 // master: EtherCATMaster used to obtain slave context if needed (may be nullptr).

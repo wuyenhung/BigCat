@@ -15,7 +15,12 @@
 #include "SafeMem.h"
 
 namespace {
-constexpr int kSdoIdleMinAttemptUs = 250;
+// P3: Raised from 250→600 to ensure enough time for a full SDO round-trip
+// (ecx_mbxsend + slave processing + ecx_mbxreceive) within a single idle window.
+// At 500us PDO cycle with ~100us comms, idle window ≈ 400us; 600us ensures
+// we only use windows where the full SDO can likely complete without racing
+// the next PDO cycle.
+constexpr int kSdoIdleMinAttemptUs = 600;
 constexpr int kSdoIdleGuardUs = 150;
 
 std::string FormatSdoFailureMessage(const char* action,
@@ -186,9 +191,10 @@ bool EtherCATMaster::ReadSDODuringIdleWindow(uint16_t slave, uint16_t index, uin
     std::string lastAttemptError;
     bool success = false;
 
-    // Wait for idle window OUTSIDE sdoCS so background SDO readers (0x60FD,
-    // 0x603F) can also detect the same gap and compete fairly.  Only the
-    // actual mailbox access is serialized under sdoCS.
+    // Wait for idle window OUTSIDE sdoCS so other SDO users can also
+    // detect the same gap and compete fairly. Only the actual mailbox
+    // access is serialized under sdoCS.
+    // (0x60FD and 0x603F are now in PDO and no longer compete here.)
     while (true) {
         int attemptTimeoutUs = 0;
         if (!WaitForSdoIdleWindow(deadline, kSdoIdleMinAttemptUs, kSdoIdleGuardUs, attemptTimeoutUs)) {
@@ -482,9 +488,9 @@ bool EtherCATMaster::DumpESI(uint16_t slave, std::string &outDump)
         std::ostringstream oss;
         oss << "Simulation device description for slave " << slave << "\n";
         oss << "Name: " << simulationAxes_[slave].name << "\n";
-        oss << "RxPDO: 0x1600 -> 0x6040, 0x607A, 0x60FF, 0x6071\n";
-        oss << "TxPDO: 0x1A00 -> 0x6041, 0x6064, 0x606C, 0x6077\n";
-        oss << "Supported SDOs: 0x1008, 0x1C12, 0x1C13, 0x1600, 0x1A00, 0x603F, 0x6040, 0x6041, 0x6060, 0x6061, 0x607A, 0x6064, 0x606C, 0x60FF, 0x607C, 0x6098, 0x60E0, 0x60E1, 0x60FD\n";
+        oss << "RxPDO: 0x1600 -> 0x607A, 0x60FF, 0x6071, 0x60E0, 0x60E1, 0x6040, 0x6060 (7-entry, matching Startup.csv order)\n";
+        oss << "TxPDO: 0x1A00 -> 0x6064, 0x606C, 0x6077, 0x6041, 0x603F, 0x6061, 0x60FD (7-entry, matching Startup.csv order)\n";
+        oss << "SDO fallback objects (non-PDO): 0x1008, 0x1C12, 0x1C13, 0x607C, 0x6098\n";
         outDump = oss.str();
         LeaveCriticalSection(&cs);
         return true;
@@ -525,6 +531,65 @@ bool EtherCATMaster::DumpESI(uint16_t slave, std::string &outDump)
     outDump = oss.str();
     LeaveCriticalSection(&cs);
     return true;
+}
+
+
+bool EtherCATMaster::ReadActualPdoMapping(int slaveIdx, PdoMappingStatus& status)
+{
+    status = PdoMappingStatus{};
+    if (!isInitialized || slaveIdx <= 0 || slaveIdx > slaveCount) return false;
+
+    // 1) Read RxPDO assignment from 0x1C12:01
+    {
+        uint16_t rxAssign = 0;
+        int sz = sizeof(rxAssign);
+        if (ReadSDO((uint16_t)slaveIdx, 0x1C12, 0x01, &rxAssign, sz)) {
+            status.rxPdoAssigned = rxAssign;
+        }
+    }
+
+    // 2) Read TxPDO assignment from 0x1C13:01
+    {
+        uint16_t txAssign = 0;
+        int sz = sizeof(txAssign);
+        if (ReadSDO((uint16_t)slaveIdx, 0x1C13, 0x01, &txAssign, sz)) {
+            status.txPdoAssigned = txAssign;
+        }
+    }
+
+    // Helper: read PDO mapping entries from a given PDO index
+    auto readPdoEntries = [this, slaveIdx](uint16_t pdoIndex, std::vector<PdoMappingEntry>& entries) {
+        entries.clear();
+        if (pdoIndex == 0) return;
+
+        // Read entry count (subindex 0)
+        uint8_t count = 0;
+        int sz = sizeof(count);
+        if (!ReadSDO((uint16_t)slaveIdx, pdoIndex, 0x00, &count, sz)) return;
+
+        if (count > 64) count = 64; // sanity clamp
+
+        for (uint8_t sub = 1; sub <= count; ++sub) {
+            uint32_t raw = 0;
+            int sz2 = sizeof(raw);
+            if (!ReadSDO((uint16_t)slaveIdx, pdoIndex, sub, &raw, sz2)) continue;
+
+            PdoMappingEntry entry;
+            entry.index    = (uint16_t)(raw & 0xFFFF);
+            entry.subindex = (uint8_t)((raw >> 16) & 0xFF);
+            entry.bitLength = (uint8_t)((raw >> 24) & 0xFF);
+            entries.push_back(entry);
+        }
+    };
+
+    // 3) Read RxPDO mapping entries
+    readPdoEntries(status.rxPdoAssigned, status.rxEntries);
+
+    // 4) Read TxPDO mapping entries
+    readPdoEntries(status.txPdoAssigned, status.txEntries);
+
+    status.valid = (status.rxPdoAssigned != 0 || status.txPdoAssigned != 0);
+    return status.valid;
 }
 
 
@@ -615,11 +680,22 @@ bool EtherCATMaster::ForceSlaveOperational(uint16_t slave, std::string &outLog)
         oss << head.str();
     }
 
-    // Try to set OP at group level
-    context.slavelist[0].state = EC_STATE_OPERATIONAL;
-    ecx_send_processdata(&context);
-    ecx_receive_processdata(&context, EC_TIMEOUTRET);
-    ecx_writestate(&context, 0);
+    // Try to set OP at group level — hold pdoExchangeCS to prevent race
+    // with CyclicTask PDO exchange (same lock).
+    {
+        EnterCriticalSection(&pdoExchangeCS);
+        { // diagnostic
+            char buf[96];
+            snprintf(buf, sizeof(buf), "ForceSlaveOperational tid=%lu HOLDING pdoExchangeCS for slave %d",
+                GetCurrentThreadId(), slave);
+            OutputDebugStringA(buf);
+        }
+        context.slavelist[0].state = EC_STATE_OPERATIONAL;
+        ecx_send_processdata(&context);
+        ecx_receive_processdata(&context, EC_TIMEOUTRET);
+        ecx_writestate(&context, 0);
+        LeaveCriticalSection(&pdoExchangeCS);
+    }
 
     // Wait briefly and check
     ecx_statecheck(&context, slave, EC_STATE_OPERATIONAL, EC_TIMEOUTSTATE);
@@ -643,21 +719,39 @@ bool EtherCATMaster::ForceSlaveOperational(uint16_t slave, std::string &outLog)
         ecx_statecheck(&context, slave, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 5);
         
         // Step 3: Configure PDO mappings for cyclic motion mode
-        uint8_t zero = 0, one = 1, pdoCount = 4;
+        // Entry order matches Par/Startup.csv: all 7 entries
+        uint8_t zero = 0, one = 1, pdoCount = 7;
         
         // Disable assignments temporarily
         WriteSDO(slave, 0x1C12, 0x00, &zero, sizeof(zero));
         WriteSDO(slave, 0x1C13, 0x00, &zero, sizeof(zero));
-        WriteSDO(slave, 0x1600, 0x00, &zero, sizeof(zero));
-        uint32_t rxMappings[] = {0x60400010, 0x607A0020, 0x60FF0020, 0x60710010};
+        
+        // Configure RxPDO 0x1600 (Master->Slave) — Startup.csv order
+        uint32_t rxMappings[] = {
+            0x607A0020,  // 1. 目標位置 (32位)
+            0x60FF0020,  // 2. 目標速度 (32位)
+            0x60710010,  // 3. 目標力矩 (16位)
+            0x60E00010,  // 4. 正轉矩限制 (16位)
+            0x60E10010,  // 5. 負轉矩限制 (16位)
+            0x60400010,  // 6. 控制字 (16位)
+            0x60600008   // 7. 操作模式 (8位)
+        };
         WriteSDO(slave, 0x1600, 0x00, &zero, sizeof(zero));
         for (int i = 0; i < pdoCount; ++i) {
             WriteSDO(slave, 0x1600, i+1, &rxMappings[i], sizeof(uint32_t));
         }
         WriteSDO(slave, 0x1600, 0x00, &pdoCount, sizeof(pdoCount));
         
-        // Configure TxPDO 0x1A00 (Slave->Master)
-        uint32_t txMappings[] = {0x60410010, 0x60640020, 0x606C0020, 0x60770010};
+        // Configure TxPDO 0x1A00 (Slave->Master) — Startup.csv order
+        uint32_t txMappings[] = {
+            0x60640020,  // 1. 實際位置 (32位)
+            0x606C0020,  // 2. 實際速度 (32位)
+            0x60770010,  // 3. 實際力矩 (16位)
+            0x60410010,  // 4. 狀態字 (16位)
+            0x603F0010,  // 5. 錯誤碼 (16位)
+            0x60610008,  // 6. 操作模式顯示 (8位)
+            0x60FD0020   // 7. 數位輸入 (32位)
+        };
         WriteSDO(slave, 0x1A00, 0x00, &zero, sizeof(zero));
         for (int i = 0; i < pdoCount; ++i) {
             WriteSDO(slave, 0x1A00, i+1, &txMappings[i], sizeof(uint32_t));
@@ -671,11 +765,7 @@ bool EtherCATMaster::ForceSlaveOperational(uint16_t slave, std::string &outLog)
     WriteSDO(slave, 0x1C13, 0x01, &txPdoAssign, sizeof(txPdoAssign));
     WriteSDO(slave, 0x1C13, 0x00, &one, sizeof(one));
         
-        // Step 4: Set operation mode to the default cyclic mode
-        int8_t opMode = CoreHelpers::kDefaultCyclicOperationMode;
-    WriteSDO(slave, 0x6060, 0x00, &opMode, sizeof(opMode));
-        
-        // Step 5: Configure EtherCAT cycle time (0x60C2:01 - Interpolation time period value)
+        // Step 4: Configure EtherCAT cycle time (0x60C2:01 - Interpolation time period value)
         // Convert from microseconds to units expected by device (typically 0.1ms units)
         // For 2000us (2ms), we need 20 units of 0.1ms
         uint8_t cycleUnits = (uint8_t)((desiredCycleTime + 50) / 100); // Round to 0.1ms units
@@ -692,6 +782,10 @@ bool EtherCATMaster::ForceSlaveOperational(uint16_t slave, std::string &outLog)
         context.slavelist[slave].state = EC_STATE_SAFE_OP;
         ecx_writestate(&context, slave);
         ecx_statecheck(&context, slave, EC_STATE_SAFE_OP, EC_TIMEOUTSTATE * 3);
+        
+        // Set operation mode in SAFE_OP (X5_7 startup order)
+        int8_t opMode = GetCyclicOperationMode();
+        WriteSDO(slave, 0x6060, 0x00, &opMode, sizeof(opMode));
         
         context.slavelist[0].state = EC_STATE_OPERATIONAL;
         ecx_send_processdata(&context);
@@ -918,8 +1012,8 @@ bool EtherCATMaster::ConfigureSlaveRuntime(uint16_t slave, std::string &outLog)
     ecx_writestate(&context, slave);
     ecx_statecheck(&context, slave, EC_STATE_PRE_OP, EC_TIMEOUTSTATE * 3);
     
-    // Only set operation mode to the default cyclic mode - don't modify PDO mappings
-    int8_t opMode = CoreHelpers::kDefaultCyclicOperationMode;
+    // Only set operation mode to the configured cyclic mode - don't modify PDO mappings
+    int8_t opMode = GetCyclicOperationMode();
     bool sdoOk = WriteSDO(slave, 0x6060, 0x00, &opMode, sizeof(opMode));
     if (sdoOk) {
         oss << "Set operation mode to "
@@ -953,15 +1047,8 @@ bool EtherCATMaster::ConfigureSlaveRuntime(uint16_t slave, std::string &outLog)
 bool EtherCATMaster::StartSdoReader(unsigned int periodMs, const std::function<void(const std::string&)> &logCb)
 {
     if (sdoReaderRunning.load()) return true;
-    // Enforce configured fixed period (force to 100ms for product constraints)
-    const unsigned int FIXED_SDO_PERIOD_MS = 100;
-    if (periodMs != FIXED_SDO_PERIOD_MS) {
-        if (logCb) {
-            std::ostringstream oss; oss << "SDO reader period forced to " << FIXED_SDO_PERIOD_MS << "ms (requested " << periodMs << "ms)";
-            logCb(oss.str());
-        }
-    }
-    periodMs = FIXED_SDO_PERIOD_MS;
+    // 0x60FD is now read from PDO every cycle (see CyclicTask).
+    // SdoReaderTick() is a no-op; kept for API compatibility.
     sdoLogCb = logCb;
     sdoReaderPeriodMs.store(periodMs);
     sdoReaderStop.store(false);
@@ -972,9 +1059,9 @@ bool EtherCATMaster::StartSdoReader(unsigned int periodMs, const std::function<v
         sdoLastVal.clear();
     }
     sdoReaderLastRunMs.store(0);
-    // Note: we no longer spawn a dedicated SDO reader thread here. Instead,
-    // a caller may invoke SdoReaderTick() periodically (e.g. from a shared
-    // error-check thread) so SDO reads can be consolidated with other checks.
+    // 0x60FD is now read from PDO every cycle (see CyclicTask).
+    // SdoReaderTick() is a no-op; kept for API compatibility.
+    // The PDO cache (pdo60FDCache_) is updated automatically.
     return true;
 }
 
@@ -996,24 +1083,30 @@ void EtherCATMaster::StopSdoReader()
 
 void EtherCATMaster::SdoReaderTick()
 {
+    // 0x60FD is NOT in the 4+4 PDO mapping (12-byte SM limit on X1S drives).
+    // Keep SDO polling until drives support larger SM buffers.
     if (!sdoReaderRunning.load() || sdoReaderStop.load()) return;
     if (!sdoReaderEnabled.load()) return;
+    if (!isInitialized) return;
 
     using clock = std::chrono::steady_clock;
     uint64_t nowMs = (uint64_t)std::chrono::duration_cast<std::chrono::milliseconds>(clock::now().time_since_epoch()).count();
     uint64_t last = sdoReaderLastRunMs.load();
     unsigned int period = sdoReaderPeriodMs.load();
     if (period == 0) period = 100;
-    if (last != 0 && nowMs - last < (uint64_t)period) return; // not yet time
+    if (last != 0 && nowMs - last < (uint64_t)period) return;
 
-    // Update last-run timestamp early to avoid concurrent reads
     sdoReaderLastRunMs.store(nowMs);
     sdoReaderBusy.store(true);
-    auto t0 = clock::now();
 
     uint8_t buf[32] = {0}; int len = 8;
     bool ok = ReadSDO(1, 0x60FD, 0x00, buf, len);
     if (ok) {
+        // Also update the PDO cache for API compatibility (GetPdo60FD/GetPdo60FDLowByte)
+        uint32_t fdVal = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+        pdo60FDCache_.store(fdVal, std::memory_order_relaxed);
+        pdo60FDValid_.store(true, std::memory_order_release);
+
         std::vector<uint8_t> cur(buf, buf + len);
         bool changed = false;
         {
@@ -1021,49 +1114,115 @@ void EtherCATMaster::SdoReaderTick()
             if (sdoLastVal.empty() || sdoLastVal != cur) changed = true;
             if (changed) sdoLastVal = std::move(cur);
         }
-        if (changed) {
+        if (changed && sdoLogCb) {
             std::ostringstream oss; oss << std::hex << std::uppercase;
             for (int i = len - 1; i >= 0; --i) {
                 if (i != len - 1) oss << ' ';
                 oss << "0x" << std::setw(2) << std::setfill('0') << (int)buf[i];
             }
-            std::string hexStr = oss.str();
-            std::ostringstream bitsoss;
-            for (int i = len - 1; i >= 0; --i) {
-                if (i != len - 1) bitsoss << ' ';
-                bitsoss << std::bitset<8>(buf[i]).to_string();
-            }
-            std::string bitsStr = bitsoss.str();
-            if (sdoLogCb) sdoLogCb(std::string("0x60FD changed -> ") + hexStr + std::string(" ; bits -> ") + bitsStr);
+            sdoLogCb(std::string("0x60FD changed -> ") + oss.str());
         }
     } else {
         if (sdoLogCb) sdoLogCb(std::string("Read 0x60FD failed: ") + GetLastError());
     }
 
-    auto t1 = clock::now();
-    double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    sdoLastObservedCycleMs.store(elapsedMs);
     sdoReaderBusy.store(false);
 }
 
-// Thread-safe accessor for last-read SDO 0x60FD value
+// P1: Reset a slave's mailbox counter to recover from SDO desync.
+// Call this when repeated SDO failures are detected on a specific slave.
+// Must hold sdoCS externally, or call the public ResetSlaveSDOState.
 
-bool EtherCATMaster::GetLastSdo60FD(std::vector<uint8_t>& out)
+void EtherCATMaster::ResetSlaveMbxcntLocked(uint16_t slave)
 {
-    // Return bytes in the same visual order as logs (MSB .. LSB)
-    std::lock_guard<std::mutex> lk(sdoReaderMutex);
-    if (sdoLastVal.empty()) return false;
-    out.assign(sdoLastVal.rbegin(), sdoLastVal.rend());
+    if (slave == 0 || slave > static_cast<uint16_t>(slaveCount)) return;
+    // Reset mbx_cnt to 0; next ec_nextmbxcnt will produce 1, re-syncing
+    // with the slave (which treats counter 1 as a fresh session start).
+    context.slavelist[slave].mbx_cnt = 0;
+}
+
+void EtherCATMaster::ResetSlaveSDOState(uint16_t slave)
+{
+    EnterCriticalSection(&sdoCS);
+    ResetSlaveMbxcntLocked(slave);
+    LeaveCriticalSection(&sdoCS);
+}
+
+// Thread-safe accessor for PDO-based 0x60FD Digital Inputs value.
+// Replaces the old SDO reader; reads from atomic PDO cache updated every cycle.
+
+bool EtherCATMaster::GetPdo60FD(std::vector<uint8_t>& out)
+{
+    // Return bytes in MSB..LSB order (compatible with old SDO reader API)
+    if (!pdo60FDValid_.load(std::memory_order_acquire)) return false;
+    uint32_t val = pdo60FDCache_.load(std::memory_order_relaxed);
+    out.resize(4);
+    out[0] = (uint8_t)(val >> 24);  // MSB
+    out[1] = (uint8_t)(val >> 16);
+    out[2] = (uint8_t)(val >> 8);
+    out[3] = (uint8_t)(val);        // LSB (control byte for AutoWindow)
     return true;
 }
 
-bool EtherCATMaster::GetLastSdo60FDLowByte(uint8_t& outLowByte)
+bool EtherCATMaster::GetPdo60FDLowByte(uint8_t& outLowByte)
 {
-    std::lock_guard<std::mutex> lk(sdoReaderMutex);
-    if (sdoLastVal.empty()) return false;
-    // sdoLastVal keeps the raw mailbox order; byte 0 is the low/control byte used by AutoWindow.
-    outLowByte = sdoLastVal.front();
+    // Return LSB (control byte), used by AutoWindow button sync
+    if (!pdo60FDValid_.load(std::memory_order_acquire)) return false;
+    uint32_t val = pdo60FDCache_.load(std::memory_order_relaxed);
+    outLowByte = (uint8_t)(val & 0xFF);
     return true;
+}
+
+// Per-slave PDO cache accessors (lock-free, updated every cycle by CyclicTask)
+
+bool EtherCATMaster::GetPdo603F(uint16_t slave, uint16_t& outErrorCode) const
+{
+    // Acquire pairs with release-store in Initialize/Shutdown that resets
+    // count to 0 before freeing arrays, preventing use-after-free.
+    int count = pdoCacheSlaveCount_.load(std::memory_order_acquire);
+    if (slave < 1 || slave > static_cast<uint16_t>(count)) return false;
+    if (!pdo603FCache_) return false;
+    outErrorCode = pdo603FCache_[slave].load(std::memory_order_relaxed);
+    return true;
+}
+
+bool EtherCATMaster::GetPdo6061(uint16_t slave, uint8_t& outModeDisplay) const
+{
+    int count = pdoCacheSlaveCount_.load(std::memory_order_acquire);
+    if (slave < 1 || slave > static_cast<uint16_t>(count)) return false;
+    if (!pdo6061Cache_) return false;
+    outModeDisplay = pdo6061Cache_[slave].load(std::memory_order_relaxed);
+    return true;
+}
+
+bool EtherCATMaster::WriteModeOfOperation(uint16_t slave, uint8_t mode)
+{
+    if (slave < 1 || slave > static_cast<uint16_t>(slaveCount)) return false;
+
+    // Prefer PDO: look up 0x6060 in the per-slave descriptor cache.
+    // Uses the actual byte offset from the PDO mapping — inherently
+    // drive-model-specific and avoids the Obytes>=17 heuristic.
+    auto descIt = pdoDisplayDescriptors.find(slave);
+    if (descIt != pdoDisplayDescriptors.end()) {
+        for (const auto &desc : descIt->second) {
+            if (desc.index == 0x6060 && desc.isOutput) {
+                int outBase = 0, inBase = 0;
+                if (!GetSlaveIOBaseBytes(slave, outBase, inBase)) return false;
+                return StageOutputBytes(outBase + desc.byteOffset, &mode, 1);
+            }
+        }
+    }
+
+    // Descriptor cache miss — fall back to Obytes heuristic.
+    // Extended PDO (7+7, Obytes>=17): 0x6060 is at kPdoOutOff_ModesOfOp(16).
+    if (context.slavelist[slave].Obytes >= 17) {
+        int outBase = 0, inBase = 0;
+        if (!GetSlaveIOBaseBytes(slave, outBase, inBase)) return false;
+        return StageOutputBytes(outBase + kPdoOutOff_ModesOfOp, &mode, 1);
+    }
+
+    // Basic PDO or no descriptor cache: fall back to SDO.
+    return WriteSDO(slave, 0x6060, 0x00, &mode, 1);
 }
 
 // ------------------------------------------------------------

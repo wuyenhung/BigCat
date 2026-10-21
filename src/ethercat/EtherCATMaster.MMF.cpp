@@ -1,4 +1,5 @@
 #include "EtherCATMaster.h"
+#include "core/AppConfig.h"
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -7,6 +8,7 @@
 #include <bitset>
 #include <chrono>
 #include <cmath>
+#include <ctime>
 #include <intrin.h>
 #include <mmsystem.h>
 #include <soem/ec_print.h>
@@ -38,10 +40,16 @@ bool EtherCATMaster::StartMMF1In()
     // Prevent repeated starts
     if (mmf1ReaderRunning.load()) return true;
     // Select the MMF input mapping name from the configured MMF1 input mode.
-    const wchar_t* mappingName = GetMmf1InputMappingName(mmf1InputMode_);
-    bool ok = mmf1Reader.Start(std::wstring(mappingName), 0);
+    // An INI override ([MMF] InputName) takes precedence; otherwise the
+    // mode-dependent hardcoded name is used (default behavior).
+    const std::wstring mappingName = AppConfig::ReadMmf1InputName(GetMmf1InputMappingName(mmf1InputMode_));
+    bool ok = mmf1Reader.Start(mappingName, 0);
     if (ok) {
         mmf1ReaderRunning.store(true);
+        // Start the dedicated receiver thread on a non-RT (Worker) core.
+        // This thread polls MMF independently of the PDO cycle so MMF arrival
+        // jitter never disturbs the EtherCAT control loop.
+        StartMMFReceiver();
     }
     return ok;
 }
@@ -50,8 +58,78 @@ bool EtherCATMaster::StartMMF1In()
 void EtherCATMaster::StopMMF1In()
 {
     if (!mmf1ReaderRunning.load()) return;
+    // Stop the receiver thread before the reader itself
+    StopMMFReceiver();
     mmf1Reader.Stop();
     mmf1ReaderRunning.store(false);
+}
+
+
+// ── MMF Receiver Thread (non-RT Worker Core) ──
+// Periodically calls mmf1Reader.PollOnce() so the RT cyclic thread only
+// needs to read the latest seqlock-protected snapshot via GetLatest().
+// This eliminates non-deterministic MMF I/O latency from the PDO cycle.
+
+DWORD WINAPI EtherCATMaster::MMFReceiverThreadFunc(LPVOID param)
+{
+    EtherCATMaster* master = static_cast<EtherCATMaster*>(param);
+    master->MMFReceiverTask();
+    return 0;
+}
+
+
+void EtherCATMaster::MMFReceiverTask()
+{
+    // Pin this thread AWAY from the RT core — it runs on the Worker core.
+    CoreHelpers::CpuIsolation::ExcludeCurrentThreadFromRtCores();
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+    constexpr DWORD kPollIntervalMs = 1; // 1 ms poll rate, faster than PDO cycle
+
+    while (WaitForSingleObject(mmfReceiverStopEvent_, kPollIntervalMs) == WAIT_TIMEOUT) {
+        if (mmf1ReaderRunning.load(std::memory_order_relaxed)) {
+            (void)mmf1Reader.PollOnce();
+        }
+    }
+}
+
+
+bool EtherCATMaster::StartMMFReceiver()
+{
+    if (mmfReceiverRunning_.load(std::memory_order_relaxed)) return true;
+
+    // In simulation mode the PDO cycle itself calls PollOnce() inline —
+    // an async receiver thread would race with the deterministic
+    // simulated time steps and destabilise simulation-based tests.
+    if (simulationMode_.load(std::memory_order_relaxed)) return true;
+
+    mmfReceiverStopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!mmfReceiverStopEvent_) {
+        SetError("StartMMFReceiver: CreateEvent failed");
+        return false;
+    }
+
+    mmfReceiverThread_ = std::thread(MMFReceiverThreadFunc, this);
+    mmfReceiverRunning_.store(true, std::memory_order_relaxed);
+    return true;
+}
+
+
+void EtherCATMaster::StopMMFReceiver()
+{
+    if (!mmfReceiverRunning_.load(std::memory_order_relaxed)) return;
+
+    if (mmfReceiverStopEvent_) {
+        SetEvent(mmfReceiverStopEvent_);
+    }
+    if (mmfReceiverThread_.joinable()) {
+        mmfReceiverThread_.join();
+    }
+    if (mmfReceiverStopEvent_) {
+        CloseHandle(mmfReceiverStopEvent_);
+        mmfReceiverStopEvent_ = nullptr;
+    }
+    mmfReceiverRunning_.store(false, std::memory_order_relaxed);
 }
 
 // Enable writing PDO data to a named Memory-Mapped File for external visualization
@@ -59,6 +137,13 @@ void EtherCATMaster::StopMMF1In()
 bool EtherCATMaster::EnableMMFOutput(const std::wstring& mappingName)
 {
     EnterCriticalSection(&mmfOutputCS_);
+    // Re-entry guard: if already enabled, skip to avoid double Create() which
+    // would race with the PDO cycle's WriteSlave/UpdateHeader on the same view.
+    if (mmfOutputEnabled_.load(std::memory_order_relaxed)) {
+        LeaveCriticalSection(&mmfOutputCS_);
+        SetError("MMF output already enabled");
+        return true; // already enabled is not a failure for the caller
+    }
     bool ok = mmfWriter_.Create(mappingName);
     if (ok) {
         mmfOutputEnabled_.store(true);
@@ -75,13 +160,20 @@ bool EtherCATMaster::EnableMMFOutput(const std::wstring& mappingName)
 void EtherCATMaster::DisableMMFOutput()
 {
     EnterCriticalSection(&mmfOutputCS_);
+    if (!mmfOutputEnabled_.load(std::memory_order_relaxed)) {
+        // Already disabled; ensure writer is closed anyway (defense in depth)
+        mmfWriter_.Close();
+        LeaveCriticalSection(&mmfOutputCS_);
+        return;
+    }
     mmfWriter_.Close();
     mmfOutputEnabled_.store(false);
     LeaveCriticalSection(&mmfOutputCS_);
 }
 
 // WritePDOLogEntry: format and append one CSV line to the circular log buffer
-// Format: epoch_ms,uptime_ms,slave,MMF_IN,controlWord,statusWord,targetPos,targetVel,actualPos,actualVel,pdoFilterOutput,pdoFilterVel,pdoFilterAcc\n
+// Format: time,epoch_ms,uptime_ms,slave,MMF_IN,controlWord(hex),statusWord(hex),targetPos,targetVel,actualPos,actualVel,pdoFilterOutput,pdoFilterVel,pdoFilterAcc,filterTarget,softStartActive,filterTrackingError\n
+// time is human-readable local time: YYYY-MM-DD HH:MM:SS.mmm
 // Position and velocity are in mechanical units (mm, mm/s)
 // Called from PDOProcessingTask (single writer), mutex protects buffer writes
 
@@ -90,23 +182,40 @@ void EtherCATMaster::WritePDOLogEntry(int slaveIndex, uint64_t epochMs, uint64_t
                                        uint16_t controlWord, uint16_t statusWord,
                                        double targetPos, double targetVel,
                                        double actualPos, double actualVel,
-                                       double pdoFilterOutput, double pdoFilterVel, double pdoFilterAcc)
+                                       double pdoFilterOutput, double pdoFilterVel, double pdoFilterAcc,
+                                       double filterTarget, int softStartActive, double filterTrackingError)
 {
     if (!pdoLogBufferBase_ || !pdoRecordingEnabled_.load(std::memory_order_relaxed)) return;
     
+    // Convert epoch ms to human-readable local time
+    time_t sec = static_cast<time_t>(epochMs / 1000);
+    int ms = static_cast<int>(epochMs % 1000);
+    struct tm tmBuf;
+    localtime_s(&tmBuf, &sec);
+    char timeStr[24];
+    int timeLen = snprintf(timeStr, sizeof(timeStr), "%04d-%02d-%02d %02d:%02d:%02d.%03d",
+                           tmBuf.tm_year + 1900, tmBuf.tm_mon + 1, tmBuf.tm_mday,
+                           tmBuf.tm_hour, tmBuf.tm_min, tmBuf.tm_sec, ms);
+    
     // Format CSV line with mechanical units (6 decimal places for precision)
-    char line[256];
-    int len = snprintf(line, sizeof(line), "%llu,%llu,%d,%.6f,%u,%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+    char line[384];
+    int len = snprintf(line, sizeof(line), "%.*s,%llu,%llu,%d,%.6f,0x%04X,0x%04X,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%d,%.6f\n",
+                       timeLen, timeStr,
                        (unsigned long long)epochMs, (unsigned long long)uptimeMs,
                        slaveIndex, mmfIn,
                        (unsigned)controlWord, (unsigned)statusWord,
-                       targetPos, targetVel, actualPos, actualVel, pdoFilterOutput, pdoFilterVel, pdoFilterAcc);
+                       targetPos, targetVel, actualPos, actualVel,
+                       pdoFilterOutput, pdoFilterVel, pdoFilterAcc,
+                       filterTarget, softStartActive, filterTrackingError);
                        
     
     if (len <= 0 || len >= (int)sizeof(line)) return; // format error or truncation
     
     // Write to circular buffer with mutex protection
     std::lock_guard<std::mutex> lk(pdoLogMutex_);
+    // Re-check after acquiring mutex: StopPDORecordingAndFlushToFile may have
+    // detached the buffer between the fast-path check above and this lock.
+    if (!pdoLogBufferBase_ || !pdoRecordingEnabled_.load(std::memory_order_relaxed)) return;
     size_t remaining = pdoLogCapacity_ - pdoLogWritePos_;
     if ((size_t)len <= remaining) {
         // Fits without wrapping
@@ -289,4 +398,150 @@ EtherCATMaster::StewartParamsSnapshot EtherCATMaster::ReadStewartParamsSnapshot(
     }
     // Fallback: return whatever we have (extremely unlikely to reach here)
     return snap;
+}
+
+// ========================================================================
+// Pose6D 前置驗證層 API
+// ========================================================================
+
+void EtherCATMaster::SetPose6DLimits(const WuSOEM::Pose6DLimits& limits) {
+    pose6dLimits_ = limits;
+}
+
+WuSOEM::Pose6DLimits EtherCATMaster::GetPose6DLimits() const {
+    return pose6dLimits_;
+}
+
+std::wstring EtherCATMaster::ConsumePose6DLimitWarningMessage() {
+    std::lock_guard<std::mutex> lk(pose6dLimitWarningMsgMutex_);
+    std::wstring msg;
+    std::swap(msg, pose6dLimitWarningMsg_);
+    return msg;
+}
+
+std::wstring EtherCATMaster::ConsumePose6DDynamicScalingMessage() {
+    std::lock_guard<std::mutex> lk(pose6dDynamicScalingMsgMutex_);
+    std::wstring msg;
+    std::swap(msg, pose6dDynamicScalingMsg_);
+    return msg;
+}
+
+// ========================================================================
+// IK 實際 6-DOF 姿態 MMF 輸出 ("BigCat")
+// ========================================================================
+
+bool EtherCATMaster::EnablePoseMMFOutput(const std::wstring& mappingName)
+{
+    EnterCriticalSection(&poseMmfCS_);
+    if (poseMmfEnabled_.load(std::memory_order_relaxed)) {
+        LeaveCriticalSection(&poseMmfCS_);
+        SetError("Pose MMF output already enabled");
+        return true;
+    }
+
+    // Clean up any stale handles (old view already nullptr after Disable)
+    Pose6DMMF* oldView = poseMmfView_.exchange(nullptr, std::memory_order_acq_rel);
+    if (oldView) {
+        UnmapViewOfFile(oldView);
+    }
+    if (poseMmfHandle_) {
+        CloseHandle(poseMmfHandle_);
+        poseMmfHandle_ = NULL;
+    }
+
+    poseMmfHandle_ = CreateFileMappingW(
+        INVALID_HANDLE_VALUE,
+        NULL,
+        PAGE_READWRITE,
+        0,
+        static_cast<DWORD>(POSE_MMF_SIZE),
+        mappingName.c_str());
+
+    if (!poseMmfHandle_) {
+        LeaveCriticalSection(&poseMmfCS_);
+        SetError("EnablePoseMMFOutput: CreateFileMappingW failed");
+        return false;
+    }
+
+    Pose6DMMF* newView = static_cast<Pose6DMMF*>(MapViewOfFile(
+        poseMmfHandle_,
+        FILE_MAP_ALL_ACCESS,
+        0, 0,
+        POSE_MMF_SIZE));
+
+    if (!newView) {
+        CloseHandle(poseMmfHandle_);
+        poseMmfHandle_ = NULL;
+        LeaveCriticalSection(&poseMmfCS_);
+        SetError("EnablePoseMMFOutput: MapViewOfFile failed");
+        return false;
+    }
+
+    std::memset(newView, 0, POSE_MMF_SIZE);
+    poseMmfSeq_.store(0, std::memory_order_relaxed);
+
+    // Publish view before enabled flag so cyclic thread sees valid pointer
+    poseMmfView_.store(newView, std::memory_order_release);
+    poseMmfEnabled_.store(true, std::memory_order_release);
+    LeaveCriticalSection(&poseMmfCS_);
+    SetError("Pose MMF output enabled (BigCat)");
+    return true;
+}
+
+void EtherCATMaster::DisablePoseMMFOutput()
+{
+    EnterCriticalSection(&poseMmfCS_);
+    // Disable flag first so cyclic thread stops writing before we unmap
+    poseMmfEnabled_.store(false, std::memory_order_release);
+
+    Pose6DMMF* oldView = poseMmfView_.exchange(nullptr, std::memory_order_acq_rel);
+    if (oldView) {
+        UnmapViewOfFile(oldView);
+    }
+    if (poseMmfHandle_) {
+        CloseHandle(poseMmfHandle_);
+        poseMmfHandle_ = NULL;
+    }
+    LeaveCriticalSection(&poseMmfCS_);
+}
+
+void EtherCATMaster::WritePoseMMF(const WuSOEM::Pose6D& pose, bool valid, long double initialHeight, uint64_t epochMs)
+{
+    // Lock-free read: acquire pairs with release in Enable, ensuring
+    // we see a fully-initialized view or nullptr.
+    if (!poseMmfEnabled_.load(std::memory_order_acquire)) return;
+
+    Pose6DMMF* view = poseMmfView_.load(std::memory_order_acquire);
+    if (!view) return;
+
+    const uint64_t seq = poseMmfSeq_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+    LARGE_INTEGER qpc;
+    const uint64_t ts = QueryPerformanceCounter(&qpc) ? static_cast<uint64_t>(qpc.QuadPart) : 0;
+
+    // Convert world pose to platform coordinate system (outside any lock)
+    const std::array<long double, 3> worldDelta{{
+        pose.x,
+        pose.y,
+        pose.z - initialHeight,
+    }};
+    const auto platformDelta = WuSOEM::StewartIK::TransformWorldToPlatformDelta(worldDelta, pose);
+
+    // FlyPT order: [Sway, Surge, Heave, Yaw, Roll, Pitch]
+    // Write pose first, then metadata — consumer can check sequence change
+    // to know pose[6] is consistent.
+    view->pose[0] = static_cast<double>(platformDelta[0]);   // Sway (platform)
+    view->pose[1] = static_cast<double>(platformDelta[1]);   // Surge (platform)
+    view->pose[2] = static_cast<double>(platformDelta[2]);   // Heave (platform)
+    view->pose[3] = static_cast<double>(pose.yaw);            // FYaw (索引對調)
+    view->pose[4] = static_cast<double>(pose.pitch);          // Roll (左右傾斜)
+    view->pose[5] = static_cast<double>(pose.roll);           // Pitch (前後傾斜, 索引對調)
+
+    // Write metadata last as "commit" signal
+    view->valid    = valid ? 1 : 0;
+    view->timestamp = ts;
+    // Sequence written last so consumer can use it as a tear-detection fence
+    view->sequence = seq;
+
+    (void)epochMs; // reserved for future use (e.g. wall-clock timestamp)
 }

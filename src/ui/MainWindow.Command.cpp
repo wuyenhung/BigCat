@@ -22,8 +22,11 @@
 #include <shellapi.h>
 #include "LayoutHelper.h"
 #include "EtherCATMaster.h"
+#include "MotionLogic.h"
 #include "../include/core/CoreHelpers.h"
 #include "../include/core/CpuIsolation.h"
+#include "../include/core/CpuTopology.h"
+#include "../include/core/ShutdownGuard.h"
 #include "../include/MotionConfigIO.h"
 #include "Win32Utils.h"
 #include "HttpServer.h"
@@ -70,27 +73,25 @@ static bool IsDynamicPdoViolationOnly(PDOFilter::ViolationType type)
 static void ConfigureWorkerThreadForRT() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
-    // Hard-coded avoidance of Core 4 — must match CpuIsolation TARGET_ETHERCAT_CORE.
-    // This guarantees the worker never runs on the protected EtherCAT core even
-    // if the CyclicTask hasn't stored its mask yet (e.g. master not started).
-    constexpr int    kEtherCATTargetCore = 4;
-    constexpr DWORD_PTR kEtherCATCoreMask = (DWORD_PTR)1 << kEtherCATTargetCore;
-
-    DWORD_PTR avoidMask = kEtherCATCoreMask;
+    // Exclude ALL logical cores of the RT physical core (both primary and
+    // HT/SMT sibling) to prevent cache-line bouncing with the cyclic thread.
+    CoreHelpers::CpuIsolation::ExcludeCurrentThreadFromRtCores();
 
     // Also avoid whatever core the CyclicTask actually bound to (may differ
-    // from Core 4 when the host has fewer logical processors).
+    // when hard isolation is inactive).
+    DWORD_PTR avoidMask = 0;
     auto* master = AppController::GetInstance().GetMaster();
     if (master) {
-        DWORD_PTR stored = master->GetCyclicThreadCoreMask();
-        if (stored) avoidMask |= stored;
+        avoidMask = master->GetCyclicThreadCoreMask();
     }
+
+    if (avoidMask == 0) return;  // nothing extra to avoid
 
     DWORD_PTR processMask = 0, systemMask = 0;
     if (!GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) return;
     DWORD_PTR available = processMask ? processMask : systemMask;
     DWORD_PTR workerMask = available & ~avoidMask;
-    if (workerMask == 0) return; // only one core available, can't avoid
+    if (workerMask == 0) return;
     SetThreadAffinityMask(GetCurrentThread(), workerMask);
 }
 
@@ -118,20 +119,25 @@ bool MainWindow::RequestPdoSafetyManualResetStop(int slaveIdx, PDOFilter::Violat
         return false;
     }
 
-    if (trackingErrorStop) {
-        if (auto* master = AppController::GetInstance().GetMaster()) {
-            try {
-                if (master->IsPDOFilterSoftStartActive(slaveIdx)) {
-                    PDOFilter::ViolationType currentViolation = PDOFilter::ViolationType::None;
-                    bool filterError = false;
-                    bool trackingFatal = false;
-                    if (!master->GetPDOFilterState(slaveIdx, currentViolation, filterError, trackingFatal) ||
-                        (!filterError && !trackingFatal)) {
-                        return false;
-                    }
+    // During soft-start the filter is intentionally ramping through a
+    // large position range with reduced limits.  Oscillation during
+    // this phase must not trigger a permanent Manual-Reset lock-out,
+    // because the soft-start itself is a transient learning phase.
+    // Only latch the stop if the filter has already flagged a fatal
+    // (latched) error — a transient violation that the filter
+    // recovers from on its own is harmless.
+    if (auto* master = AppController::GetInstance().GetMaster()) {
+        try {
+            if (master->IsPDOFilterSoftStartActive(slaveIdx)) {
+                PDOFilter::ViolationType currentViolation = PDOFilter::ViolationType::None;
+                bool filterError = false;
+                bool trackingFatal = false;
+                if (!master->GetPDOFilterState(slaveIdx, currentViolation, filterError, trackingFatal) ||
+                    (!filterError && !trackingFatal)) {
+                    return false;
                 }
-            } catch (...) {
             }
+        } catch (...) {
         }
     }
 
@@ -161,16 +167,14 @@ bool MainWindow::RequestPdoSafetyManualResetStop(int slaveIdx, PDOFilter::Violat
 
     if (hardLimitStop) {
         const char* limitText = PDOFilter::HasFlag(type, PDOFilter::ViolationType::HardLimitMax) ? "上限" : "下限";
-        PostUTF8LogToUI(std::string("[AutoEmergencyStop] 由 PDO 位置") + limitText + "保護觸發 (Slave " + std::to_string(slaveIdx) + ") - 正在啟動緊急停止，需 Fault Reset 後才能重新啟動。\n");
+        PostUTF8LogToUI(std::string("[AutoAbort] 由 PDO 位置") + limitText + "保護觸發 (Slave " + std::to_string(slaveIdx) + ") - 已停止往該方向運動。\n");
         PostUTF8LogToUI(std::string("[PDO] Slave ") + std::to_string(slaveIdx) +
-            " 超出" + limitText + "，已判定為異常並執行緊急停止\n");
+            " 超出" + limitText + "，已停止往該方向運動\n");
     } else {
-        PostUTF8LogToUI(std::string("[AutoEmergencyStop] 由 PDO 偏差值過大逾時觸發 (Slave ") + std::to_string(slaveIdx) + ") - 正在啟動緊急停止，停止後可直接重新啟動。\n");
+        PostUTF8LogToUI(std::string("[AutoAbort] 由 PDO 偏差值過大逾時觸發 (Slave ") + std::to_string(slaveIdx) + ") - 已停止運動。\n");
         PostUTF8LogToUI(std::string("[PDO] Slave ") + std::to_string(slaveIdx) +
-            " 偏差值過大持續超過 0.5 秒，已判定為異常並執行緊急停止\n");
+            " 偏差值過大持續超過 0.5 秒，已停止運動\n");
     }
-    HWND requester = (this->hAutoWindow && IsWindow(this->hAutoWindow)) ? this->hAutoWindow : this->hwnd;
-    PostMessageW(this->hwnd, WM_USER_AUTO_EMERGENCY_STOP_REQUEST, reinterpret_cast<WPARAM>(requester), hardLimitStop ? 0 : 1);
     return true;
 }
 
@@ -367,7 +371,16 @@ void MainWindow::RefreshConfirmedSlaveControlState(bool rebuildPdoControls) {
     const bool baseEnableMotion = (confirmedSlave > 0) && IsMasterInitialized();
     const auto currentSnapshot = GetSystemStateSnapshot();
     const bool manualResetLockActive = IsManualResetRequired();
-    const bool faultResetOnlyMode = currentSnapshot.error || manualResetLockActive;
+    // Only block motion buttons when the SELECTED slave has an error,
+    // not when other (non-selected) slaves have errors.
+    bool selectedSlaveHasError = false;
+    if (confirmedSlave > 0) {
+        auto it = lastReportedErrorCode.find(confirmedSlave);
+        if (it != lastReportedErrorCode.end() && it->second != 0) {
+            selectedSlaveHasError = true;
+        }
+    }
+    const bool faultResetOnlyMode = selectedSlaveHasError || manualResetLockActive;
     bool motionAllowed = baseEnableMotion;
     const bool autoUiLockActive = IsAutoProcedureUiLockActive();
 
@@ -457,7 +470,7 @@ void MainWindow::RefreshConfirmedSlaveControlState(bool rebuildPdoControls) {
 
     if (uiMaster && uiMaster->IsInitialized()) {
         if (pdoDisplay.RecalculateOffsetsFromSDO(uiMaster, confirmedSlave)) {
-            pdoDisplay.RebuildPDOControls();
+            // RecalculateOffsetsFromSDO already calls RebuildPDOControls + ApplyCachedValues
             RestorePDOInputsFromGlobal();
         } else {
             pdoDisplay.RebuildPDOControls();
@@ -468,6 +481,53 @@ void MainWindow::RefreshConfirmedSlaveControlState(bool rebuildPdoControls) {
 
     pdoDisplay.Show(true);
     UpdateSelectedSlaveStatus(confirmedSlave);
+}
+
+void MainWindow::RefreshPdoMappingDisplay() {
+    if (!hStaticPdoMapping || !IsWindow(hStaticPdoMapping)) return;
+    auto* master = AppController::GetInstance().GetMaster();
+    if (!master || !master->IsInitialized() || confirmedSlave <= 0) {
+        SetWindowTextW(hStaticPdoMapping, L"PDO Mapping: (未連線)");
+        return;
+    }
+
+    PdoMappingStatus status;
+    if (!master->ReadActualPdoMapping(confirmedSlave, status) || !status.valid) {
+        SetWindowTextW(hStaticPdoMapping, L"PDO Mapping: 讀取失敗");
+        return;
+    }
+
+    // Build display string
+    std::wstringstream ss;
+
+    // RxPDO
+    if (status.rxPdoAssigned) {
+        ss << L"RxPDO(0x" << std::hex << std::uppercase << status.rxPdoAssigned << L"): ";
+        for (size_t i = 0; i < status.rxEntries.size(); ++i) {
+            if (i > 0) ss << L", ";
+            const auto& e = status.rxEntries[i];
+            ss << L"0x" << std::hex << std::uppercase << e.index
+               << L":" << std::dec << (int)e.subindex
+               << L"/" << (int)e.bitLength;
+        }
+        if (status.rxEntries.empty()) ss << L"(empty)";
+        ss << L"\r\n";
+    }
+
+    // TxPDO
+    if (status.txPdoAssigned) {
+        ss << L"TxPDO(0x" << std::hex << std::uppercase << status.txPdoAssigned << L"): ";
+        for (size_t i = 0; i < status.txEntries.size(); ++i) {
+            if (i > 0) ss << L", ";
+            const auto& e = status.txEntries[i];
+            ss << L"0x" << std::hex << std::uppercase << e.index
+               << L":" << std::dec << (int)e.subindex
+               << L"/" << (int)e.bitLength;
+        }
+        if (status.txEntries.empty()) ss << L"(empty)";
+    }
+
+    SetWindowTextW(hStaticPdoMapping, ss.str().c_str());
 }
 
 void MainWindow::SetManualResetRequired(bool required) {
@@ -504,16 +564,17 @@ void MainWindow::SetAutoStopLampLatched(bool immediateStop, bool emergencyStop) 
 }
 
 bool MainWindow::IsExternalEStopActive() const {
+    if (!externalEstopEnabled_.load()) return false;
     bool estopActive = false;
     try {
         std::vector<uint8_t> bytes;
-        if (this->TryGetLastSdo60FD(bytes) && !bytes.empty()) {
+        if (this->TryGetPdo60FD(bytes) && !bytes.empty()) {
             uint8_t last = bytes.back();
-            estopActive = ((last & 0x20) == 0);
+            estopActive = ((last & 0x01) == 0);
         } else {
-            int prev = this->lastSdo60FDLastByte.load();
+            int prev = this->lastPdo60FDLastByte.load();
             if (prev != -1) {
-                estopActive = ((prev & 0x20) == 0);
+                estopActive = ((prev & 0x01) == 0);
             }
         }
     } catch (...) {
@@ -526,13 +587,13 @@ bool MainWindow::IsExternalImmediateStopActive() const {
     bool immediateStopActive = false;
     try {
         std::vector<uint8_t> bytes;
-        if (this->TryGetLastSdo60FD(bytes) && !bytes.empty()) {
+        if (this->TryGetPdo60FD(bytes) && !bytes.empty()) {
             uint8_t last = bytes.back();
-            immediateStopActive = ((last & 0x01) != 0);
+            immediateStopActive = ((last & 0x20) != 0);
         } else {
-            int prev = this->lastSdo60FDLastByte.load();
+            int prev = this->lastPdo60FDLastByte.load();
             if (prev != -1) {
-                immediateStopActive = ((prev & 0x01) != 0);
+                immediateStopActive = ((prev & 0x20) != 0);
             }
         }
     } catch (...) {
@@ -614,7 +675,6 @@ bool MainWindow::CanExecuteAutoProcedureStopRequest() const {
 void MainWindow::FinalizeAutoImmediateStop(HWND hRequester, bool success, bool isPDOErrorTriggered) {
     if (success && this->autoDownToOriginAbortRequested.load()) {
         if (this->autoDownToOriginRunning.exchange(false)) {
-            this->autoDownToOriginLastSuccess.store(false);
             PostUTF8LogToUI(std::string("[AutoImmediateStop] Released AutoDownToOrigin busy state after stop completion\n"));
         }
     }
@@ -627,7 +687,6 @@ void MainWindow::FinalizeAutoImmediateStop(HWND hRequester, bool success, bool i
 void MainWindow::FinalizeAutoEmergencyStop(HWND hRequester, bool success) {
     if (success && this->autoDownToOriginAbortRequested.load()) {
         if (this->autoDownToOriginRunning.exchange(false)) {
-            this->autoDownToOriginLastSuccess.store(false);
             PostUTF8LogToUI(std::string("[AutoEmergencyStop] Released AutoDownToOrigin busy state after stop completion\n"));
         }
     }
@@ -689,6 +748,31 @@ void MainWindow::NotifyAutoWindowOwnerState(WPARAM state) {
     }
 }
 
+void MainWindow::FinalizeSuccessfulAutoConnectSoftStart() {
+    SetManualResetRequired(false);
+    SetAutoStopLampLatched(false, false);
+    try {
+        if (auto* master = AppController::GetInstance().GetMaster()) {
+            master->ClearGlobalError();
+        }
+    } catch (...) {
+    }
+    this->anySlaveHasInternalError.store(false);
+    {
+        std::lock_guard<std::mutex> lock(this->pdoLogStateMutex_);
+        this->pdoSafetyStopRequested_.clear();
+    }
+    try {
+        RefreshInternalErrorStateFrom603F("[AUTO] ");
+    } catch (...) {
+    }
+    PostAutoStatusUpdate();
+    RequestMotionUiRefresh();
+    if (hAutoWindow && IsWindow(hAutoWindow)) {
+        PostMessageW(hAutoWindow, WM_USER_AUTO_SOFT_START_SUCCEEDED, 0, 0);
+    }
+}
+
 bool MainWindow::TryPowerOnAllSlaves(const char *logPrefix, const char *partialFailureLog, const char *missingControllerLog) {
     if (!this->motionController) {
         if (missingControllerLog) {
@@ -729,6 +813,9 @@ bool MainWindow::ClearMasterErrorAndResetPdoFilters(int slaveNumber) {
     if (!master) return false;
 
     master->ClearGlobalError();
+    // 清除 powerOnInProgress 旗標，避免 TryPowerOnAllSlaves 成功後留下的旗標
+    // 在後續操作（如 Auto Connect）之前影響 CyclicTask 對運動指令的寫入判斷。
+    master->SetPowerOnInProgress(false);
     int slaveCount = master->GetSlaveCount();
     if (slaveNumber > 0 && slaveNumber <= slaveCount) {
         master->ResetPDOFilter(slaveNumber);
@@ -761,13 +848,8 @@ void MainWindow::RefreshInternalErrorStateFrom603F(const char *logPrefix) {
     bool readFailure = false;
     for (int slaveIdx = 1; slaveIdx <= slaveCount; ++slaveIdx) {
         uint16_t errorCode = 0;
-        int readSize = sizeof(errorCode);
-        if (!MasterReadSDO(static_cast<uint16_t>(slaveIdx),
-                           static_cast<uint16_t>(0x603F),
-                           static_cast<uint8_t>(0x00),
-                           &errorCode,
-                           readSize,
-                           100000)) {
+        // Use PDO cache (updated every cycle) instead of blocking SDO read
+        if (!master->GetPdo603F(static_cast<uint16_t>(slaveIdx), errorCode)) {
             readFailure = true;
             break;
         }
@@ -820,6 +902,20 @@ void MainWindow::RefreshInternalErrorStateFrom603F(const char *logPrefix) {
 
 bool MainWindow::ExecuteStopMotionSequence(const char *logPrefix, bool allowSoftStartRetry) {
     (void)allowSoftStartRetry;
+
+    // Capture pre-stop velocity BEFORE HoldAllPDOFiltersPosition zeroes it.
+    // The CSV controller rate-limits state.commandVelocity using the filter's
+    // configured max deceleration; we must wait for that ramp to complete
+    // before staging 0x60FF=0 and disabling filtering.
+    double preStopMaxVel = 0.0;
+    double minDecel = 200.0;  // fallback
+    try {
+        if (auto* capMaster = AppController::GetInstance().GetMaster()) {
+            preStopMaxVel = capMaster->GetMaxFilterVelocity();
+            minDecel = capMaster->GetMinConfiguredMaxDeceleration();
+        }
+    } catch (...) {}
+
     MotionResult stopResult = this->motionController->SmoothStopAll(0.25);
     PostUTF8LogToUI(CoreHelpers::WideToUtf8(stopResult.message));
 
@@ -830,14 +926,54 @@ bool MainWindow::ExecuteStopMotionSequence(const char *logPrefix, bool allowSoft
         success = immediateResult.success;
     }
 
+    // Wait for the CSV controller to decelerate the axes at the configured
+    // max deceleration.  HoldCurrentPosition() restored full
+    // iConfiguredMaxDeceleration_, and the CSV rate limiter (maxNegativeStep)
+    // enforces it per cycle.  We must NOT stage 0x60FF=0 or disable filtering
+    // until the deceleration ramp completes.
+    if (success && preStopMaxVel > 0.0 && minDecel > 0.0) {
+        const double decelWaitSec = preStopMaxVel / minDecel + 0.15; // +150ms margin (was 500ms)
+        const double cappedWaitSec = (std::min)(decelWaitSec, 10.0); // cap at 10s
+        const DWORD waitMs = static_cast<DWORD>(cappedWaitSec * 1000.0);
+        if (waitMs > 0) {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                "%sdeceleration wait: %.1f deg/s / %.1f deg/s² = %.2fs\n",
+                logPrefix, preStopMaxVel, minDecel, cappedWaitSec);
+            PostUTF8LogToUI(std::string(buf));
+            Sleep(waitMs);
+        }
+    } else if (success) {
+        // SmoothStopAll already set filters to hold-position with rate-limited
+        // deceleration; a short settling wait is sufficient even without velocity data.
+        PostUTF8LogToUI(std::string(logPrefix) + "deceleration wait: no velocity data, using 300ms settling fallback\n");
+        Sleep(300);
+    }
+
+    // After deceleration ramp completes, stage 0x60FF=0 for steady-state hold
+    // and disable PDO filtering.
+    if (success) {
+        try {
+            if (auto* stopMaster = AppController::GetInstance().GetMaster()) {
+                PostUTF8LogToUI(std::string(logPrefix) + "deceleration complete; staging 0x60FF=0 and disabling filtering\n");
+                int slaveCount = stopMaster->GetSlaveCount();
+                PDOProxy* pdo = this->motionController ? this->motionController->GetPDODisplay() : nullptr;
+                for (int s = 1; s <= slaveCount; ++s) {
+                    MotionLogic::StagePDOByIndex(stopMaster, pdo, s, 0x60FF, 0u);
+                }
+                if (stopMaster->IsRunning()) {
+                    stopMaster->SendProcessDataOnce();
+                }
+            }
+        } catch (...) {}
+    }
+
     try {
         if (auto* stopMaster = AppController::GetInstance().GetMaster()) {
-            PostUTF8LogToUI(std::string(logPrefix) + "Stop-class request: disabling PDO filtering immediately after 0x60FF=0 command\n");
+            PostUTF8LogToUI(std::string(logPrefix) + "Stop-class request: disabling PDO filtering after 0x60FF=0 command\n");
             DisablePdoFilteringAfterStop(logPrefix);
         }
-    } catch (...) {
-        // swallow
-    }
+    } catch (...) {}
 
     return success;
 }
@@ -1041,7 +1177,7 @@ static void CleanupTrackedBrowserHandle(bool forceClose)
         // terminate all child processes when its handle is closed.
         if (forceClose && wait == WAIT_TIMEOUT) {
             TerminateProcess(g_launchedBrowserProcess, 0);
-            WaitForSingleObject(g_launchedBrowserProcess, 2000);
+            WaitForSingleObject(g_launchedBrowserProcess, 200);
         }
         CloseHandle(g_launchedBrowserProcess);
         g_launchedBrowserProcess = NULL;
@@ -1156,7 +1292,7 @@ static std::wstring EnsureBigCatShellProfileDir()
         return std::wstring(L".\\BigCatBrowserShell");
     }
 
-    std::wstring appDir = baseDir + L"\\WuBigCat";
+    std::wstring appDir = baseDir + L"\\BigCat";
     std::wstring profileDir = appDir + L"\\browser-shell";
     CreateDirectoryW(appDir.c_str(), nullptr);
     CreateDirectoryW(profileDir.c_str(), nullptr);
@@ -1230,12 +1366,21 @@ static bool LaunchUrlInChromiumAppMode(const std::wstring& browserPath,
         g_launchedBrowserJob = hJob;
     }
 
-    // Isolate browser process from EtherCAT RT core (Core 4) and System core (Core 0)
+    // Isolate browser process from EtherCAT RT core, game-dedicated cores, and System core (Core 0)
     DWORD_PTR processMask = 0, systemMask = 0;
     if (GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask)) {
-        // Exclude Core 0 (0x1) and Core 4 (0x10)
-        DWORD_PTR browserMask = systemMask & ~((DWORD_PTR)0x11);
-        if (browserMask == 0) browserMask = systemMask; // Fallback if only 0/4 exist
+        // Exclude:
+        //   • Core 0 (0x1) — reserved for OS system interrupts
+        //   • RT physical core's primary LP — reserved for EtherCAT PDO cycle
+        //   • Physical cores 2~5 (all LPs including SMT siblings) — clean game cores
+        DWORD_PTR rtPrimaryMask = CoreHelpers::CpuIsolation::GetRtThreadMask();
+        DWORD_PTR gameCoreMask = 0;
+        for (int physIdx = 2; physIdx <= 5; ++physIdx) {
+            gameCoreMask |= CoreHelpers::CpuTopology::GetCoreMask(physIdx);
+        }
+        DWORD_PTR excludeMask = 0x1 | rtPrimaryMask | gameCoreMask;
+        DWORD_PTR browserMask = systemMask & ~excludeMask;
+        if (browserMask == 0) browserMask = systemMask; // Fallback if only excluded cores exist
         SetProcessAffinityMask(pi.hProcess, browserMask);
     }
 
@@ -1312,7 +1457,7 @@ void MainWindow::OpenHttpOperationInterface(bool forceLogout, bool autoLoginDefa
 static std::wstring GetAppIniPath()
 {
     wchar_t buf[MAX_PATH] = {0};
-    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\WuBigCat.ini");
+    if (GetModuleFileNameW(NULL, buf, MAX_PATH) == 0) return std::wstring(L".\\BigCat.ini");
     wchar_t *p = wcsrchr(buf, L'\\');
     wchar_t *dot = wcsrchr(buf, L'.');
     if (dot && (!p || dot > p)) *dot = L'\0';
@@ -1324,6 +1469,14 @@ static void WriteIniBool(const wchar_t* section, const wchar_t* key, bool value)
 {
     std::wstring ini = GetAppIniPath();
     WritePrivateProfileStringW(section, key, value ? L"1" : L"0", ini.c_str());
+}
+
+static std::wstring ReadIniString(const wchar_t* section, const wchar_t* key, const wchar_t* defaultValue)
+{
+    std::wstring ini = GetAppIniPath();
+    wchar_t buf[256] = {0};
+    GetPrivateProfileStringW(section, key, defaultValue, buf, 256, ini.c_str());
+    return std::wstring(buf);
 }
 
 static const int sideMargin = 0;
@@ -1505,32 +1658,57 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                             FinalizeAutoFaultReset(hRequester, false);
                             return;
                         }
-                        try {
-                            // Always call FaultResetAll() - legacy single-slave logic removed
-                            MotionResult mr = this->motionController->FaultResetAll();
-                            PostUTF8LogToUI(CoreHelpers::WideToUtf8(mr.message));
-                            overallSuccess = mr.success;
-                        
-                        } catch (const std::exception &ex) {
-                            std::string s = std::string("[AutoFaultReset] exception: ") + ex.what() + "\n";
-                            PostUTF8LogToUI(s);
-                            overallSuccess = false;
-                        } catch (...) {
-                            PostUTF8LogToUI(std::string("[AutoFaultReset] unknown exception\n"));
-                            overallSuccess = false;
+
+                        // 檢查所有從站的 0x603F 錯誤碼：若全部為 0 表示驅動器
+                        // 本身無異常，毋需對硬體執行 FaultResetAll / PowerOnAll；
+                        // 僅清除程式端狀態即可，避免不必要的 CiA402 狀態轉換
+                        // 造成伺服瞬間震動。
+                        bool anySlaveHasFault = false;
+                        {
+                            auto* master = AppController::GetInstance().GetMaster();
+                            if (master) {
+                                int sc = master->GetSlaveCount();
+                                for (int si = 1; si <= sc && !anySlaveHasFault; ++si) {
+                                    uint16_t ec = 0;
+                                    if (master->GetPdo603F(static_cast<uint16_t>(si), ec) && ec != 0) {
+                                        anySlaveHasFault = true;
+                                    }
+                                }
+                            }
                         }
-                        // If reset completed (or completed with no action), attempt to power on
-                        // all slaves so device is ready to run. This keeps AutoWindow in override
-                        // state until both reset and power-on operations finish.
-                        // Use PowerOnAllAsync to batch all PDO staging and send atomically.
-                        bool overallPowerOnSuccess = true;
-                        if (IsExternalImmediateStopActive() || IsExternalEStopActive()) {
-                            overallPowerOnSuccess = false;
-                            PostUTF8LogToUI(std::string("[AutoFaultReset] external stop input is still active; skipping power-on until release and another reset.\n"));
-                        } else if (this->motionController) {
-                            overallPowerOnSuccess = TryPowerOnAllSlaves("[AutoFaultReset] ");
+
+                        if (anySlaveHasFault) {
+                            try {
+                                MotionResult mr = this->motionController->FaultResetAll();
+                                PostUTF8LogToUI(CoreHelpers::WideToUtf8(mr.message));
+                                overallSuccess = mr.success;
+                            } catch (const std::exception &ex) {
+                                std::string s = std::string("[AutoFaultReset] exception: ") + ex.what() + "\n";
+                                PostUTF8LogToUI(s);
+                                overallSuccess = false;
+                            } catch (...) {
+                                PostUTF8LogToUI(std::string("[AutoFaultReset] unknown exception\n"));
+                                overallSuccess = false;
+                            }
                         } else {
-                            PostUTF8LogToUI(std::string("[AutoFaultReset] MotionController not initialized; skipping power-on\n"));
+                            // 所有軸 0x603F=0：無硬體異常，跳過驅動器重置
+                            PostUTF8LogToUI(std::string("[AutoFaultReset] all slaves 0x603F=0, skipping drive fault reset\n"));
+                            overallSuccess = true;
+                        }
+                        // 僅在偵測到硬體異常時才重新啟用伺服；若 0x603F 全為 0
+                        // 表示伺服仍在 Operation Enabled 狀態，毋需 PowerOn。
+                        bool overallPowerOnSuccess = true;
+                        if (anySlaveHasFault) {
+                            if (IsExternalImmediateStopActive() || IsExternalEStopActive()) {
+                                overallPowerOnSuccess = false;
+                                PostUTF8LogToUI(std::string("[AutoFaultReset] external stop input is still active; skipping power-on until release and another reset.\n"));
+                            } else if (this->motionController) {
+                                overallPowerOnSuccess = TryPowerOnAllSlaves("[AutoFaultReset] ");
+                            } else {
+                                PostUTF8LogToUI(std::string("[AutoFaultReset] MotionController not initialized; skipping power-on\n"));
+                            }
+                        } else {
+                            PostUTF8LogToUI(std::string("[AutoFaultReset] all slaves 0x603F=0, skipping power-on\n"));
                         }
 
                         // Notify requester once reset+power-on attempt complete. Use success only
@@ -1828,13 +2006,148 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                             try { /* per-slave loop handled above */ } catch (...) {}
                             // Note: PDOFilter callbacks were registered above inside the per-slave loop
 
-                            // Attempt a one-time power-on for all slaves BEFORE enabling PDO filtering
-                            // Use PowerOnAllAsync to batch all PDO staging and send atomically,
-                            // preventing race conditions where one axis is enabled before others
-                            // have their target positions staged.
-                            TryPowerOnAllSlaves(
-                                "[AUTO] ",
-                                "[AUTO] Some slaves failed to power on during Auto Connect\n");
+                            // CSP mode: sync 0x607A <- 0x6064 BEFORE power-on so the
+                            // servo enables with its actual position as the target,
+                            // preventing a position-error-triggered enable bump.
+                            try {
+                                auto* prePowerMaster = AppController::GetInstance().GetMaster();
+                                if (prePowerMaster && prePowerMaster->IsCspMode()) {
+                                    prePowerMaster->ClearStagedOutputsForCyclicMotionCommands();
+                                }
+                            } catch (...) {}
+
+                            // If all slaves are already in Operation Enabled (e.g. after a
+                            // stop without controlword change), skip the full CiA402 power-on
+                            // sequence.  Re-running Shutdown→SwitchOn→EnableOp would
+                            // momentarily disable the power stage on all axes and cause a
+                            // mechanical vibration on Stewart platforms when torque re-engages.
+                            bool allAlreadyOp = false;
+                            try {
+                                allAlreadyOp = AreAllSlavesReadyByStatusword();
+                            } catch (...) { allAlreadyOp = false; }
+                            if (allAlreadyOp) {
+                                PostUTF8LogToUI(std::string("[AUTO] All slaves already OP — skipping CiA402 power-on sequence\n"));
+                            } else {
+                                // Attempt a one-time power-on for all slaves BEFORE enabling PDO filtering
+                                // Use PowerOnAllAsync to batch all PDO staging and send atomically,
+                                // preventing race conditions where one axis is enabled before others
+                                // have their target positions staged.
+                                TryPowerOnAllSlaves(
+                                    "[AUTO] ",
+                                    "[AUTO] Some slaves failed to power on during Auto Connect\n");
+                            }
+
+                            // Verify all servos are in Operation Enabled before soft-start.
+                            // If a servo refused to enable due to a stale position command,
+                            // the CSP sync above and Phase 2 inside PowerOnAllAsync should
+                            // have fixed it.  Poll statusword until confirmed or timeout.
+                            {
+                                const int kOpEnabledTimeoutMs = 2000;
+                                const int kOpEnabledPollMs = 20;
+                                int waited = 0;
+                                bool allOpEnabled = false;
+                                while (waited < kOpEnabledTimeoutMs) {
+                                    if (this->autoConnectAbortRequested.load()) break;
+                                    allOpEnabled = AreAllSlavesReadyByStatusword();
+                                    if (allOpEnabled) break;
+                                    std::this_thread::sleep_for(std::chrono::milliseconds(kOpEnabledPollMs));
+                                    waited += kOpEnabledPollMs;
+                                }
+                                if (!allOpEnabled) {
+                                    PostUTF8LogToUI(std::string("[AUTO] WARNING: not all slaves confirmed Operation Enabled after ")
+                                        + std::to_string(waited) + "ms, proceeding anyway\n");
+                                } else {
+                                    PostUTF8LogToUI(std::string("[AUTO] All slaves confirmed OP after ")
+                                        + std::to_string(waited) + "ms\n");
+                                    // After OP confirmed, wait for all servos to actually
+                                    // reach the target position (statusWord bit10=1).
+                                    // If the servo is still moving toward the target when
+                                    // soft-start begins, the filter's takeover produces a
+                                    // deceleration bump.
+                                    const int kTargetReachedTimeoutMs = 2000;
+                                    int trWaited = 0;
+                                    bool allTargetReached = false;
+                                    const int sc2 = (master ? master->GetSlaveCount() : 0);
+                                    while (trWaited < kTargetReachedTimeoutMs) {
+                                        if (this->autoConnectAbortRequested.load()) break;
+                                        allTargetReached = true;
+                                        for (int si = 1; si <= sc2; ++si) {
+                                            uint32_t sw = 0; bool hasSw = false;
+                                            MasterGetStatusword6041(si, sw, hasSw);
+                                            // bit10 = Target Reached
+                                            if (!hasSw || (sw & 0x0400) == 0) {
+                                                allTargetReached = false;
+                                                break;
+                                            }
+                                        }
+                                        if (allTargetReached) break;
+                                        std::this_thread::sleep_for(std::chrono::milliseconds(kOpEnabledPollMs));
+                                        trWaited += kOpEnabledPollMs;
+                                    }
+                                    if (allTargetReached) {
+                                        PostUTF8LogToUI(std::string("[AUTO] All slaves Target Reached after ")
+                                            + std::to_string(trWaited) + "ms\n");
+                                        // Final check: wait until actual velocity is near zero.
+                                        // The servo may report Target Reached while still coasting;
+                                        // soft-start takeover during coasting produces a bump.
+                                        const int kVelZeroTimeoutMs = 2000;
+                                        int vzWaited = 0;
+                                        bool allVelZero = false;
+                                        while (vzWaited < kVelZeroTimeoutMs) {
+                                            if (this->autoConnectAbortRequested.load()) break;
+                                            allVelZero = true;
+                                            for (int si = 1; si <= sc2; ++si) {
+                                                MechanicalUnitMetrics m;
+                                                if (MasterGetMechanicalUnitMetrics(si, m) && m.valid) {
+                                                    double vel = 0.0;
+                                                    try { vel = std::stod(CoreHelpers::WideToUtf8(m.actualSpeed)); } catch (...) { vel = 999.0; }
+                                                    if (std::abs(vel) > 0.1) { // >0.1 deg/s = still moving
+                                                        allVelZero = false;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                            if (allVelZero) break;
+                                            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                                            vzWaited += 20;
+                                        }
+                                        if (allVelZero) {
+                                            PostUTF8LogToUI(std::string("[AUTO] All slaves velocity near zero after ")
+                                                + std::to_string(vzWaited) + "ms\n");
+                                        } else {
+                                            PostUTF8LogToUI(std::string("[AUTO] WARNING: not all slaves zero velocity after ")
+                                                + std::to_string(vzWaited) + "ms, proceeding anyway\n");
+                                        }
+                                    } else {
+                                        PostUTF8LogToUI(std::string("[AUTO] WARNING: not all slaves Target Reached after ")
+                                            + std::to_string(trWaited) + "ms, proceeding anyway\n");
+                                    }
+                                }
+                                // Diagnostic: log statusWord & targetPos before soft-start
+                                if (auto* diagMaster = AppController::GetInstance().GetMaster()) {
+                                    int sc = diagMaster->GetSlaveCount();
+                                    for (int si = 1; si <= sc; ++si) {
+                                        uint32_t sw = 0; bool hasSw = false;
+                                        MasterGetStatusword6041(si, sw, hasSw);
+                                        int32_t tpRaw = 0;
+                                        // Read 0x607A from IOmap via snapshot
+                                        std::vector<uint8_t> snap;
+                                        if (diagMaster->GetPDODataSnapshot(si, snap)) {
+                                            // Use standard offsets
+                                            // Snapshot layout: [output bytes][input bytes], 0x607A at out-offset 0
+                                            if (4 <= (int)snap.size()) {
+                                                std::memcpy(&tpRaw, snap.data() + EtherCATMaster::kPdoOutOff_TargetPos, 4);
+                                            }
+                                        }
+                                        std::ostringstream diag;
+                                        diag << "[AUTO-SS-DIAG] pre-SS S" << si
+                                             << " sw=0x" << std::hex << sw << std::dec
+                                             << " hasSw=" << hasSw
+                                             << " tpRaw=" << tpRaw;
+                                        PostUTF8LogToUI(diag.str() + "\n");
+                                    }
+                                }
+                            }
 
                             // CRITICAL: Wait for at least 2 PDO cycles to ensure PowerOn staged
                             // outputs (0x607A, 0x6040) have been applied to IOmap before enabling
@@ -1854,25 +2167,29 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                             }
 
-                            // Trigger soft-start for all slaves
+                            // Trigger soft-start for all slaves.
+                            // TriggerAllPDOFiltersSoftStart() now atomically
+                            // enables PDO filtering and triggers soft-start on
+                            // every filter inside the same critical section,
+                            // so the PDOProcessingTask sees a consistent state
+                            // (filtering on + soft-start active) on the very
+                            // next cycle.  The old separate EnablePDOFiltering
+                            // call created a window where the cyclic task could
+                            // process MMF targets at full limits before
+                            // soft-start protection was in place.
                             try {
                                 master->TriggerAllPDOFiltersSoftStart();
-                                PostUTF8LogToUI(std::string("[AUTO] Soft Start 已觸發（連線運轉開始）\n"));
-                                master->ClearGlobalError();
-                                try {
-                                    master->EnablePDOFiltering(true);
-                                    if (!master->IsPDOFilteringEnabled()) {
-                                        std::string lastErr = master->GetLastError();
-                                        PostUTF8LogToUI(std::string("[AUTO] PDO filtering NOT enabled: ")
-                                            + (lastErr.empty() ? "unknown reason" : lastErr) + "\n");
-                                    } else {
-                                        NotifyAutoWindowOwnerState((WPARAM)0x2);
-                                    }
-                                } catch(...) {
-                                    PostUTF8LogToUI(std::string("[AUTO] Failed to enable PDO filtering\n"));
+                                if (!master->IsPDOFilteringEnabled()) {
+                                    std::string lastErr = master->GetLastError();
+                                    PostUTF8LogToUI(std::string("[AUTO] PDO filtering NOT enabled: ")
+                                        + (lastErr.empty() ? "unknown reason" : lastErr) + "\n");
+                                } else {
+                                    NotifyAutoWindowOwnerState((WPARAM)0x2);
+                                    PostUTF8LogToUI(std::string("[AUTO] Soft Start 已觸發（連線運轉開始）\n"));
+                                    master->ClearGlobalError();
                                 }
-                            } catch (...) {
-                                PostUTF8LogToUI(std::string("[AUTO] Failed to trigger Soft Start\n"));
+                            } catch(...) {
+                                PostUTF8LogToUI(std::string("[AUTO] Failed to trigger soft-start\n"));
                             }
 
                             // Clear any previous abort request for Auto Connect soft-start
@@ -2019,9 +2336,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                     if (!this->violationSoundPlaying_.load()) {
                                         try { PlaySound(NULL, NULL, 0); } catch(...) {}
                                     }
-                                    // Force UI refresh now that busy is cleared
-                                    PostAutoStatusUpdate();
-                                    RequestMotionUiRefresh();
+                                    FinalizeSuccessfulAutoConnectSoftStart();
                                     PostUTF8LogToUI(std::string("[AUTO] All axes ready — requested master to complete Soft Start\n"));
                                 } else {
                                     // Did not complete within initial timeout: log and continue
@@ -2123,9 +2438,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                                     PostUTF8LogToUI(std::string("[AUTO] WARNING: Axis ") + std::to_string(si) + " was not ready before soft-start timeout stop\n");
                                                 }
                                             }
-                                            this->autoConnectAbortRequested.store(true);
-                                            HWND requester = (this->hAutoWindow && IsWindow(this->hAutoWindow)) ? this->hAutoWindow : this->hwnd;
-                                            PostMessageW(this->hwnd, WM_USER_AUTO_EMERGENCY_STOP_REQUEST, reinterpret_cast<WPARAM>(requester), 0);
+                                             this->autoConnectAbortRequested.store(true);
                                             break;
                                         }
 
@@ -2155,8 +2468,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                         if (!this->violationSoundPlaying_.load()) {
                                             try { PlaySound(NULL, NULL, 0); } catch(...) {}
                                         }
-                                        PostAutoStatusUpdate();
-                                        RequestMotionUiRefresh();
+                                        FinalizeSuccessfulAutoConnectSoftStart();
                                         PostUTF8LogToUI(std::string("[AUTO] All axes ready (after extended wait) — requested master to complete Soft Start\n"));
                                     }
                                 }
@@ -2431,11 +2743,71 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             }
         }
         break;
+    // ── Windows 關機 / 重新啟動 / 登出攔截（程式執行期間封鎖） ──
+    // 回傳 FALSE 讓系統取消本次關機；ShutdownBlockReasonCreate 的原因文字會顯示在
+    // 系統的「正在封鎖關機」畫面。critical shutdown（ENDSESSION_CRITICAL）無法封鎖。
+    case WM_QUERYENDSESSION:
+        {
+            std::string guardLog;
+            const bool blocked = CoreHelpers::ShutdownGuard::HandleQueryEndSession(hwnd, lParam, guardLog);
+            if (!guardLog.empty()) {
+                OutputDebugStringA((guardLog + "\n").c_str());
+            }
+            if (blocked) {
+                PrependStatus(L"[Safety] ✋ 已攔截 Windows 關機/重新啟動（請先關閉 BigCat 再關機）\r\n");
+            } else if (CoreHelpers::ShutdownGuard::IsEnabled()) {
+                PrependStatus(L"[Safety] 系統 critical shutdown — 無法封鎖，session 即將結束\r\n");
+            } else {
+                PrependStatus(L"[Safety] 關機封鎖未啟用，允許關機/重新啟動\r\n");
+            }
+            return blocked ? FALSE : TRUE;
+        }
+    case WM_ENDSESSION:
+        // wParam != FALSE：session 真的結束（本程式即將被終止）。
+        // wParam == FALSE：關機被取消，維持封鎖原因。
+        CoreHelpers::ShutdownGuard::HandleEndSession(hwnd, wParam, lParam);
+        return 0;
     case WM_CLOSE:
         // 禁用在連接或連接中關閉視窗
         if (disconnecting.load() || workerRunning.load() || IsMasterInitialized()) {
-            MessageBoxW(hwnd, L"連接中或已連接，無法關閉視窗。請先斷開連接。", L"警告", MB_OK | MB_ICONWARNING);
-            return 0;
+            // 若網路實體斷線，允許使用者強制關閉
+            const std::string closeIfName = this->currentIfName.Copy();
+            if (IsMasterInitialized() && !closeIfName.empty() &&
+                !EtherCATMaster::IsSimulationAdapterSelection(closeIfName)) {
+                bool linkUp = false;
+                try { linkUp = CoreHelpers::CheckLinkStatus(closeIfName.c_str()); } catch (...) {}
+                if (!linkUp) {
+                    int ret = MessageBoxW(hwnd,
+                        L"偵測到 EtherCAT 網路已斷線。\n\n確定要強制關閉視窗嗎？\n（不建議在馬達通電時強制關閉）",
+                        L"網路斷線 - 強制關閉", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2);
+                    if (ret == IDYES) {
+                        disconnecting.store(false);
+                        workerRunning.store(false);
+                        // 強制標記 master 為未初始化以允許關閉
+                        if (auto* master = AppController::GetInstance().GetMaster()) {
+                            master->ForceMarkUninitialized();
+                        }
+                    } else {
+                        return 0;
+                    }
+                } else {
+                    MessageBoxW(hwnd, L"連接中或已連接，無法關閉視窗。請先斷開連接。", L"警告", MB_OK | MB_ICONWARNING);
+                    return 0;
+                }
+            } else {
+                MessageBoxW(hwnd, L"連接中或已連接，無法關閉視窗。請先斷開連接。", L"警告", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+        }
+        // 正常關閉視窗：立即釋放資源並強制退出
+        // 斷開連線時已執行 MasterShutdown，此處僅需關閉瀏覽器視窗
+        KillTimer(hwnd, TIMER_ID);
+        KillTimer(hwnd, TIMER_REDRAW_THROTTLE);
+        CleanupTrackedBrowserHandle(true);
+        // 使用者主動關閉 BigCat：先移除關機封鎖原因，避免殘留阻擋後續的 Windows 關機。
+        CoreHelpers::ShutdownGuard::Remove(hwnd);
+        DestroyWindow(hwnd);
+        return 0;
     case WM_USER_AUTO_IMMEDIATE_STOP_REQUEST:
         {
             HWND hRequester = (HWND)wParam;
@@ -2511,13 +2883,18 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             this->autoDownToOriginRequestPending.store(false);
-            // Stop main window timer to improve performance during homing
-            KillTimer(hwnd, TIMER_ID);
+            // Suppress PDO control rebuild during the workflow so that
+            // PreparePDOForSlave → RecalculateOffsetsFromSDO does not
+            // destroy/recreate HWNDs.  PDO values continue updating via
+            // the existing OnTimer throttled path (1200 ms during hot path).
+            pdoDisplay.SetSuppressUIRebuild(true);
+            // NOTE: Timer is intentionally NOT killed here — keeping it
+            // running allows PDO value text updates to continue at the
+            // throttled rate so the operator can monitor live values.
             // NOTE: Removed WM_SETREDRAW disable/enable - it causes blank window issues
             // when background thread finishes and window needs to be repainted.
             // The original purpose was to prevent flashing, but it's not worth the tradeoff.
-            // Clear last-success flag because a new DownToOrigin run is beginning
-            this->autoDownToOriginLastSuccess.store(false);
+            try {
             std::thread([this, hRequester]() {
                 ConfigureWorkerThreadForRT();
                 bool success = false;
@@ -2530,18 +2907,40 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                     PostUTF8LogToUI(std::string("[AutoDownToOrigin] unknown exception\n"));
                 }
                 this->autoDownToOriginRunning.store(false);
-                // Record the result so GetAutoGlobalStatus can expose authoritative oHomeDone
-                this->autoDownToOriginLastSuccess.store(success);
+                // Record the result so GetAutoGlobalStatus can expose authoritative oHomeDone.
+                // Do NOT overwrite on stop-abort — the previous successful homing is still valid.
+                // Only update when homing completed naturally (success or real failure).
+                if (success || !this->autoDownToOriginAbortRequested.load()) {
+                    this->autoDownToOriginLastSuccess.store(success);
+                }
                 if (success) {
                     SetManualResetRequired(false);
                     RefreshInternalErrorStateFrom603F("[AutoDownToOrigin] ");
+                    // ---- 歸原成功：自動啟用 6-DoF 姿態 MMF 輸出 ----
+                    // 此處是 homing 成功的唯一權威點，不依賴 AutoWindow
+                    // 訊息傳遞，確保所有觸發路徑（AutoTrigger、手動按下
+                    // 歸原鈕、HTTP API）都能正確啟用 MMF。
+                    if (auto* master = AppController::GetInstance().GetMaster()) {
+                        master->SetForwardKinematicsEnabled(true);
+                        wchar_t enabledBuf[8] = {0};
+                        std::wstring iniPath = GetAppIniPath();
+                        GetPrivateProfileStringW(L"MMF", L"EnablePoseOutput", L"0", enabledBuf, 8, iniPath.c_str());
+                        if (enabledBuf[0] == L'1' && !master->IsPoseMMFOutputEnabled()) {
+                            wchar_t nameBuf[256] = {0};
+                            GetPrivateProfileStringW(L"MMF", L"PoseOutputName", L"motionRigPose", nameBuf, 256, iniPath.c_str());
+                            std::wstring mmfName(nameBuf);
+                            if (mmfName.empty()) mmfName = L"motionRigPose";
+                            const std::wstring mappingName = L"Local\\" + mmfName;
+                            if (master->EnablePoseMMFOutput(mappingName)) {
+                                BroadcastSSE("{\"mmfPoseOutput\":true}");
+                            }
+                        }
+                    }
                 }
                 // NOTE: WM_SETREDRAW re-enable removed - no longer needed since we don't disable it
-                // Resume main window timer after homing completes
-                // Only resume timer if window is NOT minimized (either to tray or to taskbar)
-                // isMinimizedState covers minimization to taskbar
-                // minimizedToTray covers minimization to tray
-                // Extra safety: also check IsIconic to be absolutely sure
+                // Re-enable full PDO control rebuild after workflow completes
+                pdoDisplay.SetSuppressUIRebuild(false);
+                // Ensure timer is running (safety: may have been killed externally)
                 if (hwnd && IsWindow(hwnd) && !minimizedToTray && !isMinimizedState && !IsIconic(hwnd)) {
                     SetTimer(hwnd, TIMER_ID, TIMER_INTERVAL, NULL);
                 }
@@ -2553,11 +2952,29 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 // Notify requester (AutoWindow) if present; otherwise notify AutoWindow directly for web-originated requests.
                 NotifyAutoDownToOriginCompletion(hRequester, success);
             }).detach();
+            } catch (const std::exception &ex) {
+                this->autoDownToOriginRunning.store(false);
+                this->autoDownToOriginLastSuccess.store(false);
+                this->autoDownToOriginAbortRequested.store(false);
+                pdoDisplay.SetSuppressUIRebuild(false);
+                PostUTF8LogToUI(std::string("[AutoDownToOrigin] failed to create worker thread: ") + ex.what() + "\n");
+                NotifyAutoDownToOriginCompletion(hRequester, false);
+                if (hwnd && IsWindow(hwnd) && !minimizedToTray && !isMinimizedState && !IsIconic(hwnd)) {
+                    SetTimer(hwnd, TIMER_ID, TIMER_INTERVAL, NULL);
+                }
+                pdoDisplay.SetSuppressUIRebuild(false);
+            } catch (...) {
+                this->autoDownToOriginRunning.store(false);
+                this->autoDownToOriginLastSuccess.store(false);
+                this->autoDownToOriginAbortRequested.store(false);
+                PostUTF8LogToUI(std::string("[AutoDownToOrigin] unknown error creating worker thread\n"));
+                NotifyAutoDownToOriginCompletion(hRequester, false);
+                if (hwnd && IsWindow(hwnd) && !minimizedToTray && !isMinimizedState && !IsIconic(hwnd)) {
+                    SetTimer(hwnd, TIMER_ID, TIMER_INTERVAL, NULL);
+                }
+                pdoDisplay.SetSuppressUIRebuild(false);
+            }
         }
-        return 0;
-        }
-        // 正常關閉視窗
-        DestroyWindow(hwnd);
         return 0;
     case WM_USER + 250:
         // 查詢 MMF 輸出狀態
@@ -2594,6 +3011,26 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
         // AutoWindow requests UI state refresh for web clients
         PostCommandToUIOrCache(std::string("HTTP_CMD:REPORT_UI_STATE"));
         return 0;
+    case WM_USER_REFRESH_IRQ_DISPLAY: {
+        // Deferred IRQ display refresh — called after CreateAdapterControls
+        // has finished creating hStaticAdapterIrqCpu / hStaticOtherIrqAssignments,
+        // which happens after PopulateAdapters() → SetSelectedAdapter() ran
+        // and skipped the update because the controls didn't exist yet.
+        std::string cur = this->GetSelectedAdapterUtf8();
+        if (!cur.empty()) {
+            SetSelectedAdapter(cur);
+        }
+        return 0;
+    }
+    case WM_USER_APPLY_SELECTED_ADAPTER_UI: {
+        // Posted by SetSelectedAdapter() when it was called from an HTTP/SSE worker
+        // thread (web-driven adapter selection). The native-control and IRQ/registry
+        // part must run here on the UI thread (repo-facts 2026-10-03).
+        if (!this->currentIfName.empty()) {
+            ApplySelectedAdapterToNativeUi(this->currentIfName);
+        }
+        return 0;
+    }
     case WM_USER_POST_UTF8_LOG: {
         PostedUtf8UiMessage* message = reinterpret_cast<PostedUtf8UiMessage*>(lParam);
         return HandlePostedUtf8LogMessage(message);
@@ -2902,13 +3339,13 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                                 }
                             }
                         }
-                        if (loadDiagnostics.usedDefaultTemplate || loadDiagnostics.repairedInvalidValues) {
-                            std::wstring msg = L"motion.xml 已自動修復並套用預設值: ";
-                            msg += selW;
-                            msg += L"\r\n";
-                            PrependStatus(msg.c_str());
-                        }
                         // Log handled by MainWindow.Logic.cpp to avoid duplicate messages
+                    } else if (loadDiagnostics.restartRequired) {
+                        MessageBoxW(hwnd,
+                                    L"motion.xml 已遺失或損毀，已使用內建預設值重建。\r\n"
+                                    L"請重新啟動程式以使重建的設定檔生效。",
+                                    L"motion.xml 已重建",
+                                    MB_OK | MB_ICONWARNING);
                     } else if (MotionConfigIO::LoadMotionParamsFromFileAtPath(hListMotionParams, selW, loadedUtf8)) {
                         // 單一表格載入：同步寫回目前/選定站的快取
                         // Single-table load: message handled in logic layer; skip duplicate PrependStatus here
@@ -3005,6 +3442,40 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
             }
         }
         break;
+        case IDC_CHK_MMF_POSE_OUTPUT:
+        {
+            if (hChkMMFPoseOutput && IsWindow(hChkMMFPoseOutput)) {
+                LRESULT checked = SendMessage(hChkMMFPoseOutput, BM_GETCHECK, 0, 0);
+                bool enable = (checked == BST_CHECKED);
+                auto* master = AppController::GetInstance().GetMaster();
+
+                if (enable) {
+                    // Read MMF name from INI, default "BigCat"
+                    std::wstring mmfName = ReadIniString(L"MMF", L"PoseOutputName", L"motionRigPose");
+                    if (mmfName.empty()) mmfName = L"motionRigPose";
+                    // Ensure the INI key exists with the default value
+                    WritePrivateProfileStringW(L"MMF", L"PoseOutputName", mmfName.c_str(), GetAppIniPath().c_str());
+                    const std::wstring mappingName = L"Local\\" + mmfName;
+                    if (master && master->EnablePoseMMFOutput(mappingName)) {
+                        WriteIniBool(L"MMF", L"EnablePoseOutput", true);
+                        std::wstring msg = L"實際6DoF姿態MMF輸出已啟用 (Local\\" + mmfName + L")\r\n";
+                        PrependStatus(msg.c_str());
+                        BroadcastSSE("{\"mmfPoseOutput\":true}");
+                    } else {
+                        PrependStatus(L"實際6DoF姿態MMF輸出啟用失敗\r\n");
+                        SendMessage(hChkMMFPoseOutput, BM_SETCHECK, BST_UNCHECKED, 0);
+                    }
+                } else {
+                    WriteIniBool(L"MMF", L"EnablePoseOutput", false);
+                    if (master) {
+                        master->DisablePoseMMFOutput();
+                        PrependStatus(L"實際6DoF姿態MMF輸出已停用\r\n");
+                        BroadcastSSE("{\"mmfPoseOutput\":false}");
+                    }
+                }
+            }
+        }
+        break;
         case IDC_CHK_HTTP_SERVER:
         {
             if (hChkHttpServer && IsWindow(hChkHttpServer)) {
@@ -3014,7 +3485,12 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                 WriteIniBool(L"Server", L"EnableLocalHttpServer", enable);
                 if (enable) {
                     StartLocalHttpServer(8080, hwnd);
-                    PrependStatus(L"Web 伺服器啟動 (埠 8080)\r\n");
+                    if (IsLocalHttpServerListening()) {
+                        const int port = GetLocalHttpServerPort();
+                        PrependStatus((L"Web 伺服器啟動 (埠 " + std::to_wstring(port) + L")\r\n").c_str());
+                    } else {
+                        PrependStatus(L"Web 伺服器啟動失敗（8080-8089 皆被占用）\r\n");
+                    }
                 } else {
                     StopLocalHttpServer();
                     // Close the browser and release all web resources when disabling the server
@@ -3297,6 +3773,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
                         }
                     }
                     RefreshConfirmedSlaveControlState(true);
+                    RefreshPdoMappingDisplay();
                 }
             }
             break;
@@ -3837,44 +4314,7 @@ LRESULT MainWindow::HandleMessage(UINT uMsg, WPARAM wParam, LPARAM lParam) {
     //（保留精簡版滾動處理：WM_VSCROLL/WM_MOUSEWHEEL 僅移動內容面板，不觸發重排）
 
     case WM_DESTROY:
-    // Ensure safe shutdown of EtherCAT before exiting
-    KillTimer(hwnd, TIMER_ID);
-    KillTimer(hwnd, TIMER_REDRAW_THROTTLE);
-    // Only disconnect if not already disconnecting/disconnected
-    // Use SYNCHRONOUS shutdown to avoid race conditions during program exit
-    if (MasterHasActiveSlaveThreads()) {
-        PrependStatus(L"視窗關閉中,正在安全退出所有裝置...\r\n");
-        // Don't use OnDisconnect() here as it's async - use direct synchronous shutdown
-        try {
-            MasterShutdownWithCallback([this](const std::string &msg){ PostUTF8LogToUI(msg); });
-            PrependStatus(L"裝置已安全退出\r\n");
-        } catch (const std::exception& e) {
-            std::string err = std::string("[WM_DESTROY] Shutdown exception: ") + e.what() + "\n";
-            PostUTF8LogToUI(err);
-        } catch (...) {
-            PostUTF8LogToUI(std::string("[WM_DESTROY] Unknown shutdown exception\n"));
-        }
-    }
-    PrependStatus(L"程式已退出\r\n");
-    // Clean up any launched browser process handle to avoid leaking handles
-    CleanupTrackedBrowserHandle(true);
-    // Ensure modeless AutoWindow is destroyed during shutdown so it does not
-    // remain after the main window exits. This calls AutoWindow cleanup
-    // (timers, background thread stop) via DestroyAutoWindow.
-    if (hAutoWindow && IsWindow(hAutoWindow)) {
-        DestroyAutoWindow(hAutoWindow);
-        hAutoWindow = NULL;
-    }
-    // Ensure ChildStatusWindow (modeless status window) is safely destroyed
-    // during shutdown to avoid orphaned windows. This mirrors the AutoWindow cleanup.
-    if (hChildStatusWnd && IsWindow(hChildStatusWnd)) {
-        DestroyWindow(hChildStatusWnd);
-        hChildStatusWnd = NULL;
-        hChildStatusEdit = NULL;
-    }
     closePending.store(false);
-    // Ensure tray icon is removed on shutdown to avoid orphaned icons in the notification area
-    RemoveTrayIcon();
     PostQuitMessage(0);
         break;
 
@@ -3964,7 +4404,9 @@ void MainWindow::HandleAutoImmediateStopRequest(HWND hRequester, bool isPDOError
         }
     }
 
-    if (!isPDOErrorTriggered && shouldRequireManualReset) {
+    // Only set global error for PDO-triggered stops (not human-operated).
+    // Human-operated immediate stops should not clear oHomeDone.
+    if (isPDOErrorTriggered) {
         try {
             if (auto* setMaster = AppController::GetInstance().GetMaster()) {
                 setMaster->SetGlobalError();
@@ -3982,6 +4424,7 @@ void MainWindow::HandleAutoImmediateStopRequest(HWND hRequester, bool isPDOError
     StartErrorAlertSoundForStop("[AutoImmediateStop] ");
     SetBusyFlagAndNotify(this->immediateStopBusy, true);
 
+    try {
     std::thread([this, hRequester, isPDOErrorTriggered, slaveNumber, requireManualReset]() {
         ConfigureWorkerThreadForRT();
         bool success = false;
@@ -4033,12 +4476,25 @@ void MainWindow::HandleAutoImmediateStopRequest(HWND hRequester, bool isPDOError
         }
         FinalizeAutoImmediateStop(hRequester, success, isPDOErrorTriggered);
     }).detach();
+    } catch (const std::exception &ex) {
+        SetBusyFlagAndNotify(this->immediateStopBusy, false);
+        FinalizeErrorAlertSoundForStop("[AutoImmediateStop] Emergency alert sound stopped (thread creation failed)\n", true);
+        PostUTF8LogToUI(std::string("[AutoImmediateStop] failed to create worker thread: ") + ex.what() + "\n");
+        NotifyAutoStopCompletion(hRequester, WM_USER_AUTO_IMMEDIATE_STOP_DONE, false, isPDOErrorTriggered ? 2 : 1);
+        RequestMotionUiRefresh();
+    } catch (...) {
+        SetBusyFlagAndNotify(this->immediateStopBusy, false);
+        FinalizeErrorAlertSoundForStop("[AutoImmediateStop] Emergency alert sound stopped (thread creation failed)\n", true);
+        PostUTF8LogToUI(std::string("[AutoImmediateStop] unknown error creating worker thread\n"));
+        NotifyAutoStopCompletion(hRequester, WM_USER_AUTO_IMMEDIATE_STOP_DONE, false, isPDOErrorTriggered ? 2 : 1);
+        RequestMotionUiRefresh();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Extracted from WM_USER_AUTO_EMERGENCY_STOP_REQUEST case block.
 // Similar to HandleAutoImmediateStopRequest but additionally disables Fault
-// Reset during the stop and checks E-Stop (0x60FD bit5) before stopping alert.
+// Reset during the stop and checks E-Stop (0x60FD bit0) before stopping alert.
 // ---------------------------------------------------------------------------
 void MainWindow::HandleAutoEmergencyStopRequest(HWND hRequester, bool trackingErrorTriggered) {
     auto* requestMaster = AppController::GetInstance().GetMaster();
@@ -4048,9 +4504,11 @@ void MainWindow::HandleAutoEmergencyStopRequest(HWND hRequester, bool trackingEr
         if (hRequester && IsWindow(hRequester)) PostMessageW(hRequester, WM_USER_AUTO_EMERGENCY_STOP_DONE, (WPARAM)0, 0);
         return;
     }
-    try {
-        requestMaster->SetGlobalError();
-    } catch (...) {}
+    if (trackingErrorTriggered) {
+        try {
+            requestMaster->SetGlobalError();
+        } catch (...) {}
+    }
     AbortAutoConnectSoftStartForStop("[AutoEmergencyStop] ");
     SetAutoStopLampLatched(false, true);
     SetManualResetRequired(true);

@@ -1,4 +1,4 @@
-#include "PDOFilter.h"
+﻿#include "PDOFilter.h"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -7,28 +7,6 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
-
-// Debug output control - set to 0 for production builds to reduce logging overhead
-#ifndef PDOFILTER_DEBUG_LOG
-#define PDOFILTER_DEBUG_LOG 0
-#endif
-
-#if PDOFILTER_DEBUG_LOG
-#define PDOFILTER_DBG(fmt, ...) do { char _bf[384]; sprintf_s(_bf, sizeof(_bf), fmt, __VA_ARGS__); OutputDebugStringA(_bf); } while(0)
-#else
-#define PDOFILTER_DBG(fmt, ...) ((void)0)
-#endif
-
-// Soft-start debug: always compiled in (throttled to ~1 Hz per axis).
-// Use DebugView or similar to capture these messages at runtime.
-#ifndef PDOFILTER_SS_DEBUG_LOG
-#define PDOFILTER_SS_DEBUG_LOG 1
-#endif
-#if PDOFILTER_SS_DEBUG_LOG
-#define SS_DBG(fmt, ...) do { char _bf[256]; sprintf_s(_bf, sizeof(_bf), fmt, __VA_ARGS__); OutputDebugStringA(_bf); } while(0)
-#else
-#define SS_DBG(fmt, ...) ((void)0)
-#endif
 
 // Evaluate trapezoidal profile position at time t.
 static double eval_trapezoid_pos(double t, double tacc, double tflat, double tdec, double vp, double dir, double startPos) {
@@ -96,7 +74,6 @@ PDOFilter::PDOFilter()
     
     , ioInitialized_(false)
     , ioPrevActValue_(0.0)
-    , ioErrorFlag_(false)
     , iMinPDO_(-std::numeric_limits<double>::max())
     , iMaxPDO_(std::numeric_limits<double>::max())
     , ioOriginalMinPDO_(-std::numeric_limits<double>::max())
@@ -116,7 +93,8 @@ PDOFilter::PDOFilter()
     , ioAccelRampStartAcc_(0.0)
     , ioAccelRampStartDec_(0.0)
     , iPositionGain_(70.0) // Increase Gain to reduce tracking lag (stiffer response)
-    , iPositionDeadband_(1e-5) // Tighter deadband for better precision
+    , iPositionDeadband_(3e-5) // >= 1 PDO count for Delta (kDsP100E7Scale ≈ 2.75e-5); prevents quantization limit cycle in CSP mode
+    , iFeedforwardGain_(0.7)  // Reduce feedforward to avoid overshoot
     , ioPrevSetValue_(0.0)
     , ioPrevEffectiveSetpoint_(0.0)
     , ioSoftStartCommandVelocity_(0.0)
@@ -157,13 +135,10 @@ PDOFilter::PDOFilter()
     ioViolationStartTime_ = 0.0;
     ioAccelViolationStartTime_ = 0.0;
     ioVelocityViolationStartTime_ = 0.0;
-    ioTrackingErrorStartTime_ = 0.0;
-    ioTrackingErrorReferenceAbs_ = 0.0;
     ioNoViolationStartTime_ = 0.0;
     ioViolationClearStartTime_ = 0.0;
     ioViolationActive_ = false;
     ioLimitingEnabled_ = false;
-    ioTrackingErrorFatalActive_ = false;
     ioFilterStartTimeInitialized_ = false;
     
     ioCurrentViolationType_ = ViolationType::None;
@@ -187,7 +162,7 @@ PDOFilter::PDOFilter()
     ioInputBufferIndex_ = 0;
     ioInputBufferCount_ = 0;
     
-    // PT2 filter removed
+    
 
     // initialize violation threshold scales
     ioAccelThresholdScale_ = PDOFilter::DEFAULT_ACCEL_VIOLATION_THRESHOLD_SCALE;
@@ -207,7 +182,7 @@ void PDOFilter::Reset() {
     ioInitialized_ = false;
     ioSoftStartElapsedSec_ = 0.0;
     ioSoftStartActive_ = false;
-    ioErrorFlag_ = false;
+    ioSoftStartEverTriggered_ = false;
     ioSoftStartReady_ = false;
     ioSoftStartCompleteTime_ = std::chrono::steady_clock::time_point();
     ioPositionWasClose_ = false;
@@ -223,13 +198,10 @@ void PDOFilter::Reset() {
     ioViolationStartTime_ = 0.0;
     ioAccelViolationStartTime_ = 0.0;
     ioVelocityViolationStartTime_ = 0.0;
-    ioTrackingErrorStartTime_ = 0.0;
-    ioTrackingErrorReferenceAbs_ = 0.0;
     ioNoViolationStartTime_ = 0.0;
     ioViolationClearStartTime_ = 0.0;
     ioViolationActive_ = false;
     ioLimitingEnabled_ = false;
-    ioTrackingErrorFatalActive_ = false;
     ioFilterStartTimeInitialized_ = false;
     ioViolationDetectionSuspended_ = false;
     ioCurrentViolationType_ = ViolationType::None;
@@ -249,7 +221,7 @@ void PDOFilter::Reset() {
     ioExtrapolationVelocityCount_ = 0;
     ioLastPredictedSetpoint_ = 0.0;
     ioPredictedThisCycle_ = false;
-    // PT2 state cleared (filter removed)
+    
     ioDebugLogCounter_ = 0;
     ioStaleCounter_ = 0;
     ioStaleViolationLatched_ = false;
@@ -283,7 +255,7 @@ void PDOFilter::Configure(double iMaxVelocity, double iMaxAcceleration,
     } else {
         iCycleTime_ = 0.002; 
     }
-    // PT2 removed: no coefficients to recompute
+    
 }
 
 void PDOFilter::SetPDOLimits(double iMin, double iMax) {
@@ -299,6 +271,7 @@ void PDOFilter::SetLimitsWithRamp(double maxVel, double maxAccel, double maxDece
 void PDOFilter::TriggerSoftStart() {
     ioSoftStartElapsedSec_ = 0.0;
     ioSoftStartActive_ = true;
+    ioSoftStartEverTriggered_ = true;
     ioSoftStartReady_ = false;
     ioSoftStartStartTime_ = std::chrono::steady_clock::now();
 
@@ -312,8 +285,6 @@ void PDOFilter::TriggerSoftStart() {
     ioViolationStartTime_ = 0.0;
     ioVelocityViolationStartTime_ = 0.0;
     ioAccelViolationStartTime_ = 0.0;
-    ioTrackingErrorStartTime_ = 0.0;
-    ioTrackingErrorReferenceAbs_ = 0.0;
     ioStaleViolationStartTime_ = 0.0;
     ioAnomalyViolationStartTime_ = 0.0;
     ioStaleCounter_ = 0;
@@ -326,7 +297,6 @@ void PDOFilter::TriggerSoftStart() {
     ioCurrentViolationType_ = ViolationType::None;
     ioPrevViolationType_ = ViolationType::None;
     ioPrevLimitingEnabled_ = false;
-    ioTrackingErrorFatalActive_ = false;
 
     iMaxVelocity_ = iConfiguredMaxVelocity_ * SOFT_START_VEL_RATIO;
     iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
@@ -339,6 +309,16 @@ void PDOFilter::TriggerSoftStart() {
     ioAccelRampStartDec_ = 0.0;
     ioSoftStartCompleteTime_ = std::chrono::steady_clock::time_point();
     
+    // If the previous soft-start was abandoned without
+    // CompleteSoftStart() (e.g. due to ImmediateStop), the PDO
+    // limits may still be expanded from that run.  Restore the
+    // true configured limits before saving a fresh snapshot,
+    // otherwise the expanded limits become the new "original"
+    // and the error accumulates across stop/restart cycles.
+    if (ioSoftStartLimitsAdjusted_) {
+        iMinPDO_ = ioOriginalMinPDO_;
+        iMaxPDO_ = ioOriginalMaxPDO_;
+    }
     ioOriginalMinPDO_ = iMinPDO_;
     ioOriginalMaxPDO_ = iMaxPDO_;
     ioSoftStartLimitsAdjusted_ = false;
@@ -346,19 +326,14 @@ void PDOFilter::TriggerSoftStart() {
     // Force re-init on next Filter() to sync with actual feedback
     ioInitialized_ = false;
 
-    SS_DBG("PDOFilter: TriggerSoftStart vel=%.1f acc=%.1f dec=%.1f cfgVel=%.1f\n",
-           iMaxVelocity_, iMaxAcceleration_, iMaxDeceleration_, iConfiguredMaxVelocity_);
-}
+    // Exit hold-position mode if it was active (e.g. after Immediate Stop).
+    // A new soft-start must track the target; holding the previous position
+    // is incompatible and causes the filter to stay frozen while the CSV
+    // correction layer tries to move the axis — producing a brief vibration.
+    ioHoldingPosition_ = false;
+    profileActive_ = false;
 
-void PDOFilter::ClearError() {
-    ioErrorFlag_ = false;
-    ioTrackingErrorFatalActive_ = false;
-    ioTrackingErrorStartTime_ = 0.0;
-    ioTrackingErrorReferenceAbs_ = 0.0;
-}
-
-bool PDOFilter::IsError() const {
-    return ioErrorFlag_;
+    
 }
 
 bool PDOFilter::IsSoftStartReady() const {
@@ -371,13 +346,29 @@ void PDOFilter::CompleteSoftStart() {
     ioSoftStartElapsedSec_ = 0.0;
     ioPositionWasClose_ = false;
     ioPositionCloseStartTime_ = 0.0;
-    
+
     if (ioSoftStartLimitsAdjusted_) {
         iMinPDO_ = ioOriginalMinPDO_;
         iMaxPDO_ = ioOriginalMaxPDO_;
         ioSoftStartLimitsAdjusted_ = false;
     }
-    
+
+    // Clear any violation / limiting state that may have been
+    // triggered by soft-start oscillation.  If limiting was
+    // active (ioLimitingEnabled_=true), the recovery ramp and
+    // normal full-limit restoration are skipped, leaving the
+    // filter stuck with reduced limits — this produces the
+    // "slow convergence after oscillating soft-start" symptom.
+    ioLimitingEnabled_ = false;
+    ioViolationActive_ = false;
+    ioViolationDetectionSuspended_ = false;
+    ioViolationStartTime_ = 0.0;
+    ioVelocityViolationStartTime_ = 0.0;
+    ioAccelViolationStartTime_ = 0.0;
+    ioCurrentViolationType_ = ViolationType::None;
+    ioPrevViolationType_ = ViolationType::None;
+    ioPrevLimitingEnabled_ = false;
+
     // Start recovery ramp from soft-start limits back to configured full limits
     if (!ioAccelRampActive_) {
         ioAccelRampActive_ = true;
@@ -391,8 +382,7 @@ void PDOFilter::CompleteSoftStart() {
     ioSoftStartCompleteTime_ = std::chrono::steady_clock::now();
     ioVelocityBlendActive_ = true;
 
-    SS_DBG("PDOFilter: CompleteSoftStart rampStart vel=%.1f acc=%.1f dec=%.1f cfgVel=%.1f\n",
-           ioAccelRampStartVel_, ioAccelRampStartAcc_, ioAccelRampStartDec_, iConfiguredMaxVelocity_);
+    
 }
 
 void PDOFilter::ResetStaleInputMonitoring() {
@@ -518,7 +508,7 @@ void PDOFilter::UpdateOutputVelocityAndAcceleration(double currentFinalOutput, d
 
 std::pair<double, double> PDOFilter::ComputeOnlineTargetVelAccel(double targetPos, double feedforwardVel) {
     // Default position used for control is the internal integrated output.
-    // PT2 filter removed, so position is simply the filtered output.
+    // PT2 removed; position is the filtered output.
     double position = oFilteredOutput_;
     double distance = targetPos - position;
     double distAbs = std::abs(distance);
@@ -535,6 +525,21 @@ std::pair<double, double> PDOFilter::ComputeOnlineTargetVelAccel(double targetPo
         double effectiveGain = iPositionGain_;
         if (ioSoftStartActive_) {
             effectiveGain = iPositionGain_ * 0.1;
+            // The tracking-error clamp window (5°) creates a constant position
+            // error during approach, causing the filter to cruise at
+            // v ≈ gain × window.  If the deceleration ceiling cannot stop
+            // that cruise speed within the window, the filter overshoots.
+            // Condition for no overshoot:  gain² ≤ 2·maxDecel / window
+            //   (from stopping distance: v²/(2·a) ≤ window,
+            //    with v = gain·window → gain²·window/(2·a) ≤ 1).
+            // Clamp effectiveGain dynamically so the approach speed stays
+            // within the soft-start deceleration capability.
+            static constexpr double kTrackingWindow = TRACKING_ERROR_SOFT_START_MAX_DEVIATION;
+            double maxDecel = std::max(std::abs(iMaxDeceleration_), 1e-9);
+            double maxSafeGain = std::sqrt(2.0 * maxDecel / std::max(kTrackingWindow, 0.1));
+            if (effectiveGain > maxSafeGain) {
+                effectiveGain = maxSafeGain;
+            }
         }
         correctionVel = distance * effectiveGain;
         
@@ -576,13 +581,7 @@ std::pair<double, double> PDOFilter::ComputeOnlineTargetVelAccel(double targetPo
     double desiredAccel = velDiff / std::max(iCycleTime_, 1e-9);
     double a_limit = (velDiff >= 0) ? iMaxAcceleration_ : iMaxDeceleration_;
     desiredAccel = std::clamp(desiredAccel, -std::abs(a_limit), std::abs(a_limit));
-    // Verbose debug hook: log periodically for diagnostic runs (disabled in production)
-#if PDOFILTER_DEBUG_LOG
-    if ((++ioDebugLogCounter_ % 50) == 0) {
-        PDOFILTER_DBG("PDOFilterDbg: pos=%.6f targ=%.6f dist=%.6f ff=%.6f desVel=%.6f curVelUsed=%.6f measuredFlag=%d desAcc=%.6f src=preFilt blend=0\n",
-                  position, targetPos, distance, feedforwardVel, desiredVel, currentVelForControl, ioMeasuredVelocityProvided_?1:0, desiredAccel);
-    }
-#endif
+    
     return { desiredVel, desiredAccel };
 }
 
@@ -625,12 +624,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         : std::max(iCycleTime_, 1e-9);
     const bool previousCyclePredicted = ioPreviousCyclePredicted_;
 
-    const bool latchedErrorAtEntry = ioErrorFlag_;
-    if (latchedErrorAtEntry) {
-        iSetValue = std::clamp(iActValue, iMinPDO_, iMaxPDO_);
-        originalIncomingSet = iSetValue;
-    }
-
     if (!has_valid_motion_limits(iConfiguredMaxVelocity_,
                                  iConfiguredMaxAcceleration_,
                                  iConfiguredMaxDeceleration_,
@@ -670,13 +663,10 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         ioViolationStartTime_ = 0.0;
         ioAccelViolationStartTime_ = 0.0;
         ioVelocityViolationStartTime_ = 0.0;
-        ioTrackingErrorStartTime_ = 0.0;
-        ioTrackingErrorReferenceAbs_ = 0.0;
         ioNoViolationStartTime_ = 0.0;
         ioViolationClearStartTime_ = 0.0;
         ioViolationActive_ = false;
         ioLimitingEnabled_ = false;
-        ioTrackingErrorFatalActive_ = false;
         ioViolationDetectionSuspended_ = false;
         ioCurrentViolationType_ = ViolationType::None;
         ioPrevViolationType_ = ViolationType::None;
@@ -708,8 +698,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     bool inputAnomalyDetected = false;
     bool trackingErrorViolation = false;
     bool trackingErrorTimerActive = false;
-    bool trackingErrorFatalTriggered = latchedErrorAtEntry;
-    bool forceViolationCallback = latchedErrorAtEntry;
     PDOFilter::InputAnomalyReason anomalyReason = PDOFilter::InputAnomalyReason::Unknown;
     double anomalyObservedValue = 0.0;
     double anomalyAllowedValue = 0.0;
@@ -730,8 +718,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     // === Input anomaly detection ===
     // Reject setpoint jumps that exceed what configured accel/decel can explain in one cycle.
     // If a jump is implausible, continue with a predicted setpoint instead.
-    const bool anomalyGuardEnabled = !latchedErrorAtEntry &&
-                                     (!inputStateKnown || allowInputPrediction) &&
+    const bool anomalyGuardEnabled = (!inputStateKnown || allowInputPrediction) &&
                                      (!inputStateKnown || inputUpdated);
     if (ioInitialized_ && !ioSoftStartActive_ && anomalyGuardEnabled) {
         // Absolute setpoint delta for this cycle.
@@ -784,23 +771,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
                             maxAllowedChange,
                             replacementValue);
             
-            // Emit detailed anomaly diagnostics when debug logging is enabled.
-#if PDOFILTER_DEBUG_LOG
-            char bf_anomaly[256];
-            sprintf_s(bf_anomaly, sizeof(bf_anomaly), 
-                     "PDOFilter: Input anomaly detected! Original=%.6f, Change=%.6f, MaxAllowed=%.6f, Replaced=%.6f\n",
-                     originalIncomingSet, inputChange, maxAllowedChange, replacementValue);
-            OutputDebugStringA(bf_anomaly);
-            printf("%s", bf_anomaly);
-
-            // Include internal state so unexpected replacements can be diagnosed.
-            char bf_state[384];
-            sprintf_s(bf_state, sizeof(bf_state),
-                      "PDOFilter: AnomalyState: prevSet=%.6f prevSmoothVel=%.6f extrapolVel=%.6f cycle=%.6f maxAccelLimit=%.6f cfgMaxAcc=%.6f cfgMaxDec=%.6f\n",
-                      ioPrevSetValue_, ioPrevSmoothedVelocity_, extrapolationVel, iCycleTime_, maxAccelLimit, iConfiguredMaxAcceleration_, iConfiguredMaxDeceleration_);
-            OutputDebugStringA(bf_state);
-            printf("%s", bf_state);
-#endif
+            
 
         }
     }
@@ -821,57 +792,33 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             upstreamTrackingErrorAbs > (trackingErrorWindow + 1e-3) &&
             effectiveSetpointErrorAbs >= (trackingErrorWindow - 1e-3);
         const bool directTrackingViolation = (trackingErrorAbs >= (trackingErrorWindow - 1e-3));
-        trackingErrorTimerActive = directTrackingViolation || softStartSaturatedTracking || ioTrackingErrorFatalActive_;
+        trackingErrorTimerActive = directTrackingViolation || softStartSaturatedTracking;
 
         if (directTrackingViolation) {
             trackingErrorViolation = true;
-            if (!ioSoftStartActive_) {
-                if (ioTrackingErrorStartTime_ <= 0.0) {
-                    ioTrackingErrorStartTime_ = currentTime;
-                    ioTrackingErrorReferenceAbs_ = trackingErrorAbs;
-                } else if (!ioTrackingErrorFatalActive_ &&
-                           (currentTime - ioTrackingErrorStartTime_) >= TRACKING_ERROR_FATAL_DELAY_SEC) {
-                    ioTrackingErrorFatalActive_ = true;
-                    ioErrorFlag_ = true;
-                    trackingErrorFatalTriggered = true;
-                    forceViolationCallback = true;
-                }
-            } else {
-                ioTrackingErrorStartTime_ = 0.0;
-                ioTrackingErrorReferenceAbs_ = 0.0;
-            }
-            const double guardedSetpoint = std::clamp(originalIncomingSet,
-                                                      iActValue - trackingErrorWindow,
-                                                      iActValue + trackingErrorWindow);
+            // Always preserve the original MMF target as the guarded
+            // setpoint.  The tracking clamp at the end of Filter()
+            // already constrains the output to [actual-window,
+            // actual+window]; clamping the setpoint as well is
+            // redundant and harmful — it can redirect the filter
+            // away from the intended target when actual has
+            // deviated beyond the window, causing the filter to
+            // chase the wrong position (and in soft-start with
+            // its 5° window this can produce large-amplitude
+            // oscillation between PDO hard limits).
+            const double guardedSetpoint = originalIncomingSet;
             applyInputGuard(PDOFilter::InputAnomalyReason::MeasurementMismatch,
                             trackingErrorAbs,
                             trackingErrorWindow,
                             guardedSetpoint);
 
-#if PDOFILTER_DEBUG_LOG
-            char bf_mismatch[320];
-            sprintf_s(bf_mismatch, sizeof(bf_mismatch),
-                      "PDOFilter: Tracking mismatch guarded. cmd=%.6f act=%.6f err=%.6f win=%.6f guarded=%.6f\n",
-                      issuedCommand, iActValue, trackingErrorAbs, trackingErrorWindow, guardedSetpoint);
-            OutputDebugStringA(bf_mismatch);
-            printf("%s", bf_mismatch);
-#endif
+            
         } else if (softStartSaturatedTracking) {
             trackingErrorViolation = false;
-            ioTrackingErrorStartTime_ = 0.0;
-            ioTrackingErrorReferenceAbs_ = 0.0;
 
-#if PDOFILTER_DEBUG_LOG
-            char bf_soft_start_sat[384];
-            sprintf_s(bf_soft_start_sat, sizeof(bf_soft_start_sat),
-                      "PDOFilter: Soft-start saturation tracking. cmd=%.6f eff=%.6f act=%.6f upErr=%.6f ref=%.6f win=%.6f\n",
-                      issuedCommand, issuedEffectiveSetpoint, iActValue, upstreamTrackingErrorAbs, ioTrackingErrorReferenceAbs_, trackingErrorWindow);
-            OutputDebugStringA(bf_soft_start_sat);
-            printf("%s", bf_soft_start_sat);
-#endif
-        } else if (!ioTrackingErrorFatalActive_) {
-            ioTrackingErrorStartTime_ = 0.0;
-            ioTrackingErrorReferenceAbs_ = 0.0;
+            
+        } else {
+            // tracking error within window; nothing to do
         }
     }
 
@@ -896,28 +843,27 @@ double PDOFilter::FilterWithInputState(double iSetValue,
 
     if (ioSoftStartActive_) {
         ioSoftStartElapsedSec_ = std::chrono::duration<double>(now - ioSoftStartStartTime_).count();
-        // Readiness uses a wider tolerance than the braking dead-zone
-        // (SOFT_START_POSITION_TOLERANCE) because the real-world servo
-        // following error adds ~0.02-0.05 deg on top of the filter
-        // convergence dead-zone.  Comparing only against the braking
-        // tolerance would reject axes that have genuinely converged but
-        // carry a small steady-state tracking offset.
-        double positionError = std::abs(originalIncomingSet - iActValue);
+        // Readiness compares the filter's own output position against
+        // the MMF target (originalIncomingSet).  Using iActValue
+        // (actual position) was unsafe: when the servo overshoots
+        // past the target the filter can still be far from the target,
+        // causing premature soft-start completion, a sudden restoration
+        // of full velocity/acceleration limits, and a violent
+        // acceleration-deceleration oscillation across all six axes.
+        double positionError = std::abs(originalIncomingSet - oFilteredOutput_);
         bool isPositionClose = (positionError < SOFT_START_READY_TOLERANCE);
         if (isPositionClose) {
             if (!ioPositionWasClose_) {
                 ioPositionCloseStartTime_ = ioSoftStartElapsedSec_;
                 ioPositionWasClose_ = true;
-                SS_DBG("PDOFilter: soft-start position close (err=%.4f target=%.3f actual=%.3f t=%.3f)\n",
-                         positionError, originalIncomingSet, iActValue, ioSoftStartElapsedSec_);
+                
             } else if ((ioSoftStartElapsedSec_ - ioPositionCloseStartTime_) >= SOFT_START_SETTLE_TIME) {
                 ioSoftStartReady_ = true;
-                SS_DBG("PDOFilter: soft-start READY (err=%.4f settled=%.3f)\n",
-                         positionError, ioSoftStartElapsedSec_ - ioPositionCloseStartTime_);
+                
             }
         } else {
             if (ioPositionWasClose_) {
-                SS_DBG("PDOFilter: soft-start position left close range (err=%.4f)\n", positionError);
+                
             }
             ioPositionWasClose_ = false;
             // Reset ready flag when position leaves the ready tolerance zone.
@@ -932,21 +878,16 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         {
             static int ssDbgCounter = 0;
             if ((++ssDbgCounter % 500) == 1) {  // ~1s at 2ms cycle
-                SS_DBG("PDOFilter: soft-start status t=%.2f err=%.4f target=%.3f actual=%.3f close=%d ready=%d\n",
-                         ioSoftStartElapsedSec_, positionError, originalIncomingSet, iActValue,
-                         isPositionClose ? 1 : 0, ioSoftStartReady_ ? 1 : 0);
+                
             }
         }
 
-        // Early recovery ramp: when within 1.5 degrees, start ramping limits back to full
-        if (!ioAccelRampActive_ && positionError < 1.5) {
-            ioAccelRampActive_ = true;
-            ioAccelRampStartTime_ = now;
-            ioAccelRampStartVel_ = iMaxVelocity_;
-            ioAccelRampStartAcc_ = iMaxAcceleration_;
-            ioAccelRampStartDec_ = iMaxDeceleration_;
-            SS_DBG("PDOFilter: Early ramp triggered (err=%.3f)\n", positionError);
-        }
+        // NOTE: Early recovery ramp removed.
+        // It previously started ramping limits back to full when positionError < 1.5°,
+        // but that raised iMaxDeceleration_ (and thus targetBrakeVelocity) and iMaxVelocity_
+        // (and thus minCreepVel) while the filter was still approaching the target,
+        // allowing the filter to accelerate near the target and overshoot.
+        // CompleteSoftStart() already handles the post-soft-start recovery ramp correctly.
     }
 
     if (!ioInitialized_) {
@@ -965,25 +906,30 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             bool needAdjustMax = (iActValue > iMaxPDO_);
             
             if (needAdjustMin || needAdjustMax) {
-                if (needAdjustMin) {
+                    if (needAdjustMin) {
                     iMinPDO_ = iActValue;
-                    PDOFILTER_DBG("PDOFilter: Soft-start adjusted iMinPDO to actual position %.3f (was %.3f)\n", 
-                             iActValue, ioOriginalMinPDO_);
-                }
+                    }
                 if (needAdjustMax) {
                     iMaxPDO_ = iActValue;
-                    PDOFILTER_DBG("PDOFilter: Soft-start adjusted iMaxPDO to actual position %.3f (was %.3f)\n", 
-                             iActValue, ioOriginalMaxPDO_);
                 }
                 ioSoftStartLimitsAdjusted_ = true;
             }
             
-            // Initialize the effective setpoint to the actual position to prevent immediate velocity spike
-            ioPrevEffectiveSetpoint_ = iActValue;
+            // Initialize the previous effective setpoint to the
+            // PDO-clamped MMF target — NOT to the actual position.
+            // Setting it to actual causes a massive feedforward
+            // velocity spike on the very next Filter() cycle when
+            // effectiveSetpoint jumps to the (potentially far-away)
+            // MMF target.  That spike destabilises the filter from
+            // the first real cycle and is the root cause of the
+            // intermittent soft-start oscillation: when actual
+            // happens to be near the target the spike is harmless;
+            // when actual is far away the spike triggers a
+            // persistent limit cycle.
+            const double initTarget = std::clamp(originalIncomingSet, iMinPDO_, iMaxPDO_);
+            ioPrevEffectiveSetpoint_ = initTarget;
             ioInputBuffer_.fill(iActValue);
-            SS_DBG("PDOFilter: soft-start init actual=%.3f target=%.3f err=%.3f limitsAdj=%d\n",
-                   iActValue, originalIncomingSet, std::abs(originalIncomingSet - iActValue),
-                   ioSoftStartLimitsAdjusted_ ? 1 : 0);
+                 
         } else {
             ioPrevEffectiveSetpoint_ = iSetValue;
             ioInputBuffer_.fill(iSetValue);
@@ -996,7 +942,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         ioVelocityBufferIndex_ = 0;
         ioVelocityBufferCount_ = 0;
         ioPrevSmoothedVelocity_ = 0.0;
-        // PT2 removed: track previous filtered output directly
+        // previous filtered output tracked directly
         ioPrevFilteredOutput_ = iActValue;
         ioPredictedThisCycle_ = false;
         ioPreviousCyclePredicted_ = false;
@@ -1008,7 +954,12 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     // --- Prediction and Smoothing Logic ---
     // If the MMF input equals the previous sample, it's 'stale'. 
     // We predict forward using the last known output velocity to keep motion smooth.
-    bool isInputStale = inputStateKnown ? !inputUpdated : !valueChanged;
+    // Always use the actual input value comparison (valueChanged) for stale
+    // detection.  In Pose6D mode, inputUpdated tracks raw-MMF channel counts
+    // which are broadcast to all axes after IK; a per-axis IK output may not
+    // have changed even when the raw count advanced.  Using valueChanged
+    // ensures prediction activates whenever the filter's real input is static.
+    bool isInputStale = !valueChanged;
 
     // Once soft-start is finished, stale-input detection stays active continuously
     // while online filtering is enabled. It is only paused during soft-start itself
@@ -1058,18 +1009,14 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     ioInputBufferIndex_ = (ioInputBufferIndex_ + 1) % INPUT_MA_SIZE;
     if (ioInputBufferCount_ < INPUT_MA_SIZE) ioInputBufferCount_++;
 
-    // Calculate smoothed input
+    // Calculate smoothed input (kept for blend/bridge transitions only; default uses raw iSetValue)
     double smoothedInput = 0.0;
     for (size_t i = 0; i < ioInputBufferCount_; ++i) smoothedInput += ioInputBuffer_[i];
     smoothedInput /= static_cast<double>(ioInputBufferCount_);
 
-    // Smoothing Strategy: 
-    // In CSP mode, we always use a small amount of smoothing to filter out discretization noise
-    // from the MMF layer, unless we are in soft-start or predicting.
-    // If we are predicting, we MUST bypass smoothing because the smoothed value will lag
-    // behind the predicted value (which is moving), creating a negative feedback loop 
-    // on velocity (braking) which leads to oscillation.
-    double effectiveInput;
+    // Smoothing disabled: EMA pre-filtering is done upstream (MMF pre-filter).
+    // Default uses raw iSetValue directly to avoid double-filtering and reduce lag.
+    double effectiveInput = iSetValue;
     const bool bridgeFromPrediction = previousCyclePredicted && !ioPredictedThisCycle_ && !isInputStale &&
                                       ioInputBufferCount_ >= INPUT_MA_SIZE;
     if (ioSoftStartActive_ || ioPredictedThisCycle_) {
@@ -1078,28 +1025,13 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         double elapsed = std::chrono::duration<double>(now - ioSoftStartCompleteTime_).count();
         if (elapsed >= SOFT_START_VEL_BLEND_TIME) {
             ioVelocityBlendActive_ = false;
-            effectiveInput = smoothedInput;
+            effectiveInput = iSetValue;
         } else {
-            // Smoothly blend from Raw (iSetValue) to Smoothed (smoothedInput)
-            // alpha goes from 1.0 (Raw) down to 0.0 (Smoothed)
             double alpha = 1.0 - (elapsed / SOFT_START_VEL_BLEND_TIME);
             effectiveInput = alpha * iSetValue + (1.0 - alpha) * smoothedInput;
         }
     } else if (bridgeFromPrediction) {
-        // Just transitioned from prediction back to normal mode:
-        // We must avoid jumping from the 'future' predicted value back to the 'lagging' smoothed value.
-        // For one cycle, we use a hybrid to bridge the gap.
         effectiveInput = (iSetValue + smoothedInput) * 0.5;
-    } else {
-        effectiveInput = smoothedInput;
-    }
-
-    if (!ioSoftStartActive_ && !ioPredictedThisCycle_ && !ioVelocityBlendActive_ && !bridgeFromPrediction) {
-        constexpr double INPUT_MA_LEAD_RATIO = 0.75;
-        const double compensatedInput = smoothedInput + (iSetValue - smoothedInput) * INPUT_MA_LEAD_RATIO;
-        const double envelopeMin = std::min(smoothedInput, iSetValue);
-        const double envelopeMax = std::max(smoothedInput, iSetValue);
-        effectiveInput = std::clamp(compensatedInput, envelopeMin, envelopeMax);
     }
     // Improve prediction quality by maintaining velocity estimate during stale cycles.
     // Previously, we used '0.0' (based on static MMF input) which caused the smoothed velocity 
@@ -1124,7 +1056,23 @@ double PDOFilter::FilterWithInputState(double iSetValue,
 
     if (ioSoftStartActive_) {
         if (commandInputVelocityUpdated) {
-            ioSoftStartCommandVelocity_ = std::clamp(commandInputVelocity, -iMaxVelocity_, iMaxVelocity_);
+            // Low-pass filter the commanded input velocity to prevent
+            // MMF target jitter / oscillation from propagating into
+            // targetInputVel and destabilising the soft-start velocity
+            // clamp.  Without this, a toggling MMF target produces a
+            // toggling upper velocity bound which feeds through the
+            // CSV command, the servo, the mechanical coupling, and
+            // (via the external application) back to the MMF target
+            // — a platform-level feedback loop that oscillates all
+            // six axes simultaneously.
+            constexpr double kTauSec = 0.1;  // 100 ms smoothing
+            const double dt = std::max(iCycleTime_, 1e-9);
+            const double alpha = dt / (kTauSec + dt);
+            const double clampedInputVel = std::clamp(commandInputVelocity,
+                                                      -iMaxVelocity_,
+                                                      iMaxVelocity_);
+            ioSoftStartCommandVelocity_ +=
+                (clampedInputVel - ioSoftStartCommandVelocity_) * alpha;
         } else {
             const double commandVelocityBleed = std::abs(iMaxDeceleration_) * std::max(iCycleTime_, 1e-9);
             if (std::abs(ioSoftStartCommandVelocity_) <= commandVelocityBleed) {
@@ -1274,7 +1222,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     if ((staleViolation || anomalyViolation) && !ioViolationDetectionSuspended_) {
         ioViolationDetectionSuspended_ = true;
         ioViolationClearStartTime_ = 0.0;
-        PDOFILTER_DBG("PDOFilter: Suspended detection (vel=%d acc=%d)\n", velocityViolation?1:0, candidateAccelViolation?1:0);
     }
 
     // If violation detection is suspended (we're currently handling a sustained
@@ -1319,19 +1266,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         }
     }
 
-    // Diagnostic logging for acceleration check (throttled)
-#if PDOFILTER_DEBUG_LOG
-    if ((++ioDebugLogCounter_ % 50) == 0 || candidateAccelViolation || ioLimitingEnabled_) {
-        char bf[256];
-        sprintf_s(bf, sizeof(bf), "AccChk: t=%.3f rawA=%.3f smoothA=%.3f buf=%zu cand=%d lim=%d skip=%d atol=%.3f vtol=%.3f\n",
-              currentTime, ioLastRawAcceleration_, smoothedAcceleration, ioVelocityBufferCount_, candidateAccelViolation?1:0, ioLimitingEnabled_?1:0, ioAccelCheckSkipCount_, ioAccelThresholdScale_, ioVelocityThresholdScale_);
-        OutputDebugStringA(bf);
-        // Also print to console to surface diagnostics during tests
-        if (candidateAccelViolation || ioLimitingEnabled_) {
-            printf("%s", bf);
-        }
-    }
-#endif
+    
 
     bool hasAccelViolation = candidateAccelViolation;
     
@@ -1341,34 +1276,36 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         ioLimitingEnabled_ = true; ioViolationActive_ = true; ioNoViolationStartTime_ = 0.0;
         iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
         iMaxDeceleration_ = iConfiguredMaxDeceleration_ * SOFT_START_ACCEL_RATIO;
-        iMaxVelocity_ = iConfiguredMaxVelocity_ * SOFT_START_VEL_RATIO;
+        iMaxVelocity_ = iConfiguredMaxVelocity_ * 0.12;
         if (ioViolationStartTime_ <= 0.0) ioViolationStartTime_ = currentTime;
         violationDuration = currentTime - ioViolationStartTime_;
     } else if (velocityViolation || hasAccelViolation) {
         ioNoViolationStartTime_ = 0.0; ioViolationActive_ = true;
         if (velocityViolation) {
-            if (ioVelocityViolationStartTime_ <= 0.0) {
+                if (ioVelocityViolationStartTime_ <= 0.0) {
                 ioVelocityViolationStartTime_ = currentTime;
-                // Surface candidate detection immediately to logs so it's visible in non-debug runs
-                PDOFILTER_DBG("PDOFilter: Velocity candidate detected rawVel=%.3f thresh=%.3f t=%.3f\n", rawVelocity, velThreshold, currentTime);
             }
             if ((currentTime - ioVelocityViolationStartTime_) >= ioVelocityViolationDelaySec_) {
                 const bool wasLimitingEnabled = ioLimitingEnabled_;
                 if (!ioSoftStartActive_) {
                     ioLimitingEnabled_ = true;
-                    // Preserve configured accel/decel for this axis' own
-                    // dynamic violation so slowed/reversed MMF can brake old
-                    // motion in either sign. Global-only limiting remains
-                    // softer in SetGlobalLimitingEnabled().
-                    iMaxAcceleration_ = iConfiguredMaxAcceleration_;
-                    iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+                    if (ioGlobalLimitingForced_) {
+                        // This axis was already globally force-limited by the master.
+                        // Now that it has its own velocity violation, restore configured
+                        // accel/decel so the axis retains full braking capability for
+                        // safety recovery (e.g. MMF reversals can brake the old direction).
+                        iMaxAcceleration_ = iConfiguredMaxAcceleration_;
+                        iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+                    } else {
+                        iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
+                        iMaxDeceleration_ = iConfiguredMaxDeceleration_ * SOFT_START_ACCEL_RATIO;
+                    }
                     iMaxVelocity_ = ComputeDynamicLimitMaxVelocity();
                     // Suspend further violation detection until this violation clears
                     ioViolationDetectionSuspended_ = true;
                     // Log the limiting action so it's observable
-                    if (!wasLimitingEnabled) {
-                        PDOFILTER_DBG("PDOFilter: Velocity limiting engaged iMaxVel=%.3f iMaxAcc=%.3f iMaxDec=%.3f\n",
-                                  iMaxVelocity_, iMaxAcceleration_, iMaxDeceleration_);
+                        if (!wasLimitingEnabled) {
+                        
                     }
                 }
             }
@@ -1380,20 +1317,20 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             if ((currentTime - ioAccelViolationStartTime_) >= ioAccelViolationDelaySec_) {
                 const bool wasLimitingEnabled = ioLimitingEnabled_;
                 if (!ioSoftStartActive_) {
-                    // Transition into limiting due to sustained accel violation:
-                    // Preserve configured accel/decel for this axis' own
-                    // dynamic violation so changed MMF commands can brake
-                    // away from the old direction in either sign.
                     ioLimitingEnabled_ = true;
-                    iMaxAcceleration_ = iConfiguredMaxAcceleration_;
-                    iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+                    if (ioGlobalLimitingForced_) {
+                        iMaxAcceleration_ = iConfiguredMaxAcceleration_;
+                        iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+                    } else {
+                        iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
+                        iMaxDeceleration_ = iConfiguredMaxDeceleration_ * SOFT_START_ACCEL_RATIO;
+                    }
                     iMaxVelocity_ = ComputeDynamicLimitMaxVelocity();
                     // Suspend further violation detection until this violation clears
                     ioViolationDetectionSuspended_ = true;
                     // Log the distinct limiting action for clarity
-                    if (!wasLimitingEnabled) {
-                        PDOFILTER_DBG("PDOFilter: Accel limiting engaged iMaxAcc=%.3f iMaxDec=%.3f iMaxVel=%.3f\n",
-                                  iMaxAcceleration_, iMaxDeceleration_, iMaxVelocity_);
+                        if (!wasLimitingEnabled) {
+                        
                     }
                 }
             }
@@ -1403,29 +1340,22 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     } else if (staleViolation || anomalyViolation) {
         // Treat stale or anomalous MMF input like a safety violation and reduce limits.
         ioNoViolationStartTime_ = 0.0; ioViolationActive_ = true;
-        if (!ioLimitingEnabled_) {
+            if (!ioLimitingEnabled_) {
             ioLimitingEnabled_ = true;
             iMaxAcceleration_ = iConfiguredMaxAcceleration_ * SOFT_START_ACCEL_RATIO;
             iMaxDeceleration_ = iConfiguredMaxDeceleration_ * SOFT_START_ACCEL_RATIO;
             iMaxVelocity_ = ComputeDynamicLimitMaxVelocity();
             ioViolationDetectionSuspended_ = true;
-            PDOFILTER_DBG("PDOFilter: Stale/Anomaly limiting engaged (stale=%d anomaly=%d) iMaxVel=%.3f\n",
-                      staleViolation?1:0, anomalyViolation?1:0, iMaxVelocity_);
         }
         if (ioViolationStartTime_ <= 0.0) ioViolationStartTime_ = currentTime;
         violationDuration = currentTime - ioViolationStartTime_;
-    } else if (trackingErrorTimerActive || ioTrackingErrorFatalActive_) {
+    } else if (trackingErrorTimerActive) {
         ioNoViolationStartTime_ = 0.0;
         ioViolationActive_ = true;
-        if (ioTrackingErrorStartTime_ <= 0.0) ioTrackingErrorStartTime_ = currentTime;
-        violationDuration = currentTime - ioTrackingErrorStartTime_;
+        violationDuration = 0.0;
     } else {
         ioViolationActive_ = false; ioViolationStartTime_ = ioVelocityViolationStartTime_ = ioAccelViolationStartTime_ = 0.0;
         ioStaleViolationStartTime_ = 0.0; ioAnomalyViolationStartTime_ = 0.0;
-        if (!ioTrackingErrorFatalActive_) {
-            ioTrackingErrorStartTime_ = 0.0;
-            ioTrackingErrorReferenceAbs_ = 0.0;
-        }
         if (ioLimitingEnabled_ && !ioGlobalLimitingForced_) {
             if (ioNoViolationStartTime_ <= 0.0) {
                 // first frame without violation: start recovery timer
@@ -1456,7 +1386,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         if (anomalyViolation) vType |= ViolationType::InputAnomaly;
         if (staleViolation) vType |= ViolationType::StaleInput;
         const bool reportTrackingErrorViolation =
-            ioTrackingErrorFatalActive_ || (trackingErrorViolation && !ioSoftStartActive_);
+            (trackingErrorViolation && !ioSoftStartActive_);
         if (reportTrackingErrorViolation) vType |= ViolationType::TrackingError;
         
         // When a violation is active (detection suspended) or limiting is engaged,
@@ -1472,7 +1402,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         ioCurrentViolationType_ = vType;
         double callbackViolationDuration = violationDuration;
         if (ioSoftStartActive_ &&
-            !ioTrackingErrorFatalActive_ &&
             PDOFilter::HasFlag(vType, ViolationType::TrackingError)) {
             callbackViolationDuration = 0.0;
         }
@@ -1485,7 +1414,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             ioViolationCallback_(vType, smoothedVelocity, smoothedAcceleration, true, callbackViolationDuration);
         } else if (ioPrevLimitingEnabled_ && !ioLimitingEnabled_) {
             ioViolationCallback_(ViolationType::None, smoothedVelocity, smoothedAcceleration, false, 0.0);
-        } else if (vType != ioPrevViolationType_ || forceViolationCallback) {
+        } else if (vType != ioPrevViolationType_) {
             // Notify the UI with smoothed values when the violation TYPE changes.
             ioViolationCallback_(vType, smoothedVelocity, smoothedAcceleration, ioLimitingEnabled_, callbackViolationDuration);
         }
@@ -1496,26 +1425,28 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     
     if (!ioLimitingEnabled_) {
         if (ioAccelRampActive_) {
-            // Interpolate velocity/accel/decel from their starting values to configured over ramp duration
+            // Interpolate velocity/accel/decel from their starting values to configured over ramp duration.
+            // When dynamic scaling is active, target is 0.5x configured instead of full.
             double rampElapsed = std::chrono::duration<double>(now - ioAccelRampStartTime_).count();
             double alpha = (ioAccelRampDurationSec_ > 0.0) ? (rampElapsed / ioAccelRampDurationSec_) : 1.0;
+            const double dynFactor = ioDynamicScalingAccelActive_ ? 0.5 : 1.0;
             if (alpha >= 1.0) {
-                // Ramp complete: ensure all at configured values
                 iMaxVelocity_ = iConfiguredMaxVelocity_;
-                iMaxAcceleration_ = iConfiguredMaxAcceleration_;
-                iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+                iMaxAcceleration_ = iConfiguredMaxAcceleration_ * dynFactor;
+                iMaxDeceleration_ = iConfiguredMaxDeceleration_ * dynFactor;
                 ioAccelRampActive_ = false;
             } else {
-                // linear interpolation
                 iMaxVelocity_ = (1.0 - alpha) * ioAccelRampStartVel_ + alpha * iConfiguredMaxVelocity_;
-                iMaxAcceleration_ = (1.0 - alpha) * ioAccelRampStartAcc_ + alpha * iConfiguredMaxAcceleration_;
-                iMaxDeceleration_ = (1.0 - alpha) * ioAccelRampStartDec_ + alpha * iConfiguredMaxDeceleration_;
+                iMaxAcceleration_ = (1.0 - alpha) * ioAccelRampStartAcc_ + alpha * iConfiguredMaxAcceleration_ * dynFactor;
+                iMaxDeceleration_ = (1.0 - alpha) * ioAccelRampStartDec_ + alpha * iConfiguredMaxDeceleration_ * dynFactor;
             }
         } else if (!ioSoftStartActive_) {
-            // No ramp active and not in soft start: ensure values are at configured max
+            // Ensure values are at configured max, unless dynamic scaling is active (0.5x)
             iMaxVelocity_ = iConfiguredMaxVelocity_;
-            iMaxAcceleration_ = iConfiguredMaxAcceleration_;
-            iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+            if (!ioDynamicScalingAccelActive_) {
+                iMaxAcceleration_ = iConfiguredMaxAcceleration_;
+                iMaxDeceleration_ = iConfiguredMaxDeceleration_;
+            }
         }
     }
 
@@ -1558,9 +1489,20 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         const double trackingErrorWindow = ComputeTrackingErrorWindow();
         const double requestedSetpoint = effectiveSetpoint;
         const double previousOutputForClamp = oFilteredOutput_;
+        // Expand the clamp window so it always includes the original
+        // MMF target, preventing the effectiveSetpoint from being
+        // pushed AWAY from the intended target when actual deviates
+        // beyond the tracking window.  Without this, a target of 10°
+        // with actual at 40° would clamp the setpoint to 35° (actual-5),
+        // redirecting the filter away from the target and producing
+        // large-amplitude oscillation between PDO hard limits.
+        const double lowerBound = std::min(originalIncomingSet,
+                                           iActValue - trackingErrorWindow);
+        const double upperBound = std::max(originalIncomingSet,
+                                           iActValue + trackingErrorWindow);
         double trackingClampedSetpoint = std::clamp(effectiveSetpoint,
-                                                    iActValue - trackingErrorWindow,
-                                                    iActValue + trackingErrorWindow);
+                                                    lowerBound,
+                                                    upperBound);
         if (requestedSetpoint < previousOutputForClamp && trackingClampedSetpoint > previousOutputForClamp) {
             trackingClampedSetpoint = previousOutputForClamp;
         } else if (requestedSetpoint > previousOutputForClamp && trackingClampedSetpoint < previousOutputForClamp) {
@@ -1583,32 +1525,120 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         // This naturally includes the "Correction Kick" when the MMF input updates (Step minus Prediction),
         // allowing the filter to jump immediately to the new trajectory height without lag.
         double feedforwardVel = (iCycleTime_ > 0.0) ? (effectiveSetpoint - ioPrevEffectiveSetpoint_) / iCycleTime_ : 0.0;
+        feedforwardVel *= iFeedforwardGain_;
+        
+        // During actual soft-start (not the landing phase), override
+        // effectiveSetpoint to the PDO-clamped MMF target so the filter
+        // always converges to the correct safe position.
+        if (ioSoftStartActive_ && std::isfinite(originalIncomingSet)) {
+            // Safety: override effectiveSetpoint to the PDO-clamped MMF
+            // target.  Multiple clamp/window layers above can, in edge
+            // cases on real hardware, redirect the setpoint away from
+            // the intended target.  Forcing it here ensures the filter
+            // always converges to the correct position.
+            const double brakeTarget = std::clamp(originalIncomingSet, iMinPDO_, iMaxPDO_);
+            effectiveSetpoint = brakeTarget;
+            // Recompute feedforward with the corrected setpoint so the
+            // velocity command is consistent.
+            feedforwardVel = (iCycleTime_ > 0.0) ? (effectiveSetpoint - ioPrevEffectiveSetpoint_) / iCycleTime_ : 0.0;
+            feedforwardVel *= iFeedforwardGain_;
+        }
         
         auto [desiredVel, targetAcc] = ComputeOnlineTargetVelAccel(effectiveSetpoint, feedforwardVel);
         if (ioSoftStartActive_ && std::isfinite(originalIncomingSet)) {
             const double brakeTarget = std::clamp(originalIncomingSet, iMinPDO_, iMaxPDO_);
             const double distanceToCommandTarget = brakeTarget - stepStartOutput;
-            const double targetTolerance = std::max(SOFT_START_POSITION_TOLERANCE, iPositionDeadband_);
             const double maxSoftStartDecel = std::max(std::abs(iMaxDeceleration_), 1e-9);
-            const double remainingDistance = std::max(0.0, std::abs(distanceToCommandTarget) - targetTolerance);
-            const double targetBrakeVelocity = std::sqrt(2.0 * maxSoftStartDecel * remainingDistance);
+
+            // Ramp the effective max velocity from 5 % to 100 % of the
+            // soft-start limit over 1.0 s to prevent an initial jerk.
+            constexpr double kSsVelRampSec = 1.0;
+            const double ssVelRamp = (ioSoftStartElapsedSec_ < kSsVelRampSec)
+                ? (0.05 + 0.95 * ioSoftStartElapsedSec_ / kSsVelRampSec)
+                : 1.0;
+            const double effMaxVel  = iMaxVelocity_ * ssVelRamp;
+
             // Enforce a minimum creep speed floor so the axis can always converge
             // when very close to the target. Without this, the braking curve drives
             // velocity toward zero as remainingDistance -> 0, causing either
             // oscillation (feedback fights the tightening ceiling) or asymptotic
             // stall (can never cross the final tolerance boundary).
-            const double minCreepVel = iMaxVelocity_ * 0.08;
+            const double minCreepVel = effMaxVel * 0.08;
+            // Ensure the tolerance deadband is at least the stopping distance
+            // from minCreepVel so the filter has enough room to decelerate to
+            // zero after crossing into tolerance.  Without this, a small
+            // SOFT_START_POSITION_TOLERANCE combined with the minCreepVel floor
+            // causes overshoot near the target.
+            const double minStoppingDistFromCreep = (minCreepVel * minCreepVel) / (2.0 * maxSoftStartDecel);
+            const double targetTolerance = std::max({ SOFT_START_POSITION_TOLERANCE, iPositionDeadband_, minStoppingDistFromCreep });
+            const double remainingDistance = std::max(0.0, std::abs(distanceToCommandTarget) - targetTolerance);
+            const double targetBrakeVelocity = std::sqrt(2.0 * maxSoftStartDecel * remainingDistance);
             const double effectiveBrakeVelocity = std::max(targetBrakeVelocity, minCreepVel);
             
             const double rawTargetInputVel = ioSoftStartCommandVelocity_;
-            const double targetInputVel = std::clamp(rawTargetInputVel, -iMaxVelocity_, iMaxVelocity_);
+            const double targetInputVel = std::clamp(rawTargetInputVel, -effMaxVel, effMaxVel);
+
             
             if (distanceToCommandTarget > targetTolerance) {
-                desiredVel = std::clamp(desiredVel, -iMaxVelocity_, targetInputVel + effectiveBrakeVelocity);
+                desiredVel = std::clamp(desiredVel, -effMaxVel, targetInputVel + effectiveBrakeVelocity);
             } else if (distanceToCommandTarget < -targetTolerance) {
-                desiredVel = std::clamp(desiredVel, targetInputVel - effectiveBrakeVelocity, iMaxVelocity_);
+                // Command has passed the target.  Instead of relying
+                // on the CSV layer to suppress outward feedforward
+                // (which causes stop-go stutter), force the filter
+                // itself to brake aggressively by setting the desired
+                // velocity to zero when the current velocity is still
+                // moving away from the target.  This makes the filter
+                // decelerate at max rate, which in turn reduces the
+                // CSV feedforward naturally without external inhibition.
+                if ((distanceToCommandTarget < 0.0 && stepStartVelocity > 0.0) ||
+                    (distanceToCommandTarget > 0.0 && stepStartVelocity < 0.0)) {
+                    desiredVel = 0.0;
+                } else {
+                    desiredVel = std::clamp(desiredVel,
+                                            targetInputVel - effectiveBrakeVelocity,
+                                            targetInputVel + effectiveBrakeVelocity);
+                }
             } else {
-                desiredVel = targetInputVel;
+                // Within the braking deadband but not yet at the exact target.
+                // Instead of stopping completely (desiredVel = targetInputVel = 0),
+                // asymptotically inch toward the target at a speed proportional
+                // to the remaining distance.  This prevents the filter from
+                // parking 0.08° away during the soft-start ready phase, which
+                // would cause a sudden velocity jump when CompleteSoftStart()
+                // restores full limits.  The proportional gain is kept low
+                // enough that the filter never overshoots the target.
+                //
+                // distanceToCommandTarget is bounded by ±targetTolerance
+                // (≈ ±0.08°).  Using the soft-start effective position gain
+                // (iPositionGain_ * 0.1 ≈ 7.0) keeps the approach speed
+                // matched to the soft-start correction dynamics so the
+                // velocity does not jump when CompleteSoftStart() removes the
+                // soft-start limits.  A lower gain (e.g. 2.0) makes the
+                // filter park too far from the target, causing a visible
+                // acceleration transient after the transition.
+                const double kSoftStartSettleApproachGain = iPositionGain_ * 0.1;
+                desiredVel = distanceToCommandTarget * kSoftStartSettleApproachGain;
+            }
+
+            // When the actual feedback position has already passed the
+            // target, limit velocity in the overshoot direction based on
+            // the remaining distance to the PDO hard limit (not the
+            // distance past the target).  Using the distance to the hard
+            // limit ensures that as actual drifts toward the limit, the
+            // allowed velocity shrinks toward zero, preventing the command
+            // from being driven into the limit at speed.
+            if (iActValue > brakeTarget) {
+                const double distanceToHardLimit = std::max(0.0, iMaxPDO_ - iActValue);
+                const double brakeToHardLimit = std::sqrt(2.0 * maxSoftStartDecel * distanceToHardLimit);
+                if (desiredVel > 0.0) {
+                    desiredVel = std::min(desiredVel, brakeToHardLimit);
+                }
+            } else if (iActValue < brakeTarget) {
+                const double distanceToHardLimit = std::max(0.0, iActValue - iMinPDO_);
+                const double brakeToHardLimit = std::sqrt(2.0 * maxSoftStartDecel * distanceToHardLimit);
+                if (desiredVel < 0.0) {
+                    desiredVel = std::max(desiredVel, -brakeToHardLimit);
+                }
             }
         }
         const double trackingErrorWindow = ComputeTrackingErrorWindow();
@@ -1680,23 +1710,9 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         if (overshoot > OVERSHOOT_THRESHOLD && oCurrentVelocity_ > 0.0) {
             // Output is above target and still moving positive: brake now.
             isOvershooting = true;
-#if PDOFILTER_DEBUG_LOG
-            char bf_os[256];
-            sprintf_s(bf_os, sizeof(bf_os), "PDOFilter: OVERSHOOT DETECTED (+)! out=%.3f target=%.3f overshoot=%.3f vel=%.3f -> IMMEDIATE STOP\n",
-                      oFilteredOutput_, effectiveSetpoint, overshoot, oCurrentVelocity_);
-            OutputDebugStringA(bf_os);
-            printf("%s", bf_os);
-#endif
         } else if (overshoot < -OVERSHOOT_THRESHOLD && oCurrentVelocity_ < 0.0) {
             // Output is below target and still moving negative: brake now.
             isOvershooting = true;
-#if PDOFILTER_DEBUG_LOG
-            char bf_os[256];
-            sprintf_s(bf_os, sizeof(bf_os), "PDOFilter: OVERSHOOT DETECTED (-)! out=%.3f target=%.3f overshoot=%.3f vel=%.3f -> IMMEDIATE STOP\n",
-                      oFilteredOutput_, effectiveSetpoint, overshoot, oCurrentVelocity_);
-            OutputDebugStringA(bf_os);
-            printf("%s", bf_os);
-#endif
         }
         
         if (isOvershooting) {
@@ -1717,8 +1733,7 @@ double PDOFilter::FilterWithInputState(double iSetValue,
                 oCurrentAcceleration_ = 0.0;
             }
 
-            PDOFILTER_DBG("PDOFilter: OVERSHOOT DETECTED -> BRAKING with max decel=%.3f out=%.3f target=%.3f overshoot=%.3f vel=%.3f acc=%.3f\n",
-                      iMaxDeceleration_, oFilteredOutput_, effectiveSetpoint, overshoot, oCurrentVelocity_, oCurrentAcceleration_);
+            
         }
 
     }
@@ -1744,9 +1759,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
         trackingSafetyMax = trackingMax;
         double trackingTarget = finalResult;
 
-        // Handle physical deceleration lead:
-        // Do not force command to push outward when feedback already leads/overshoots the command in the direction of motion.
-        // Doing so would feed positive feedback into the velocity output, destroying deceleration convergence and causing runaway oscillation.
         const bool ignoreMinClamp = (stepStartVelocity >= 0.0 && iActValue > stepStartOutput);
         const bool ignoreMaxClamp = (stepStartVelocity < 0.0 && iActValue < stepStartOutput);
 
@@ -1772,10 +1784,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
             trackingTarget = stepStartOutput;
         }
         finalResult = trackingTarget;
-    }
-
-    if (trackingErrorFatalTriggered) {
-        finalResult = std::clamp(iActValue, iMinPDO_, iMaxPDO_);
     }
 
     finalResult = std::clamp(finalResult, motionMinLimit, motionMaxLimit);
@@ -1896,14 +1904,9 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     }
 
     ioTrackingClampDirection_ = trackingClampDirection;
-    if (trackingErrorFatalTriggered) {
-        oCurrentVelocity_ = 0.0;
-        oCurrentAcceleration_ = 0.0;
-    }
     ioPreviousCyclePredicted_ = ioPredictedThisCycle_;
 
     if ((trackingClampDirection != 0 && publishedOutputVelocity != committedOutputVelocity) ||
-        trackingErrorFatalTriggered ||
         (atUpperHardLimit && publishedOutputVelocity > 0.0) ||
         (atLowerHardLimit && publishedOutputVelocity < 0.0) ||
         (atUpperMotionLimit && publishedOutputVelocity > 0.0) ||
@@ -1915,16 +1918,6 @@ double PDOFilter::FilterWithInputState(double iSetValue,
     ioPrevOutputVelocity_ = oOutputVelocity_;
 
     // Compute displayed output position from the final result
-    // (PT2 removed: finalResult == filtered output)
-#if PDOFILTER_DEBUG_LOG
-    if ((++ioDebugLogCounter_ % 200) == 0 || ioLimitingEnabled_) {
-        char bf[512];
-        sprintf_s(bf, sizeof(bf), "PDOFilter: t=%.3f set=%.6f act=%.6f preFilt=%.6f final=%.6f intVel=%.6f outVel=%.6f rawVel=%.6f smoothVel=%.6f lim=%d pred=%d\n",
-                  currentTime, originalIncomingSet, iActValue, oFilteredOutput_, finalResult, oCurrentVelocity_, oOutputVelocity_, rawVelocity, smoothedVelocity, ioLimitingEnabled_?1:0, ioPredictedThisCycle_?1:0);
-        OutputDebugStringA(bf);
-    }
-#endif
-
     // Track previous final output for the next cycle
     ioPrevFilteredOutput_ = finalResult;
     return finalResult;

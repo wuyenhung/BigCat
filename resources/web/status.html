@@ -4,6 +4,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
   <title>狀態訊息</title>
   <link rel="icon" href="ka52.ico" type="image/x-icon">
   <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
@@ -29,8 +30,10 @@
       display: flex;
       flex-direction: column;
       font-size: var(--font-size);
-      background-color: #fff;
-      color: #333;
+      /* 暗黑底色佈局：改用全站共用色彩變數（與 auto.html、側選單一致），
+         不再用白底 #fff / 深灰字 #333（與其他頁面風格不符，且接上 log 時刺眼）。 */
+      background-color: var(--bg-color);
+      color: var(--text-color);
     }
 
     #controls {
@@ -47,6 +50,21 @@
       font-size: inherit;
       padding: 0.4em 0.8em;
       cursor: pointer;
+      /* 暗黑佈局：瀏覽器預設的淺灰按鈕放在深底上很突兀，改為與側選單同系的深色按鈕 */
+      background: linear-gradient(180deg, #3f3f3f, #333);
+      color: var(--text-color);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+    }
+
+    button:not(.menu-toggle):not(.sidebar-buttons *):hover:not(:disabled) {
+      background: linear-gradient(180deg, #4a4a4a, #3a3a3a);
+      border-color: #5a5a5a;
+    }
+
+    button:not(.menu-toggle):not(.sidebar-buttons *):disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
     }
 
     /* Use shared sizing for controls so page-level buttons match site-wide tokens */
@@ -73,11 +91,21 @@
       width: 1.2em;
       height: 1.2em;
       margin: 0;
+      accent-color: var(--accent); /* 深底色下用主色作為勾選色 */
+      cursor: pointer;
+    }
+
+    /* JS 只設背景（綠/紅），文字一律保持淺色才有對比 */
+    .status-message {
+      color: #fff;
     }
 
     pre {
-      background: #f4f4f4;
-      border: 1px solid #ddd;
+      /* 暗黑佈局：log 區塊改用面板色＋細框，並保留折返避免橫向捲軸 */
+      background: var(--panel-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      color: #e6e6e6;
       padding: 12px;
       flex: 1;
       overflow: auto;
@@ -87,6 +115,30 @@
       /* Ensure text wraps on small screens so no horizontal scroll is needed for text */
       white-space: pre-wrap;
       word-wrap: break-word;
+    }
+
+    /* 暗黑佈局：捲軸與反白也走深色，避免殘留的白框破壞整體色感 */
+    ::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: #1b1b1b;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #555;
+      border-radius: 5px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #6a6a6a;
+    }
+
+    ::selection {
+      background: var(--accent);
+      color: #fff;
     }
   </style>
   <!-- Load auth.js early so initAuthCheck is available -->
@@ -104,6 +156,9 @@
   <script>
     const log = document.getElementById('log');
     const chk = document.getElementById('auto');
+    // 動態寫入的訊息也要過翻譯目錄（<pre> 與 JS 直接賦值都不經過 MutationObserver；
+    // i18n.js 未載入時退回中文原文，不影響功能）。
+    const T = (s) => (window.I18N ? window.I18N.t(s) : s);
     async function load() {
       try {
         const r = await fetch('/status');
@@ -113,10 +168,10 @@
           // show newest logs at top: scroll to top instead of bottom
           log.scrollTop = 0;
         } else {
-          log.textContent = '無法載入狀態: ' + r.status;
+          log.textContent = T('無法載入狀態: ' + r.status);
         }
       } catch (e) {
-        log.textContent = '錯誤: ' + e.toString();
+        log.textContent = T('錯誤: ' + e.toString());
       }
     }
     // Refresh button removed; auto-refresh remains enabled via checkbox
@@ -126,7 +181,7 @@
       const msg = document.getElementById('statusMessage');
       const showMsg = (t, ok) => {
         if (!msg) return;
-        msg.textContent = t;
+        msg.textContent = T(t);
         msg.style.display = 'block';
         msg.style.background = ok ? 'rgba(0,128,0,0.75)' : 'rgba(180,20,20,0.9)';
         setTimeout(() => { msg.style.display = 'none'; }, 2500);

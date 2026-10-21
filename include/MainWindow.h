@@ -25,11 +25,13 @@
 #include <cstdint>
 #include <functional>
 #include "UIConstants.h"
+#include "GuardedString.h"
 #include "EsiParser.h"
 #include "StatusLogger.h"
 #include "PDOFilter.h"
 #include <thread>
 #include <atomic>
+#include <future>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -47,7 +49,7 @@ struct PostedUtf8UiMessage {
 
 // Forward-declare MechanicalUnitMetrics to avoid heavy includes in this header
 struct MechanicalUnitMetrics;
-// AutoProcedure removed — SDO reader now hosted in EtherCATMaster
+// AutoProcedure removed — 0x60FD monitoring now via PDO cache in EtherCATMaster
 
 // Messages used for HTTP/server integration (avoid colliding with tray callback WM_APP+1)
 #define WM_APP_GET_STATUS (WM_APP + 50)
@@ -90,8 +92,8 @@ public:
     // Query whether the EtherCAT master is present and initialized
     bool IsMasterInitialized() const;
     // Lightweight accessor for last-read 0x60FD SDO bytes (thread-safe via EtherCATMaster)
-    bool TryGetLastSdo60FD(std::vector<uint8_t>& out) const;
-    bool TryGetLastSdo60FDLowByte(uint8_t& outLowByte) const;
+    bool TryGetPdo60FD(std::vector<uint8_t>& out) const;
+    bool TryGetPdo60FDLowByte(uint8_t& outLowByte) const;
     void GetLastReportedErrorCodes(std::array<uint16_t, 6>& outCodes,
                                    std::array<bool, 6>& outValid);
     // Check if it is safe to perform a disconnect now. Returns true when
@@ -110,6 +112,9 @@ public:
     CoreHelpers::SystemStateSnapshot GetSystemStateSnapshot() const;
 
     CoreHelpers::AutoActionButtonInputs GetAutoActionButtonInputsForWeb() const;
+
+    // Returns whether external E-Stop (0x60FD bit0) detection is enabled via INI config
+    bool IsExternalEstopEnabled() const { return externalEstopEnabled_.load(); }
 
     // 取得目前 AutoWindow 需要的全域狀態旗標（暫定規格，可日後改成實際 PDO/SDO 來源）
     void GetAutoGlobalStatus(

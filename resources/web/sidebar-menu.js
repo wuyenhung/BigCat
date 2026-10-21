@@ -163,6 +163,83 @@
     }
 
     /**
+     * 語言切換列（i18n）
+     * - 語系清單來自 window.I18N（locales/index.json 註冊表），新增語系不需要改這裡
+     * - 按鈕顯示各語系的 nativeName，因此整列標 data-i18n-skip 讓翻譯引擎跳過
+     * - data-login-exempt 確保未登入時語言仍可切換
+     */
+    function appendLangSwitcher(container) {
+        if (!window.I18N || typeof window.I18N.listLocales !== 'function') return;
+        if (container.querySelector('.lang-switcher')) return;
+
+        const build = () => {
+            let codes = [];
+            try { codes = window.I18N.listLocales() || []; } catch (e) { codes = []; }
+            if (codes.length < 2) return;
+            if (container.isConnected === false || container.querySelector('.lang-switcher')) return;
+
+            const row = document.createElement('div');
+            row.className = 'lang-switcher';
+            row.setAttribute('data-i18n-skip', 'true');
+            row.setAttribute('data-login-exempt', 'true');
+
+            const label = document.createElement('span');
+            label.className = 'lang-switcher-label';
+            const renderLabel = () => {
+                let text = '語系';
+                try { text = window.I18N.t('語系'); } catch (e) { }
+                label.textContent = text;
+            };
+            renderLabel();
+            row.appendChild(label);
+
+            const buttons = [];
+            codes.forEach((code) => {
+                let info = null;
+                try { info = window.I18N.getLocaleInfo(code); } catch (e) { }
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'lang-btn';
+                btn.dataset.locale = code;
+                btn.textContent = (info && info.nativeName) ? info.nativeName : code;
+                btn.title = (info && info.name) ? info.name : code;
+                btn.setAttribute('data-login-exempt', 'true');
+                btn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    try {
+                        const p = window.I18N.setLocale(code);
+                        if (p && typeof p.then === 'function') p.then(refreshActive).catch(() => { });
+                    } catch (err) { console.warn('[SidebarMenu] setLocale failed', code, err); }
+                });
+                buttons.push(btn);
+                row.appendChild(btn);
+            });
+
+            const refreshActive = () => {
+                let cur = null;
+                try { cur = window.I18N.getLocale(); } catch (e) { }
+                buttons.forEach((b) => b.setAttribute('aria-pressed', b.dataset.locale === cur ? 'true' : 'false'));
+                renderLabel();
+            };
+            refreshActive();
+            window.addEventListener('wusoem-i18n-change', refreshActive);
+
+            container.appendChild(row);
+        };
+
+        // 語系註冊表是非同步載入的：等 I18N.ready() 後再建立按鈕，避免清單還是空列表
+        try {
+            const ready = window.I18N.ready && window.I18N.ready();
+            if (ready && typeof ready.then === 'function') {
+                ready.then(build).catch(() => { });
+            } else {
+                build();
+            }
+        } catch (e) { build(); }
+    }
+
+    /**
      * 创建侧边栏菜单项
      */
     function createSidebarMenu() {
@@ -234,6 +311,9 @@
 
         sidebarButtons.appendChild(loginBtn);
 
+        // 語言切換（i18n）：放在登入之后，使用 I18N 語系註冊表產生按鈕
+        appendLangSwitcher(sidebarButtons);
+
         // If the page provides #authButtons (header action buttons), clone them into the
         // sidebar so the mobile menu and header match. Avoid duplicating navigation
         // items that are already present in MENU_ITEMS and skip header-only controls.
@@ -242,7 +322,12 @@
             if (auth && auth.children && auth.children.length > 0) {
                 const skipIds = new Set(['btnConnectHeader', 'btnDisconnectHeader', 'btnStartAutoHeader', 'btnStopAutoHeader', 'btnLogin', 'btnLogout']);
                 // build a set of existing nav text to avoid duplicates
-                const navTexts = new Set(menuItems.map(it => it.text));
+                // （語言切換後 textContent 會是譯文，因此同時放入原文與譯文比對）
+                const navTexts = new Set();
+                menuItems.forEach(it => {
+                    navTexts.add(it.text);
+                    try { if (window.I18N) navTexts.add(window.I18N.t(it.text)); } catch (e) { /* i18n 未載入 */ }
+                });
 
                 // Append a separator for clarity
                 const sep = document.createElement('div'); sep.className = 'sidebar-sep'; sidebarButtons.appendChild(sep);

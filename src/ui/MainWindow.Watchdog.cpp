@@ -40,6 +40,19 @@ void MainWindow::StartWatchdogRecovery() {
     int prevThreadPrio = GetThreadPriority(GetCurrentThread());
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
 
+    // ── Track recovery attempt for escalation ──
+    {
+        const ULONGLONG nowTick = GetTickCount64();
+        const ULONGLONG winStart = recoveryWindowStartTick.load();
+        if (winStart == 0 || nowTick < winStart || (nowTick - winStart) > WATCHDOG_RECOVERY_WINDOW_MS) {
+            // New window
+            recoveryWindowStartTick.store(nowTick);
+            recoveryAttemptCount.store(1);
+        } else {
+            recoveryAttemptCount.fetch_add(1);
+        }
+    }
+
     PostUTF8LogToUI(std::string("Watchdog triggered: starting automatic recovery...\n"));
     // Stop cyclic operation
     MasterStopCyclicOperation();
@@ -64,33 +77,48 @@ void MainWindow::StartWatchdogRecovery() {
     }
 
     bool linkUp = true;
-    if (!currentIfName.empty() && !EtherCATMaster::IsSimulationAdapterSelection(currentIfName)) {
+    // Snapshot once: the selection cache is shared with other threads.
+    const std::string watchdogIfName = this->currentIfName.Copy();
+    if (!watchdogIfName.empty() && !EtherCATMaster::IsSimulationAdapterSelection(watchdogIfName)) {
         try {
-            linkUp = CoreHelpers::CheckLinkStatus(currentIfName.c_str());
+            linkUp = CoreHelpers::CheckLinkStatus(watchdogIfName.c_str());
         } catch (...) {}
     }
 
-    const ULONGLONG lastSdoFailureTick = lastSdo60FDFailureTick.load();
+    const ULONGLONG lastPdoFailureTick = lastPdo60FDFailureTick.load();
     const ULONGLONG nowTick = GetTickCount64();
-    const int recentSdoFailureStreak = sdo60FDFailureStreak.load();
-    const bool recentSdoFailureActive = (lastSdoFailureTick != 0) && (nowTick >= lastSdoFailureTick)
-        && ((nowTick - lastSdoFailureTick) <= SDO_60FD_FAILURE_WINDOW_MS);
+    const int recentPdoFailureStreak = pdo60FDFailureStreak.load();
+    const bool recentPdoFailureActive = (lastPdoFailureTick != 0) && (nowTick >= lastPdoFailureTick)
+        && ((nowTick - lastPdoFailureTick) <= SDO_60FD_FAILURE_WINDOW_MS);
+
+    // EC_NOFRAME (SOEM WKC < 0) means the NIC got nothing back — no slave is
+    // reachable, so ForceSlaveOperational/ConfigureSlaves would only block the
+    // master lock for tens of seconds doing doomed SDO round-trips and freeze
+    // the UI (disconnect button becomes unresponsive).  Detect it and go
+    // straight to disconnect.
+    bool noFrame = false;
+    if (auto* wkcMaster = AppController::GetInstance().GetMaster()) {
+        noFrame = (wkcMaster->GetWorkingCounterRaw() < 0);
+    }
 
     const auto recoveryDecision = CoreHelpers::EvaluateWatchdogRecoveryDecision({
         failedSlaveCount,
         count,
         linkUp,
         anySlaveHasError.load(),
-        recentSdoFailureStreak,
-        recentSdoFailureActive
+        recentPdoFailureStreak,
+        recentPdoFailureActive,
+        noFrame
     });
 
     if (recoveryDecision == CoreHelpers::WatchdogRecoveryDecision::DisconnectImmediately) {
         std::ostringstream oss;
         if (!linkUp) {
             oss << "Watchdog: adapter link down detected - skipping recovery and disconnecting immediately\n";
-        } else if (recentSdoFailureActive && recentSdoFailureStreak >= 3) {
-            oss << "Watchdog: repeated 0x60FD read failures detected (streak=" << recentSdoFailureStreak
+        } else if (noFrame) {
+            oss << "Watchdog: EC_NOFRAME (NIC received no EtherCAT frame) - skipping recovery and disconnecting immediately\n";
+        } else if (recentPdoFailureActive && recentPdoFailureStreak >= 3) {
+            oss << "Watchdog: repeated 0x60FD read failures detected (streak=" << recentPdoFailureStreak
                 << ") - skipping recovery and disconnecting immediately\n";
         } else {
             oss << "Watchdog: severe communication loss detected (" << failedSlaveCount << "/" << count
@@ -110,53 +138,61 @@ void MainWindow::StartWatchdogRecovery() {
         return;
     }
 
-    // Force runtime init for all slaves
-    for (int i = 1; i <= count; ++i) {
-        std::string slog;
-        PostUTF8LogToUI(std::string("Recovery: ForceSlaveOperational for slave ") + std::to_string(i) + "\n");
-        MasterForceSlaveOperational(i, slog);
-        PostUTF8LogToUI(slog);
-        // If the slave fails to reach OP, interpret "Runtime configuration failed"
-        // as a communications error and trigger a clean UI-driven disconnect.
-        try {
-            if (slog.find("Runtime configuration failed") != std::string::npos) {
-                PostUTF8LogToUI(std::string("Recovery: detected runtime configuration failure - triggering disconnect\n"));
-                // 通訊異常：先停止自動程序，再斷開連接
-                if (IsAutoProcedureRunning()) {
-                    PostUTF8LogToUI(std::string("[AutoStop] 從站配置失敗 - 先執行自動程序停止\n"));
-                    StopAutoProcedure();
+    // ── Fast path: if all slaves are already OP with no AL errors, skip the
+    // entire ForceSlaveOperational + ConfigureSlaves rebuild and restart
+    // cyclic directly.  This saves ~6s (264 SDO round-trips) and also avoids
+    // the per-slave ForceSlaveOperational overhead when healthy. ──
+    bool allSlavesHealthy = MasterAllSlavesOperationalNoAlarm();
+    bool ok = true;
+    if (allSlavesHealthy) {
+        PostUTF8LogToUI(std::string("Recovery: all slaves OP+no-alarm — fast-restarting cyclic\n"));
+    } else {
+        // Force runtime init for all slaves
+        bool forceFailed = false;
+        for (int i = 1; i <= count; ++i) {
+            std::string slog;
+            PostUTF8LogToUI(std::string("Recovery: ForceSlaveOperational for slave ") + std::to_string(i) + "\n");
+            MasterForceSlaveOperational(i, slog);
+            PostUTF8LogToUI(slog);
+            try {
+                if (slog.find("Runtime configuration failed") != std::string::npos) {
+                    PostUTF8LogToUI(std::string("Recovery: detected runtime configuration failure - triggering disconnect\n"));
+                    if (IsAutoProcedureRunning()) {
+                        PostUTF8LogToUI(std::string("[AutoStop] 從站配置失敗 - 先執行自動程序停止\n"));
+                        StopAutoProcedure();
+                    }
+                    RequestAutomaticDisconnect("Recovery: detected runtime configuration failure - issuing disconnect\n");
+                    watchdogCounter.store(0);
+                    recoveryRunning.store(false);
+                    SetPriorityClass(GetCurrentProcess(), prevPriority);
+                    SetThreadPriority(GetCurrentThread(), prevThreadPrio);
+                    return;
                 }
-                // Perform safe UI-driven disconnect and abort recovery
-                RequestAutomaticDisconnect("Recovery: detected runtime configuration failure - issuing disconnect\n");
-                watchdogCounter.store(0);
-                recoveryRunning.store(false);
-                SetPriorityClass(GetCurrentProcess(), prevPriority);
-                SetThreadPriority(GetCurrentThread(), prevThreadPrio);
-                return;
-            }
-        } catch(...) {}
+            } catch(...) {}
+        }
+
+        if (!forceFailed) {
+            PostUTF8LogToUI(std::string("Recovery: retry ConfigureSlaves()\n"));
+            ok = MasterConfigureSlaves();
+        }
     }
 
-    // Re-configure and restart cyclic
-    PostUTF8LogToUI(std::string("Recovery: retry ConfigureSlaves()\n"));
-    bool ok = MasterConfigureSlaves();
     if (!ok) {
         PostUTF8LogToUI(std::string("Recovery: ConfigureSlaves() failed\n"));
-        // 通訊異常：先停止自動程序，再斷開連接
         if (IsAutoProcedureRunning()) {
             PostUTF8LogToUI(std::string("[AutoStop] 從站重新配置失敗 - 先執行自動程序停止\n"));
             StopAutoProcedure();
         }
-        // If we cannot reconfigure the slaves, perform a safe UI-driven disconnect
         RequestAutomaticDisconnect("Recovery: ConfigureSlaves() failed - issuing disconnect\n");
         watchdogCounter.store(0);
         recoveryRunning.store(false);
-        // early return since there's nothing left we can do
         SetPriorityClass(GetCurrentProcess(), prevPriority);
         SetThreadPriority(GetCurrentThread(), prevThreadPrio);
         return;
     }
-    else PostUTF8LogToUI(std::string("Recovery: ConfigureSlaves() succeeded\n"));
+    if (!allSlavesHealthy) {
+        PostUTF8LogToUI(std::string("Recovery: ConfigureSlaves() succeeded\n"));
+    }
 
     PostUTF8LogToUI(std::string("Recovery: restarting cyclic operation\n"));
     if (!MasterStartCyclicOperation()) {
@@ -172,6 +208,11 @@ void MainWindow::StartWatchdogRecovery() {
     } else {
         PostUTF8LogToUI(std::string("Recovery: StartCyclicOperation succeeded\n"));
         NotifyEthercatError(false);
+        // ── Set cooldown to prevent immediate re-trigger ──
+        watchdogCooldownUntil.store(GetTickCount64() + WATCHDOG_COOLDOWN_MS);
+        // Reset escalation window on successful recovery
+        recoveryAttemptCount.store(0);
+        recoveryWindowStartTick.store(0);
     }
 
     watchdogCounter.store(0);
@@ -205,8 +246,11 @@ void MainWindow::StartErrorCodeCheck()
         master->ClearGlobalError();
     }
     
-    PostUTF8LogToUI(std::string("[ErrorCheck] 啟動 0x603F 循環檢查 (每50ms檢查一站)\n"));
+    PostUTF8LogToUI(std::string("[ErrorCheck] 啟動 PDO 0x603F 錯誤碼循環檢查 (每50ms檢查一站, PDO cache)\n"));
     
+    if (errorCodeCheckThread.joinable()) {
+        errorCodeCheckThread.join();
+    }
     errorCodeCheckThread = std::thread([this]() {
         const auto waitForNextTick = [this](std::chrono::milliseconds delay) {
             std::unique_lock<std::mutex> wakeLock(errorCodeCheckWakeMutex);
@@ -235,12 +279,12 @@ void MainWindow::StartErrorCodeCheck()
                 }
                 continue;
             }
-            // Consolidated tick: drive EtherCATMaster's SDO reader from the same
-            // error-check thread so we have a single periodic task. The
-            // SdoReaderTick() is responsible for enforcing its own period
-            // (e.g. 100ms) so calling it here at 50ms intervals is safe.
+            // PDO-based monitoring: 0x60FD is now updated every cycle from PDO
+            // and available via GetPdo60FDLowByte(). External auto-input
+            // processing uses PollExternalAutoInputsPdo() which reads directly
+            // from the atomic PDO cache (no SDO dependency).
             try {
-                master->SdoReaderTick();
+                this->PollExternalAutoInputsPdo();
             } catch (...) {}
             
             // 取得當前要檢查的從站索引
@@ -250,13 +294,9 @@ void MainWindow::StartErrorCodeCheck()
                 currentErrorCheckSlaveIndex.store(1);
             }
             
-            // 讀取該從站的 0x603F Error Code
+            // Read 0x603F Error Code from per-slave PDO cache (lock-free, updated every cycle)
             uint16_t errorCode = 0;
-            int readSize = sizeof(errorCode);
-            // Read 0x603F with shortened timeout (100ms) to detect failures faster
-            const int READ_603F_TIMEOUT_US = 100000; // 100 ms in microseconds
-            bool readSuccess = MasterReadSDO((uint16_t)currentSlave, (uint16_t)0x603F, (uint8_t)0x00, 
-                                            (uint8_t*)&errorCode, readSize, READ_603F_TIMEOUT_US);
+            bool readSuccess = master->GetPdo603F(static_cast<uint16_t>(currentSlave), errorCode);
             
             if (readSuccess) {
                 bool errorCodeChanged = false;
@@ -272,11 +312,8 @@ void MainWindow::StartErrorCodeCheck()
 
                 if (errorCode != 0) {
                     // 0x603F 非零表示從站內部錯誤狀態（需要故障重置）。
-                    // 這在連線/啟動流程中可能是正常現象（不應導致自動斷線），
-                    // 但仍應在 UI 上提示使用者（AutoWindow 的 oError 應顯示）。
-                    //
-                    // 因此：只記錄日誌並設置 `anySlaveHasInternalError` 以供 UI 顯示，
-                    // 不設定 EtherCAT 全域錯誤，也不觸發自動斷線流程。
+                    // 這在連線/啟動流程中可能是正常現象，故不應觸發自動斷線。
+                    // 但必須立即停止運動以確保安全。
                     bool prevWasInternal = this->anySlaveHasInternalError.load();
                     // 只有錯誤碼變化時才顯示日誌
                     if (errorCodeChanged) {
@@ -288,8 +325,15 @@ void MainWindow::StartErrorCodeCheck()
                     }
                     // 標記 UI 可見的內部錯誤（不表示通訊異常，故不呼叫 SetGlobalError）
                     this->anySlaveHasInternalError.store(true);
-                    // 由無到有時觸發 AutoWindow 更新以顯示 oError
+                    // 由無到有時觸發立即停止與 AutoWindow 更新
                     if (!prevWasInternal) {
+                        if (!this->suppressAutoStopDuringStartup_.load()) {
+                            // 非零 0x603F → 立即停止運動，但不自動斷線
+                            PostMessageW(this->GetHwnd(),
+                                         WM_USER_AUTO_IMMEDIATE_STOP_REQUEST,
+                                         (WPARAM)0,
+                                         AUTO_IMMEDIATE_STOP_FLAG_SKIP_MANUAL_RESET);
+                        }
                         PostAutoStatusUpdate();
                     }
                 } else {
@@ -327,10 +371,77 @@ void MainWindow::StartErrorCodeCheck()
                     }
                 }
             } else {
-                // SDO 讀取失敗: 這才是真正的通訊異常（網路故障）
+                // PDO cache 不可用 (pdoCacheSlaveCount_==0 或 pdo603FCache_==null)。
+                // 嘗試 SDO fallback 讀取 0x603F，避免因本地快取問題誤判為通訊異常。
+                bool sdoFallbackOk = false;
+                uint16_t sdoErrorCode = 0;
+                {
+                    uint16_t sdoSlave = static_cast<uint16_t>(currentSlave);
+                    int sdoSize = 2;
+                    sdoFallbackOk = master->ReadSDO(sdoSlave, 0x603F, 0x00, &sdoErrorCode, sdoSize);
+                }
+                if (sdoFallbackOk) {
+                    // SDO fallback 成功：當作正常 PDO 讀取處理
+                    bool errorCodeChanged2 = false;
+                    bool hadPreviousError2 = false;
+                    {
+                        std::lock_guard<std::mutex> lock(errorCodeStateMutex);
+                        auto it = lastReportedErrorCode.find(currentSlave);
+                        errorCodeChanged2 = (it == lastReportedErrorCode.end()) || (it->second != sdoErrorCode);
+                        hadPreviousError2 = (it != lastReportedErrorCode.end() && it->second != 0);
+                        lastReportedErrorCode[currentSlave] = sdoErrorCode;
+                        errorCodeConsecutiveCounter[currentSlave] = 0;
+                    }
+                    // 重置 anySlaveHasError（此為 PDO cache 問題，非通訊異常）
+                    if (anySlaveHasError.load()) {
+                        anySlaveHasError.store(false);
+                        if (auto* clearMaster2 = AppController::GetInstance().GetMaster()) {
+                            clearMaster2->ClearGlobalError();
+                        }
+                    }
+                    if (sdoErrorCode != 0) {
+                        bool prevWasInternal2 = this->anySlaveHasInternalError.load();
+                        if (errorCodeChanged2) {
+                            char hexBuf[16];
+                            snprintf(hexBuf, sizeof(hexBuf), "0x%04X", sdoErrorCode);
+                            std::string msg = "從站 " + std::to_string(currentSlave) +
+                                             " 0x603F 異常代碼 " + std::string(hexBuf) +
+                                             " (SDO fallback，需故障重置)\n";
+                            PostUTF8LogToUI(msg);
+                        }
+                        this->anySlaveHasInternalError.store(true);
+                        if (!prevWasInternal2) {
+                            if (!this->suppressAutoStopDuringStartup_.load()) {
+                                PostMessageW(this->GetHwnd(),
+                                             WM_USER_AUTO_IMMEDIATE_STOP_REQUEST,
+                                             (WPARAM)0,
+                                             AUTO_IMMEDIATE_STOP_FLAG_SKIP_MANUAL_RESET);
+                            }
+                            PostAutoStatusUpdate();
+                        }
+                    } else {
+                        if (hadPreviousError2) {
+                            std::string msg = "從站 " + std::to_string(currentSlave) +
+                                             " 0x603F 異常已清除 (SDO fallback)\n";
+                            PostUTF8LogToUI(msg);
+                        }
+                        bool anyNonZero2 = false;
+                        {
+                            std::lock_guard<std::mutex> lock2(errorCodeStateMutex);
+                            for (const auto &p : lastReportedErrorCode) {
+                                if (p.second != 0) { anyNonZero2 = true; break; }
+                            }
+                        }
+                        if (!anyNonZero2 && this->anySlaveHasInternalError.load()) {
+                            this->anySlaveHasInternalError.store(false);
+                            PostAutoStatusUpdate();
+                        }
+                    }
+                    // SDO fallback 成功，跳過後續的 PDO 失敗處理
+                } else {
+                // PDO + SDO 皆失敗：判定為通訊異常
                 bool alreadyReportedSentinel = false;
                 bool prevWasError = anySlaveHasError.load();
-                // 增加讀取失敗的連續計數器
                 int cnt2 = 0;
                 {
                     std::lock_guard<std::mutex> lock(errorCodeStateMutex);
@@ -344,8 +455,7 @@ void MainWindow::StartErrorCodeCheck()
                         cnt2 = ++errorCodeConsecutiveCounter[currentSlave];
                     }
                 }
-                
-                // 只有達到連續失敗閾值時，才判定為通訊異常
+
                 if (cnt2 >= errorCodeConsecutiveThreshold) {
                     {
                         std::lock_guard<std::mutex> lock(errorCodeStateMutex);
@@ -355,21 +465,26 @@ void MainWindow::StartErrorCodeCheck()
                     if (auto* setMaster = AppController::GetInstance().GetMaster()) { setMaster->SetGlobalError(); }
                 }
 
-                // 顯示讀取失敗訊息
                 if (!alreadyReportedSentinel && cnt2 >= errorCodeConsecutiveThreshold) {
                     std::string msg = "[ErrorCheck] 從站 " + std::to_string(currentSlave) +
-                                     " 讀取 0x603F 失敗 (網路通訊異常) - 持續 " + std::to_string(cnt2) + " 次\n";
+                                     " PDO/SDO 讀取 0x603F 皆失敗 - 持續 " + std::to_string(cnt2) + " 次\n";
                     PostUTF8LogToUI(msg);
-                    // 若先前沒有錯誤，更新 UI 狀態
                     if (!prevWasError) {
                         PostAutoStatusUpdate();
                     }
                 } else if (cnt2 < errorCodeConsecutiveThreshold) {
-                    // 讀取失敗但未達閾值，顯示過渡訊息
                     std::string msg = "[ErrorCheck] 從站 " + std::to_string(currentSlave) +
-                                     " 讀取 0x603F 失敗 (暫時) - 計數 " + std::to_string(cnt2) + "/" + std::to_string(errorCodeConsecutiveThreshold) + "\n";
+                                     " PDO/SDO 讀取 0x603F 失敗 (暫時) - 計數 " + std::to_string(cnt2) + "/" + std::to_string(errorCodeConsecutiveThreshold) + "\n";
                     PostUTF8LogToUI(msg);
+                    if (cnt2 == 2) {
+                        if (auto* recMaster = AppController::GetInstance().GetMaster()) {
+                            recMaster->ResetSlaveSDOState(static_cast<uint16_t>(currentSlave));
+                            PostUTF8LogToUI(std::string("[ErrorCheck] 從站 " + std::to_string(currentSlave) +
+                                                       " 計數器已重置 (P1 PDO 恢復)\n"));
+                        }
+                    }
                 }
+                } // end SDO fallback else
             }
             
             // 移動到下一個從站

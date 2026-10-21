@@ -17,6 +17,12 @@
 void StartLocalHttpServer(int port, HWND hwnd);
 void StopLocalHttpServer();
 
+// Actual listening port. If the requested port is occupied, the server tries
+// the following ports and updates this value (e.g. 8080 busy -> 8081).
+int GetLocalHttpServerPort();
+// True when bind + listen succeeded (server is serving).
+bool IsLocalHttpServerListening();
+
 // SSE broadcaster control (optional)
 void StartSseBroadcaster();
 void StopSseBroadcaster();
@@ -37,6 +43,10 @@ void HoldStewartNativeTarget();
 std::string GetStewartNativePlannerStateJson(bool includeEventType);
 void StartStewartNativePlanner();
 void StopStewartNativePlanner();
+
+// Pose6D 硬限制：從 machine.xml 載入後設定 (AppController → HTTP server)
+void SetStewartPose6DLimits(const WuSOEM::Pose6DLimits& limits);
+WuSOEM::Pose6DLimits GetStewartPose6DLimits();
 
 // Thread-safe slave JSON cache helpers used by UI to publish slave info
 void SetSlaveCacheJson(const std::string &json);
@@ -91,6 +101,8 @@ void SetAdapterStatus(const std::string &s);
 void SetCycleInfo(uint32_t desiredUs, uint32_t commsUs, uint32_t actualUs);
 // Mirror UI max observed cycle time (microseconds)
 void SetMaxObservedCycleTime(uint32_t maxUs);
+// Mirror cycle spike diagnostics: phase(0=none,1=comms,2=idle), cycleUs, commsUs, count
+void SetSpikeDiagnostics(uint32_t phase, uint32_t cycleUs, uint32_t commsUs, uint32_t count);
 
 // Validate a provided API key string against the server's configured key
 // Returns true if the key matches the server-side key (whitespace tolerant).

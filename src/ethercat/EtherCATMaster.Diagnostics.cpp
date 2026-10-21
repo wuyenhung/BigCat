@@ -7,6 +7,7 @@
 #include <bitset>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <intrin.h>
 #include <mmsystem.h>
 #include <soem/ec_print.h>
@@ -50,6 +51,30 @@ std::vector<SlaveInfo> EtherCATMaster::GetSlaveInfo() {
     return info;
 }
 
+bool EtherCATMaster::AllSlavesOperationalNoAlarm() {
+    EnterCriticalSection(&cs);
+
+    if (slaveCount <= 0) {
+        LeaveCriticalSection(&cs);
+        return false;
+    }
+
+    ecx_readstate(&context);
+
+    bool allOk = true;
+    for (int i = 1; i <= slaveCount; ++i) {
+        uint16_t st = context.slavelist[i].state;
+        uint16_t al = context.slavelist[i].ALstatuscode;
+        if ((st & EC_STATE_OPERATIONAL) != EC_STATE_OPERATIONAL || al != 0) {
+            allOk = false;
+            break;
+        }
+    }
+
+    LeaveCriticalSection(&cs);
+    return allOk;
+}
+
 std::string EtherCATMaster::GetSlaveEsiFile(int slaveIndex) const
 {
     if (slaveIndex < 1 || slaveIndex > (int)slaveEsiFiles_.size()) {
@@ -67,7 +92,9 @@ std::string EtherCATMaster::GetSlaveEsiDeviceName(int slaveIndex) const
 }
 
 void EtherCATMaster::SetError(const std::string& error) {
+    EnterCriticalSection(&errorCS_);
     lastError = error;
+    LeaveCriticalSection(&errorCS_);
 }
 
 
@@ -292,8 +319,8 @@ bool EtherCATMaster::GetPDOFilterState(int slaveIndex, PDOFilter::ViolationType 
     }
     const PDOFilter &pf = it->second;
     violationType = pf.GetCurrentViolationType();
-    isError = pf.IsError();
-    isTrackingErrorFatal = pf.IsTrackingErrorFatal();
+    isError = false;
+    isTrackingErrorFatal = false;
     LeaveCriticalSection(const_cast<LPCRITICAL_SECTION>(&pdoFilterCS_));
     return true;
 }
@@ -378,7 +405,9 @@ void EtherCATMaster::TriggerAllPDOFiltersSoftStart()
     // first filter cycle intentionally skips writing while it initializes from
     // actual feedback; without clearing here, a stale staged 0x60FF can remain
     // active until the second cycle and can push an axis away from a zero target.
-    ClearStagedOutputsForCyclicMotionCommands();
+    // Moved inside pdoFilterCS_ below so the per-cycle CSP sync in the PDO task
+    // cannot overwrite the freshly-synced 0x607A with wrong offsets before
+    // filtering is enabled.
     // On real hardware the cyclic task handles PDO exchange; calling
     // ecx_send_processdata from this (auto-connect) thread races with
     // the cyclic task and can cause WKC=0 / frame corruption.
@@ -389,6 +418,23 @@ void EtherCATMaster::TriggerAllPDOFiltersSoftStart()
     }
 
     EnterCriticalSection(&pdoFilterCS_);
+
+    // Clear stale staged commands and sync 0x607A ← 0x6064 (CSP) / clear
+    // 0x60FF (CSV) inside the CS so the PDOProcessingTask cannot run its
+    // per-cycle CSP sync (which may use wrong offsets) between the clear
+    // and the filter-enable below.
+    ClearStagedOutputsForCyclicMotionCommands();
+
+    // Enable PDO filtering atomically with soft-start so the
+    // PDOProcessingTask sees a consistent state on the very next
+    // cycle: filtering is on AND every filter has soft-start
+    // active with ioInitialized_=false (will seed from actual
+    // feedback).  Without this, the window between a separate
+    // EnablePDOFiltering(true) and TriggerAllPDOFiltersSoftStart()
+    // allows the cyclic task to process MMF targets at full
+    // velocity/acceleration limits before soft-start protection is
+    // in place.
+    pdoFilteringEnabled_.store(true, std::memory_order_release);
 
     // Clear the lock-free ready cache BEFORE triggering soft-start on each
     // filter. This eliminates the race condition where the polling thread
@@ -437,11 +483,21 @@ void EtherCATMaster::TriggerAllPDOFiltersSoftStart()
         }
 #endif
     }
-    LeaveCriticalSection(&pdoFilterCS_);
+    // Pose6D 區塊使用此 lock-free flag 在 cyclic 路徑中停用動態縮放，
+    // 避免進入 CS。在此立即設為 true，確保第一個 cycle 就能看到。
+    pose6dAnySoftStartActive_.store(true, std::memory_order_relaxed);
 
-    // Clear powerOnInProgress flag now that soft-start is active.
-    // The soft-start's IsSoftStartActive() will continue to block CyclicTask writes.
+    // Clear powerOnInProgress flag inside the critical section so the
+    // PDOProcessingTask, which enters pdoFilterCS_ after seeing
+    // pdoFilteringEnabled_==true, never observes powerOnInProgress_==true
+    // on the first cycle.  If the flag is cleared outside the CS, the
+    // first filter cycle skips writing CSV commands (skipWrite=true),
+    // the filter advances its internal state while the servo stands still,
+    // and the second cycle issues a catch-up velocity that causes a
+    // perceptible "bump" at the start of soft-start.
     powerOnInProgress_.store(false, std::memory_order_release);
+
+    LeaveCriticalSection(&pdoFilterCS_);
 }
 
 
@@ -509,6 +565,48 @@ void EtherCATMaster::HoldAllPDOFiltersPosition()
 }
 
 
+void EtherCATMaster::HoldPDOFilterPosition(int slaveIndex)
+{
+    if (slaveIndex <= 0 || slaveIndex > slaveCount) return;
+    EnterCriticalSection(&pdoFilterCS_);
+    auto it = pdoFilters_.find(slaveIndex);
+    if (it != pdoFilters_.end()) {
+        it->second.HoldCurrentPosition();
+    }
+    LeaveCriticalSection(&pdoFilterCS_);
+}
+
+
+double EtherCATMaster::GetMaxFilterVelocity()
+{
+    double maxVel = 0.0;
+    EnterCriticalSection(&pdoFilterCS_);
+    for (const auto &kv : pdoFilters_) {
+        double v = std::abs(kv.second.GetCurrentVelocity());
+        if (v > maxVel) maxVel = v;
+    }
+    LeaveCriticalSection(&pdoFilterCS_);
+    return maxVel;
+}
+
+
+double EtherCATMaster::GetMinConfiguredMaxDeceleration()
+{
+    double minDecel = (std::numeric_limits<double>::max)();
+    bool found = false;
+    EnterCriticalSection(&pdoFilterCS_);
+    for (const auto &kv : pdoFilters_) {
+        double d = kv.second.GetConfiguredMaxDeceleration();
+        if (d > 0.0 && d < minDecel) {
+            minDecel = d;
+            found = true;
+        }
+    }
+    LeaveCriticalSection(&pdoFilterCS_);
+    return found ? minDecel : 200.0;  // fallback 200 deg/s²
+}
+
+
 void EtherCATMaster::ReleaseAllPDOFiltersHoldPosition()
 {
     EnterCriticalSection(&pdoFilterCS_);
@@ -551,10 +649,6 @@ void EtherCATMaster::ResetPDOFilter(int slaveIndex)
         pdoFilters_[slaveIndex] = PDOFilter();
     }
     try {
-        // Ensure filter error flag is cleared and state is reset to avoid
-        // persistent error conditions after a successful fault-reset.
-        pdoFilters_[slaveIndex].ClearError();
-        // Also reset the main state so next Filter() initializes from actual position
         pdoFilters_[slaveIndex].Reset();
     } catch(...) {
         // swallow exceptions to avoid destabilizing master thread
@@ -590,23 +684,9 @@ bool EtherCATMaster::IsAnySlaveViolating() const
 
 void EtherCATMaster::UpdateGlobalViolationState()
 {
-    // 在 critical section 內呼叫此函式
-    // 使用 PDOFilter 的恢復延遲常數
-    static constexpr double RECOVERY_DELAY_SEC = 3.0;  // 與 PDOFilter 一致
-    
-    // 檢查是否有任何從站正在違規
     bool anyViolating = IsAnySlaveViolating();
-    auto now = std::chrono::steady_clock::now();
-    
-    if (anyViolating) {
-        // 有從站違規：設定全局違規狀態，重置無違規計時器
-        // NOTE: If the only violations present are HardLimitMin/HardLimitMax,
-        // do NOT force global limiting onto all non-violating slaves. Only
-        // apply global limiting when there is a dynamic violation (velocity/
-        // acceleration/deceleration), which indicates a system-wide safety risk.
-        globalViolationActive_.store(true, std::memory_order_release);
-        globalNoViolationTimerActive_ = false;  // 停止計時器
 
+    if (anyViolating) {
         // Collect violating slaves and detect whether any violation is dynamic
         std::vector<int> violatingSlaves;
         bool anyDynamicViolation = false;
@@ -625,12 +705,10 @@ void EtherCATMaster::UpdateGlobalViolationState()
         }
 
         if (anyDynamicViolation) {
-            // Dynamic violation: keep previous behaviour and force-limiting on all slaves
             globalLimitingEnabled_.store(true, std::memory_order_release);
             for (auto &pair : pdoFilters_) {
                 pair.second.SetGlobalLimitingEnabled(true);
             }
-            // Debug log removed for production
         } else {
             // Only hard-limit violations: enable limiting only for the violating slaves
             globalLimitingEnabled_.store(false, std::memory_order_release);
@@ -639,35 +717,13 @@ void EtherCATMaster::UpdateGlobalViolationState()
                     pdoFilters_.at(idx).SetGlobalLimitingEnabled(true);
                 } catch (...) {}
             }
-            // Debug log removed for production
         }
     } else {
-        // 所有從站都沒有違規
-        if (globalViolationActive_.load(std::memory_order_acquire)) {
-            // The global violation latch remains debounced below, but the
-            // physical per-axis limiting must start recovering as soon as no
-            // active violation remains. Holding the 20% accel/decel reduction
-            // for the full debounce window makes otherwise-clean axes unable
-            // to track CSV targets, which can create a second wave of
-            // TrackingError violations before the global latch clears.
-            // 之前有全局違規，開始計時恢復
-            if (!globalNoViolationTimerActive_) {
-                globalLimitingEnabled_.store(false, std::memory_order_release);
-                for (auto& pair : pdoFilters_) {
-                    pair.second.SetGlobalLimitingEnabled(false);
-                }
-
-                // 首次進入無違規狀態，記錄時間
-                globalNoViolationStartTime_ = now;
-                globalNoViolationTimerActive_ = true;
-            } else {
-                // 檢查是否已經無違規超過 RECOVERY_DELAY_SEC
-                auto elapsed = std::chrono::duration<double>(now - globalNoViolationStartTime_).count();
-                if (elapsed >= RECOVERY_DELAY_SEC) {
-                    // 恢復正常：清除全局違規狀態
-                    globalViolationActive_.store(false, std::memory_order_release);
-                    globalNoViolationTimerActive_ = false;
-                }
+        // No violations: clear limiting immediately
+        if (globalLimitingEnabled_.load(std::memory_order_acquire)) {
+            globalLimitingEnabled_.store(false, std::memory_order_release);
+            for (auto& pair : pdoFilters_) {
+                pair.second.SetGlobalLimitingEnabled(false);
             }
         }
     }

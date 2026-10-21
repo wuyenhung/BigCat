@@ -29,6 +29,7 @@ struct MechanicalUnitMetrics {
     std::wstring actualPosition;
     std::wstring targetSpeed;
     std::wstring actualSpeed;
+    std::wstring actualTorque;
     bool valid = false;
 };
 

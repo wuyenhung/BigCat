@@ -3,7 +3,8 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="js/i18n.js"></script><!-- i18n 多語系引擎：必須在其他 script 之前載入 -->
     <title>示波器</title>
         <link rel="icon" href="ka52.ico" type="image/x-icon">
         <link rel="shortcut icon" href="ka52.ico" type="image/x-icon">
@@ -309,10 +310,10 @@
             display: block;
         }
 
-        #realtimeChart {
-            transform: translateZ(0);
-            backface-visibility: hidden;
-        }
+        /* 示波器為兩層畫布：波形在 WebGL(#realtimeChart)、格線/刻度在 2D overlay(#chartOverlay)。
+           兩層必須由合成器一起呈現（同一 rAF 提交、不啟用 desynchronized 低延遲路徑），
+           也不要對 WebGL 畫布加 translateZ/backface 之類的圖層提升提示；
+           否則捲動中的波形會出現水平撕裂／雙影抖動，或在 fractional DPI 下被重新取樣成殘影。 */
 
         #chartOverlay {
             pointer-events: none;
@@ -630,9 +631,9 @@
                         <span>Filter 輸出</span>
                     </label>
                     <label class="checkbox-item">
-                        <input type="checkbox" class="dataTypeCheckbox" value="filterVel" title="Filter 速度">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filterVel" title="Filter 速度輸出">
                         <span class="color-dot color-dot-filter-vel"></span>
-                        <span>Filter 速度</span>
+                        <span>Filter 速度輸出</span>
                     </label>
                     <label class="checkbox-item">
                         <input type="checkbox" class="dataTypeCheckbox" value="filterAcc" title="Filter 加速度">
@@ -640,9 +641,44 @@
                         <span>Filter 加速度</span>
                     </label>
                     <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="filterInputVel" title="Filter 速度輸入 (IK後的目標角速度)">
+                        <span class="color-dot" style="background:#FF4081"></span>
+                        <span>Filter 速度輸入</span>
+                    </label>
+                    <label class="checkbox-item">
                         <input type="checkbox" class="dataTypeCheckbox" value="ecatCycle" title="EtherCAT 通訊週期">
                         <span class="color-dot" style="background:#7CFC00"></span>
                         <span>EtherCAT 通訊週期</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinX" title="正向運動學 X (mm)">
+                        <span class="color-dot" style="background:#00d4ff"></span>
+                        <span>FK X</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinY" title="正向運動學 Y (mm)">
+                        <span class="color-dot" style="background:#0ff"></span>
+                        <span>FK Y</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinZ" title="正向運動學 Z (mm)">
+                        <span class="color-dot" style="background:#6ef"></span>
+                        <span>FK Z</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinRoll" title="正向運動學 Roll (°)">
+                        <span class="color-dot" style="background:#ff9f40"></span>
+                        <span>FK Roll</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinPitch" title="正向運動學 Pitch (°)">
+                        <span class="color-dot" style="background:#fc6"></span>
+                        <span>FK Pitch</span>
+                    </label>
+                    <label class="checkbox-item">
+                        <input type="checkbox" class="dataTypeCheckbox" value="fwdKinYaw" title="正向運動學 Yaw (°)">
+                        <span class="color-dot" style="background:#f96"></span>
+                        <span>FK Yaw</span>
                     </label>
                 </div>
             </div>
@@ -730,20 +766,52 @@
                 <span class="stat-value ok" id="statRate">- Hz</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">實際位置</span>
+                <span class="stat-label" id="statLabelAPos">實際位置</span>
                 <span class="stat-value pos" id="statAPos">- deg</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">實際速度</span>
+                <span class="stat-label" id="statLabelAVel">實際速度</span>
                 <span class="stat-value vel" id="statAVel">- deg/s</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">狀態字</span>
+                <span class="stat-label" id="statLabelSW">狀態字</span>
                 <span class="stat-value" id="statSW">0x----</span>
             </div>
             <div class="stat-item">
-                <span class="stat-label">控制字</span>
+                <span class="stat-label" id="statLabelCW">控制字</span>
                 <span class="stat-value" id="statCW">0x----</span>
+            </div>
+        </div>
+
+        <!-- Forward Kinematics: 6-DOF pose computed from actual PDO angles -->
+        <div class="stats-bar" id="fwdKinBar" style="margin-top:2px;">
+            <div class="stat-item">
+                <span class="stat-label" style="color:#00d4ff;">FK X</span>
+                <span class="stat-value pos" id="statFkX">- mm</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#00d4ff;">FK Y</span>
+                <span class="stat-value pos" id="statFkY">- mm</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#00d4ff;">FK Z</span>
+                <span class="stat-value pos" id="statFkZ">- mm</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#ff9f40;">FK Roll</span>
+                <span class="stat-value" id="statFkRoll">- °</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#ff9f40;">FK Pitch</span>
+                <span class="stat-value" id="statFkPitch">- °</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#ff9f40;">FK Yaw</span>
+                <span class="stat-value" id="statFkYaw">- °</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-label" style="color:#aaa;">FK 狀態</span>
+                <span class="stat-value" id="statFkStatus">-</span>
             </div>
         </div>
 
@@ -769,8 +837,15 @@
             mmfInVel: '#B39DDB',
             filter: '#FFCD56',
             filterVel: '#E91E63',
+            filterInputVel: '#FF4081',
             filterAcc: '#00BCD4',
-            ecatCycle: '#7CFC00'
+            ecatCycle: '#7CFC00',
+            fwdKinX: '#00d4ff',
+            fwdKinY: '#0ff',
+            fwdKinZ: '#6ef',
+            fwdKinRoll: '#ff9f40',
+            fwdKinPitch: '#fc6',
+            fwdKinYaw: '#f96'
         };
         const LABELS = {
             aPos: '實際位置(0x6064)',
@@ -781,24 +856,36 @@
             mmfIn: 'MMF輸入',
             mmfInVel: 'MMF輸入速度',
             filter: 'Filter輸出',
-            filterVel: 'Filter速度',
+            filterVel: 'Filter速度輸出',
+            filterInputVel: 'Filter速度輸入',
             filterAcc: 'Filter加速度',
-            ecatCycle: 'EtherCAT通訊週期'
+            ecatCycle: 'EtherCAT通訊週期',
+            fwdKinX: 'FK X (mm)',
+            fwdKinY: 'FK Y (mm)',
+            fwdKinZ: 'FK Z (mm)',
+            fwdKinRoll: 'FK Roll (°)',
+            fwdKinPitch: 'FK Pitch (°)',
+            fwdKinYaw: 'FK Yaw (°)'
         };
         const AXIS_CONFIG = {
             position: { title: '位置 (deg)', color: '#36A2EB' },
             velocity: { title: '速度 (deg/s)', color: '#FF6384' },
             acceleration: { title: '加速度 (deg/s^2)', color: '#00BCD4' },
-            timing: { title: '週期 (ms)', color: '#7CFC00' }
+            timing: { title: '週期 (ms)', color: '#7CFC00' },
+            fwdKinPos: { title: 'FK 位置 (mm)', color: '#00d4ff' },
+            fwdKinAng: { title: 'FK 角度 (°)', color: '#ff9f40' }
         };
-        const NOMINAL_MMF_INPUT_INTERVAL_MS = 2.0;
+        // 後端 SSE broadcaster 預設最快約 10ms 一幀；實際間隔隨運行/心跳而變，故以觀測值優先
+        const DEFAULT_SAMPLE_INTERVAL_MS = 10.0;
         const MAX_MMF_VELOCITY_DT_SEC = 0.5;
-        const VELOCITY_TYPES = ['aVel', 'tVel', 'filterVel', 'mmfInVel'];
+        const VELOCITY_TYPES = ['aVel', 'tVel', 'filterVel', 'filterInputVel', 'mmfInVel'];
         const ACCELERATION_TYPES = ['filterAcc'];
         const TIMING_TYPES = ['ecatCycle'];
-        const GLOBAL_SIGNAL_TYPES = ['ecatCycle'];
+        const FWDKIN_POS_TYPES = ['fwdKinX', 'fwdKinY', 'fwdKinZ'];
+        const FWDKIN_ANG_TYPES = ['fwdKinRoll', 'fwdKinPitch', 'fwdKinYaw'];
+        const GLOBAL_SIGNAL_TYPES = ['ecatCycle', 'fwdKinX', 'fwdKinY', 'fwdKinZ', 'fwdKinRoll', 'fwdKinPitch', 'fwdKinYaw'];
         const MMF_INPUT_TYPES = ['mmfIn', 'mmfInVel'];
-        const FILTER_INPUT_TYPES = ['filterInput'];
+        const FILTER_INPUT_TYPES = ['filterInput', 'filterInputVel'];
 
         // ===== 狀態 =====
         let isPaused = false;
@@ -816,6 +903,13 @@
         let scopeRenderer = null;
         let previousMmfInSamples = Array.from({ length: 6 }, () => null);
         const viewState = { autoX: true, xMin: 0, xMax: 1 };
+        // 資料新鮮度 / 實際樣本間隔追蹤（後端以心跳重送同一筆資料時須與 live 資料區隔）
+        let lastSampleTs = null;
+        let prevSampleEpochMs = null;
+        let measuredSampleIntervalMs = null;
+        let lastFreshPushAtWallMs = 0;
+        let rateStaleUi = false;
+        let lastPointOptionRefreshSec = 0;
 
         // ===== DOM 元素 =====
         const chartContainer = document.querySelector('.chart-container');
@@ -832,6 +926,11 @@
         const filterInputAxisCheckboxes = document.querySelectorAll('.filterInputAxisCheckbox');
         const chkMMFOutput = document.getElementById('chkMMFOutput');
         const mmfInfo = document.getElementById('mmfInfo');
+        const statRateEl = document.getElementById('statRate');
+        const statLabelAPos = document.getElementById('statLabelAPos');
+        const statLabelAVel = document.getElementById('statLabelAVel');
+        const statLabelSW = document.getElementById('statLabelSW');
+        const statLabelCW = document.getElementById('statLabelCW');
 
         function clamp(value, min, max) {
             return Math.min(max, Math.max(min, value));
@@ -879,16 +978,86 @@
             viewState.xMax = 1;
         }
 
-        function getAutoViewSpanMs(totalRange) {
+        // 自動視窗寬度：以「顯示點數」為固定窗寬，時間寬度 = 目前資料的平均樣本間隔 × (顯示點數 - 1)。
+        // 刻意不再如上一個版本把結果夾成「目前資料長度」(totalRange)：在累積點數 < 顯示點數期間，
+        // 該寫法會讓視窗寬度隨每一筆新資料改變，整個波形每一帧都被重新縮放一次 → 水平抖動／雙影。
+        // 當點數已累積到顯示點數時，本式等價於目前資料的總時間範圍，與原本（穩定的）行為一致。
+        function getAutoViewSpanMs(totalRange, sampleCount) {
             if (!Number.isFinite(totalRange) || totalRange <= 0) {
                 return 1;
             }
-            const configuredSpan = MAX_POINTS * NOMINAL_MMF_INPUT_INTERVAL_MS;
-            return clamp(configuredSpan, 1, totalRange);
+            if (!(sampleCount > 1)) {
+                return Math.max(1, totalRange);
+            }
+            const meanSpacingMs = totalRange / (sampleCount - 1);
+            return Math.max(1, meanSpacingMs * Math.max(1, MAX_POINTS - 1));
         }
 
         function resetMmfInputVelocityState() {
             previousMmfInSamples = Array.from({ length: 6 }, () => null);
+        }
+
+        function getEffectiveSampleIntervalMs() {
+            return measuredSampleIntervalMs || DEFAULT_SAMPLE_INTERVAL_MS;
+        }
+
+        function trackSampleIntervalMs(epochMs) {
+            if (!Number.isFinite(epochMs)) return;
+            if (prevSampleEpochMs !== null) {
+                const delta = epochMs - prevSampleEpochMs;
+                if (delta > 0 && delta < 10000) {
+                    measuredSampleIntervalMs = measuredSampleIntervalMs === null
+                        ? delta
+                        : measuredSampleIntervalMs * 0.8 + delta * 0.2;
+                }
+            }
+            prevSampleEpochMs = epochMs;
+        }
+
+        function formatPointsDurationLabel(points) {
+            const ms = points * getEffectiveSampleIntervalMs();
+            if (ms < 1000) return `${points} 點 (${Math.round(ms)}ms)`;
+            return `${points} 點 (${(ms / 1000).toFixed(1)}秒)`;
+        }
+
+        // 依觀測到的實際樣本間隔更新「顯示點數」選項的秒數標註（後端 SSE 最快 ~10ms/幀）
+        function refreshPointOptions() {
+            const now = Date.now();
+            if (now - lastPointOptionRefreshSec < 900) return;
+            lastPointOptionRefreshSec = now;
+            document.querySelectorAll('#maxPointsSelect option').forEach(opt => {
+                const points = parseInt(opt.value, 10);
+                if (Number.isInteger(points) && points > 0) {
+                    opt.textContent = formatPointsDurationLabel(points);
+                }
+            });
+        }
+
+        function applyStalenessUi(stale) {
+            if (stale === rateStaleUi) return;
+            rateStaleUi = stale;
+            if (!statRateEl) return;
+            if (stale) {
+                statRateEl.textContent = '停滯';
+                statRateEl.classList.remove('ok');
+                statRateEl.classList.add('err');
+            } else {
+                updateCount = 0;
+                currentRate = 0;
+                lastRateTime = Date.now();
+                statRateEl.textContent = '- Hz';
+                statRateEl.classList.remove('err');
+                statRateEl.classList.add('ok');
+            }
+        }
+
+        function resetDataFlowTracking() {
+            lastSampleTs = null;
+            prevSampleEpochMs = null;
+            measuredSampleIntervalMs = null;
+            lastFreshPushAtWallMs = 0;
+            rateStaleUi = false;
+            lastPointOptionRefreshSec = 0;
         }
 
         function computeMmfInputVelocity(slaveIdx, positionValue, epochMs) {
@@ -942,6 +1111,8 @@
             if (TIMING_TYPES.includes(type)) return 'timing';
             if (ACCELERATION_TYPES.includes(type)) return 'acceleration';
             if (VELOCITY_TYPES.includes(type)) return 'velocity';
+            if (FWDKIN_POS_TYPES.includes(type)) return 'fwdKinPos';
+            if (FWDKIN_ANG_TYPES.includes(type)) return 'fwdKinAng';
             return 'position';
         }
 
@@ -1158,7 +1329,9 @@
                 this.glCanvas = glCanvas;
                 this.overlayCanvas = overlayCanvas;
                 this.container = container;
-                this.overlayCtx = overlayCanvas.getContext('2d', { alpha: true, desynchronized: true });
+                // 不使用 desynchronized：低延遲路徑會讓畫布繞過 VSync/合成器立即呈現，
+                // 捲動中的波形會被掃描線切成前後兩份而出現水平雙影抖動。
+                this.overlayCtx = overlayCanvas.getContext('2d', { alpha: true });
                 this.gl = this.initWebGL(glCanvas);
                 this.cssWidth = 0;
                 this.cssHeight = 0;
@@ -1201,17 +1374,34 @@
                 this.gl.blendFunc(this.gl.SRC_ALPHA, this.gl.ONE_MINUS_SRC_ALPHA);
 
                 this.installInteractions();
+                this.installSizeObserver();
                 this.ensureSize();
             }
 
+            installSizeObserver() {
+                if (typeof ResizeObserver === 'undefined') {
+                    return;
+                }
+                // 容器尺寸改變（視窗縮放、側邊欄開關、瀏覽器縮放）時 CSS 尺寸立即改變，
+                // 但 drawing buffer 要等下一筆資料重繪才跟上；空窗期間畫布被瀏覽器拉伸，
+                // 波形比例與座標軸不一致，看起來就像雙影。這裡主動補一次重繪。
+                this.sizeObserver = new ResizeObserver(() => {
+                    if (this.ensureSize()) {
+                        scheduleChartUpdate();
+                    }
+                });
+                this.sizeObserver.observe(this.container);
+            }
+
             initWebGL(canvas) {
+                // 刻意不設 desynchronized：波形是持續捲動的即時訊號，
+                // 繞過 VSync 的呈現方式會直接造成撕裂（畫面同時存在前後兩帧的波形）。
                 const attributes = {
                     alpha: false,
                     antialias: true,
                     depth: false,
                     stencil: false,
                     preserveDrawingBuffer: false,
-                    desynchronized: true,
                     powerPreference: 'high-performance'
                 };
                 const gl = canvas.getContext('webgl', attributes) || canvas.getContext('experimental-webgl', attributes);
@@ -1274,8 +1464,15 @@
                 const hasVelocity = seriesList.some(series => series.axisKey === 'velocity');
                 const hasAcceleration = seriesList.some(series => series.axisKey === 'acceleration');
                 const hasTiming = seriesList.some(series => series.axisKey === 'timing');
-                const left = this.cssWidth < 640 ? 60 : 74;
-                const rightAxisCount = (hasVelocity ? 1 : 0) + (hasAcceleration ? 1 : 0) + (hasTiming ? 1 : 0);
+                const hasFwdKinPos = seriesList.some(series => series.axisKey === 'fwdKinPos');
+                const hasFwdKinAng = seriesList.some(series => series.axisKey === 'fwdKinAng');
+                // FK 位置(mm) 與位置(deg) 同時顯示時，左側多留一軸寬度給 fkPos 外軸
+                const baseLeft = this.cssWidth < 640 ? 60 : 74;
+                const leftFkAxisPad = (hasFwdKinPos && seriesList.some(series => series.axisKey === 'position'))
+                    ? (this.cssWidth < 640 ? 40 : 44)
+                    : 0;
+                const left = baseLeft + leftFkAxisPad;
+                const rightAxisCount = (hasVelocity ? 1 : 0) + (hasAcceleration ? 1 : 0) + (hasTiming ? 1 : 0) + (hasFwdKinAng ? 1 : 0);
                 const right = rightAxisCount > 0
                     ? (this.cssWidth < 640 ? 76 : 90) + Math.max(0, rightAxisCount - 1) * (this.cssWidth < 640 ? 42 : 44)
                     : 18;
@@ -1294,14 +1491,16 @@
                 };
             }
 
-            resolveViewRange(totalRange) {
+            resolveViewRange(totalRange, sampleCount) {
                 if (totalRange <= 0) {
                     return { xMin: 0, xMax: 1, span: 1, totalRange: 1 };
                 }
 
                 if (viewState.autoX) {
-                    const span = getAutoViewSpanMs(totalRange);
-                    const xMin = Math.max(0, totalRange - span);
+                    const span = getAutoViewSpanMs(totalRange, sampleCount);
+                    // 視窗右緣固定貼齊最新資料；資料不滿一個視窗時 xMin 為負值，
+                    // 代表左側那段時間還沒有資料（留空），而不是把視窗寬度縮小後重縮波形。
+                    const xMin = totalRange - span;
                     viewState.xMin = xMin;
                     viewState.xMax = totalRange;
                     return { xMin, xMax: totalRange, span, totalRange };
@@ -1361,7 +1560,9 @@
                     position: { min: Infinity, max: -Infinity, visible: false },
                     velocity: { min: Infinity, max: -Infinity, visible: false },
                     acceleration: { min: Infinity, max: -Infinity, visible: false },
-                    timing: { min: Infinity, max: -Infinity, visible: false }
+                    timing: { min: Infinity, max: -Infinity, visible: false },
+                    fwdKinPos: { min: Infinity, max: -Infinity, visible: false },
+                    fwdKinAng: { min: Infinity, max: -Infinity, visible: false }
                 };
 
                 seriesList.forEach(series => {
@@ -1465,7 +1666,7 @@
                     const y = plotRect.top + plotRect.height - plotRect.height * ratio;
                     const value = domain.min + domain.span * ratio;
                     const labelX = side === 'left'
-                        ? plotRect.left - 8
+                        ? plotRect.left - 8 - tickOffset
                         : plotRect.left + plotRect.width + 8 + tickOffset;
                     ctx.fillText(formatAxisValue(value), labelX, y);
                 }
@@ -1473,7 +1674,7 @@
                 ctx.textBaseline = 'alphabetic';
                 ctx.fillText(
                     axisConfig.title,
-                    side === 'left' ? plotRect.left : plotRect.left + plotRect.width + 8 + tickOffset,
+                    side === 'left' ? plotRect.left - tickOffset : plotRect.left + plotRect.width + 8 + tickOffset,
                     plotRect.top - 8
                 );
             }
@@ -1523,6 +1724,14 @@
                 }
                 ctx.fillText('實際時間', plotRect.left + plotRect.width / 2, this.cssHeight - 16);
 
+                // 左側最多兩軸：position(deg) 靠內；FK 位置(mm) 與其並存時再外推一列
+                let leftTickOffset = 0;
+                if (domains.fwdKinPos.visible) {
+                    if (domains.position.visible) {
+                        leftTickOffset = this.cssWidth < 640 ? 40 : 44;
+                    }
+                    this.drawYAxis(ctx, plotRect, domains.fwdKinPos, AXIS_CONFIG.fwdKinPos, 'left', leftTickOffset);
+                }
                 this.drawYAxis(ctx, plotRect, domains.position, AXIS_CONFIG.position, 'left', 0);
                 let rightTickOffset = 0;
                 if (domains.velocity.visible) {
@@ -1535,6 +1744,10 @@
                 }
                 if (domains.timing.visible) {
                     this.drawYAxis(ctx, plotRect, domains.timing, AXIS_CONFIG.timing, 'right', rightTickOffset);
+                    rightTickOffset += 52;
+                }
+                if (domains.fwdKinAng.visible) {
+                    this.drawYAxis(ctx, plotRect, domains.fwdKinAng, AXIS_CONFIG.fwdKinAng, 'right', rightTickOffset);
                 }
 
                 ctx.textAlign = 'left';
@@ -1615,7 +1828,9 @@
                             position: { ...AXIS_CONFIG.position, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'position') },
                             velocity: { ...AXIS_CONFIG.velocity, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'velocity') },
                             acceleration: { ...AXIS_CONFIG.acceleration, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'acceleration') },
-                            timing: { ...AXIS_CONFIG.timing, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'timing') }
+                            timing: { ...AXIS_CONFIG.timing, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'timing') },
+                            fwdKinPos: { ...AXIS_CONFIG.fwdKinPos, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'fwdKinPos') },
+                            fwdKinAng: { ...AXIS_CONFIG.fwdKinAng, min: -1, max: 1, span: 2, visible: seriesList.some(series => series.axisKey === 'fwdKinAng') }
                         },
                         this.plotRect,
                         { xMin: 0, xMax: 1, span: 1 },
@@ -1627,7 +1842,7 @@
 
                 const baseTime = Number(buffer[0].epoch) || Date.now();
                 const totalRange = Math.max(1, (Number(buffer[buffer.length - 1].epoch) || baseTime) - baseTime);
-                const viewRange = this.resolveViewRange(totalRange);
+                const viewRange = this.resolveViewRange(totalRange, buffer.length);
                 const startIndex = this.lowerBound(buffer, baseTime, viewRange.xMin);
                 const endIndex = this.upperBound(buffer, baseTime, viewRange.xMax);
                 const domains = this.computeAxisDomains(buffer, seriesList, baseTime, startIndex, endIndex);
@@ -1656,14 +1871,16 @@
                 };
 
                 this.container.addEventListener('wheel', (event) => {
-                    if (dataBuffer.length < 2) return;
+                    // 一律以「目前渲染中的 buffer」為準：暫停時是凍結快照，平移/縮放才不會錯位
+                    const renderBuffer = getRenderBuffer();
+                    if (renderBuffer.length < 2) return;
                     const point = getLocalPoint(event);
                     if (!isInsidePlot(point)) return;
 
                     event.preventDefault();
-                    const baseTime = Number(dataBuffer[0]?.epoch) || 0;
-                    const totalRange = Math.max(1, (Number(dataBuffer[dataBuffer.length - 1]?.epoch) || baseTime) - baseTime);
-                    const currentRange = this.resolveViewRange(totalRange);
+                    const baseTime = Number(renderBuffer[0]?.epoch) || 0;
+                    const totalRange = Math.max(1, (Number(renderBuffer[renderBuffer.length - 1]?.epoch) || baseTime) - baseTime);
+                    const currentRange = this.resolveViewRange(totalRange, renderBuffer.length);
                     const ratio = clamp((point.x - this.plotRect.left) / Math.max(1, this.plotRect.width), 0, 1);
                     const zoomFactor = event.deltaY < 0 ? 0.84 : 1.18;
                     let newSpan = clamp(currentRange.span * zoomFactor, 4, totalRange);
@@ -1685,13 +1902,14 @@
                 }, { passive: false });
 
                 this.container.addEventListener('pointerdown', (event) => {
-                    if (event.button !== 0 || dataBuffer.length < 2) return;
+                    const renderBuffer = getRenderBuffer();
+                    if (event.button !== 0 || renderBuffer.length < 2) return;
                     const point = getLocalPoint(event);
                     if (!isInsidePlot(point)) return;
 
-                    const baseTime = Number(dataBuffer[0]?.epoch) || 0;
-                    const totalRange = Math.max(1, (Number(dataBuffer[dataBuffer.length - 1]?.epoch) || baseTime) - baseTime);
-                    const currentRange = this.resolveViewRange(totalRange);
+                    const baseTime = Number(renderBuffer[0]?.epoch) || 0;
+                    const totalRange = Math.max(1, (Number(renderBuffer[renderBuffer.length - 1]?.epoch) || baseTime) - baseTime);
+                    const currentRange = this.resolveViewRange(totalRange, renderBuffer.length);
 
                     if (event.shiftKey) {
                         // Shift+drag: box-zoom for inspecting a localized region
@@ -1847,8 +2065,11 @@
             updateCount = 0;
             currentRate = 0;
             lastRateTime = Date.now();
+            rateStaleUi = false;
             document.getElementById('statSeq').textContent = '-';
-            document.getElementById('statRate').textContent = '- Hz';
+            statRateEl.textContent = '- Hz';
+            statRateEl.classList.remove('err');
+            statRateEl.classList.add('ok');
             document.getElementById('statAPos').textContent = '- deg';
             document.getElementById('statAVel').textContent = '- deg/s';
             document.getElementById('statSW').textContent = '0x----';
@@ -1856,6 +2077,7 @@
         }
 
         function setPaused(paused) {
+            const wasPaused = isPaused;
             isPaused = paused;
             pausedViewBuffer = paused ? dataBuffer.slice() : null;
             btnPause.textContent = isPaused ? '▶ 繼續' : '⏸ 暫停';
@@ -1864,6 +2086,14 @@
             btnPause.setAttribute('aria-pressed', isPaused ? 'true' : 'false');
             if (!isPaused && dataBuffer.length > 0) {
                 updateStats(dataBuffer[dataBuffer.length - 1]);
+                // 暫停期間若視圖停在舊資料（資料尾已跑出視窗 1/4 以上），繼續後跳回最新
+                if (wasPaused && viewState.autoX === false) {
+                    const baseTime = Number(dataBuffer[0]?.epoch) || 0;
+                    const totalRange = Math.max(1, (Number(dataBuffer[dataBuffer.length - 1]?.epoch) || baseTime) - baseTime);
+                    if (viewState.xMax < totalRange - (viewState.xMax - viewState.xMin) * 0.25) {
+                        resetView();
+                    }
+                }
             }
             scheduleChartUpdate(true);
         }
@@ -1906,22 +2136,44 @@
                     filterInput: hasPdoSample ? toFiniteNumber(source.filterInput) : null,
                     filter: hasPdoSample ? toFiniteNumber(source.filter) : null,
                     filterVel: hasPdoSample ? toFiniteNumber(source.filterVel) : null,
+                    filterInputVel: hasPdoSample ? toFiniteNumber(source.filterInputVel) : null,
                     filterAcc: hasPdoSample ? toFiniteNumber(source.filterAcc) : null,
                     sw: hasPdoSample ? toFiniteNumber(source.sw) : null,
                     cw: hasPdoSample ? toFiniteNumber(source.cw) : null
                 });
             }
 
-            return {
+            const fwdKin = (json.fwdKin && typeof json.fwdKin === 'object') ? json.fwdKin : null;
+            const sample = {
                 time: Date.now(),
                 epoch: sampleEpoch,
                 seq: json.seq,
                 ecatCycle,
                 slaves
             };
+            // Flatten FK channels so they appear as global signal types
+            if (fwdKin) {
+                sample.fwdKinX = toFiniteNumber(fwdKin.x);
+                sample.fwdKinY = toFiniteNumber(fwdKin.y);
+                sample.fwdKinZ = toFiniteNumber(fwdKin.z);
+                sample.fwdKinRoll = toFiniteNumber(fwdKin.roll);
+                sample.fwdKinPitch = toFiniteNumber(fwdKin.pitch);
+                sample.fwdKinYaw = toFiniteNumber(fwdKin.yaw);
+                sample.fwdKin = fwdKin;
+            }
+            return sample;
         }
 
         // ===== 更新統計 =====
+        // 統計列固定看單一從軸；「所有從軸」模式下明確標出顯示的是軸1
+        function syncStatAxisSuffix() {
+            const axisSuffix = selectedSlave === 'all' ? '（軸1）' : '';
+            statLabelAPos.textContent = `實際位置${axisSuffix}`;
+            statLabelAVel.textContent = `實際速度${axisSuffix}`;
+            statLabelSW.textContent = `狀態字${axisSuffix}`;
+            statLabelCW.textContent = `控制字${axisSuffix}`;
+        }
+
         function updateStats(data) {
             document.getElementById('statSeq').textContent = data.seq || '-';
 
@@ -1931,8 +2183,11 @@
                 currentRate = updateCount;
                 updateCount = 0;
                 lastRateTime = now;
+                refreshPointOptions();
             }
-            document.getElementById('statRate').textContent = `${currentRate} Hz`;
+            statRateEl.textContent = `${currentRate} Hz`;
+
+            syncStatAxisSuffix();
 
             const slaveIdx = selectedSlave === 'all' ? 0 : parseInt(selectedSlave, 10);
             if (data.slaves && data.slaves[slaveIdx]) {
@@ -1941,6 +2196,34 @@
                 document.getElementById('statAVel').textContent = formatStatValue(s.aVel, 1, 'deg/s');
                 document.getElementById('statSW').textContent = formatHexWord(s.sw);
                 document.getElementById('statCW').textContent = formatHexWord(s.cw);
+            }
+
+            // Forward Kinematics display
+            if (data.fwdKin) {
+                const fk = data.fwdKin;
+                document.getElementById('statFkX').textContent = typeof fk.x === 'number' ? fk.x.toFixed(2) + ' mm' : '-';
+                document.getElementById('statFkY').textContent = typeof fk.y === 'number' ? fk.y.toFixed(2) + ' mm' : '-';
+                document.getElementById('statFkZ').textContent = typeof fk.z === 'number' ? fk.z.toFixed(2) + ' mm' : '-';
+                document.getElementById('statFkRoll').textContent = typeof fk.roll === 'number' ? fk.roll.toFixed(3) + ' °' : '-';
+                document.getElementById('statFkPitch').textContent = typeof fk.pitch === 'number' ? fk.pitch.toFixed(3) + ' °' : '-';
+                document.getElementById('statFkYaw').textContent = typeof fk.yaw === 'number' ? fk.yaw.toFixed(3) + ' °' : '-';
+                const statusEl = document.getElementById('statFkStatus');
+                if (fk.valid) {
+                    statusEl.textContent = '✓ 收斂';
+                    statusEl.style.color = '#4BC0C0';
+                } else {
+                    statusEl.textContent = '✗ 未收斂';
+                    statusEl.style.color = '#FF6384';
+                }
+            } else {
+                document.getElementById('statFkX').textContent = '-';
+                document.getElementById('statFkY').textContent = '-';
+                document.getElementById('statFkZ').textContent = '-';
+                document.getElementById('statFkRoll').textContent = '-';
+                document.getElementById('statFkPitch').textContent = '-';
+                document.getElementById('statFkYaw').textContent = '-';
+                document.getElementById('statFkStatus').textContent = '無數據';
+                document.getElementById('statFkStatus').style.color = '#aaa';
             }
         }
 
@@ -1992,8 +2275,24 @@
                         const sample = normalizeScopeSample(json);
                         if (!sample) return;
 
+                        // 後端停機時會以心跳重送最後一筆（ts 相同）；重複幀不進 buffer，
+                        // 並在持續停滯超過門檻後把更新率標成「停滯」而非假性計數
+                        const sampleHasPdo = json.mmfReady === true;
+                        const frameTs = Number(json.ts);
+                        const idleDuplicate = sampleHasPdo && Number.isFinite(frameTs) && lastSampleTs !== null && frameTs === lastSampleTs;
+                        if (idleDuplicate) {
+                            if (!isPaused && Date.now() - lastFreshPushAtWallMs > 1200) {
+                                applyStalenessUi(true);
+                            }
+                            return;
+                        }
+
                         dataBuffer.push(sample);
                         trimDataBufferToMaxPoints();
+                        lastSampleTs = frameTs;
+                        lastFreshPushAtWallMs = Date.now();
+                        trackSampleIntervalMs(Number(sample.epoch));
+                        applyStalenessUi(false);
 
                         if (!isPaused) {
                             scheduleChartUpdate();
@@ -2017,6 +2316,7 @@
         // ===== 事件綁定 =====
         slaveSelect.addEventListener('change', (e) => {
             selectedSlave = e.target.value;
+            syncStatAxisSuffix();
             scheduleChartUpdate(true);
         });
 
@@ -2051,12 +2351,18 @@
                 alert('請先登入');
                 return;
             }
+            // 暫停中清除：凍結的空視圖永遠等不到資料，故一併回到即時跟隨
+            if (isPaused) {
+                setPaused(false);
+            }
             dataBuffer = [];
-            pausedViewBuffer = isPaused ? [] : null;
+            pausedViewBuffer = null;
             lastSeq = null;
             resetMmfInputVelocityState();
+            resetDataFlowTracking();
             resetView();
             resetStatsDisplay();
+            refreshPointOptions();
             scheduleChartUpdate(true);
         });
 
@@ -2196,6 +2502,7 @@
         (async function init() {
             await window.Auth.ready();
             initChart();
+            refreshPointOptions();
 
             if (!window._loggedIn) {
                 disableAllButtons();
@@ -2207,7 +2514,10 @@
                 await loadApiKey();
                 await loadMMFStatus();
             }
-            setupSSE();
+            // 未登入時不建立 SSE：後端會回 401 並造成 EventSource 無限自動重連
+            if (window._loggedIn) {
+                setupSSE();
+            }
             window.Auth.createKeepalive();
 
             window.addEventListener('wusoem-auth-change', (e) => {
@@ -2226,6 +2536,7 @@
                     pausedViewBuffer = null;
                     lastSeq = null;
                     resetMmfInputVelocityState();
+                    resetDataFlowTracking();
                     resetStatsDisplay();
                     resetView();
                     scheduleChartUpdate(true);

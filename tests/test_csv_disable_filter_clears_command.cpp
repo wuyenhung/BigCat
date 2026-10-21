@@ -31,12 +31,11 @@ struct MasterShutdownGuard {
 }  // namespace
 
 int main() {
-    if (!Check(CoreHelpers::kDefaultCyclicCommandPdoIndex == 0x60FF,
-               "CSV regression test expects the default cyclic command PDO to remain 0x60FF")) {
-        return EXIT_FAILURE;
-    }
-
+    // This test validates CSV-specific behavior: disabling PDO filtering must
+    // clear both 0x607A and the active cyclic command PDO.  Since the default
+    // mode may change, explicitly set CSV mode before running the test.
     EtherCATMaster master;
+    master.SetCyclicOperationMode(CoreHelpers::kCia402OperationModeCyclicSyncVelocity);
     MasterShutdownGuard shutdownGuard{master};
 
     if (!Check(master.Initialize(EtherCATMaster::GetSimulationInterfaceName()),
@@ -53,8 +52,8 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    const int targetPositionOffset = outBase + 2;
-    const int cyclicCommandOffset = outBase + 6;
+    const int targetPositionOffset = outBase + EtherCATMaster::kPdoOutOff_TargetPos;
+    const int cyclicCommandOffset = outBase + EtherCATMaster::kPdoOutOff_TargetVel;
     const int32_t stagedTargetPosition = 123456;
     const int32_t stagedCsvVelocity = 654321;
 

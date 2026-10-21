@@ -45,6 +45,13 @@ static bool IsDynamicPdoViolationOnly(PDOFilter::ViolationType type)
 
 void MainWindow::StartAutoProcedure(bool showAutoWindow)
 {
+    // Lift the auto-stop suppression that was set in FinalizeSuccessfulConnection
+    // to prevent SDO/PDO callbacks from re-asserting immediateStopBusy between
+    // the busy-flag clear and this function's busy check. From this point on,
+    // normal 0x60FD / 0x603F monitoring resumes — if a real stop condition
+    // exists, the next callback cycle will trigger it.
+    this->suppressAutoStopDuringStartup_.store(false);
+
     auto* master = AppController::GetInstance().GetMaster();
     if (!master || !master->IsRunning()) {
         PrependStatus(L"[AUTO] 需先連線並啟動主迴圈 (PDO) 才能啟動自動程序\r\n");
@@ -59,6 +66,19 @@ void MainWindow::StartAutoProcedure(bool showAutoWindow)
         const auto decision = CoreHelpers::EvaluateStartAutoProcedure(snapshot);
         if (!decision.allowed) {
             if (decision.rejection == CoreHelpers::CommandPolicyRejection::kSystemBusy) {
+                // Diagnostic: log which specific flags are causing the busy state
+                std::wstring busyInfo = L"[AUTO] 系統忙碌 —";
+                if (snapshot.worker_running) busyInfo += L" workerRunning";
+                if (disconnecting.load()) busyInfo += L" disconnecting";
+                if (homingBusy.load()) busyInfo += L" homingBusy";
+                if (autoDownToOriginRunning.load()) busyInfo += L" autoDownToOrigin";
+                if (autoConnectBusy.load()) busyInfo += L" autoConnectBusy";
+                if (jogBusy.load()) busyInfo += L" jogBusy";
+                if (faultResetBusy.load()) busyInfo += L" faultReset";
+                if (immediateStopBusy.load()) busyInfo += L" immediateStop";
+                if (powerOpBusy.load()) busyInfo += L" powerOp";
+                busyInfo += L"\r\n";
+                PrependStatus(busyInfo.c_str());
                 PrependStatus(L"[AUTO] 系統目前忙碌，無法啟動自動程序 (已阻止重複或衝突操作)\r\n");
             } else if (decision.rejection == CoreHelpers::CommandPolicyRejection::kMasterNotInitialized) {
                 PrependStatus(L"[AUTO] 主站尚未初始化，無法啟動自動程序\r\n");
@@ -343,12 +363,20 @@ void MainWindow::StartAutoProcedure(bool showAutoWindow)
             overallSuccess = false;
         }
 
-        // Reuse the shared helper so startup-auto power-on cannot leave
-        // powerOpBusy latched on exceptions.
-        bool overallPowerOnSuccess = TryPowerOnAllSlaves(
-            "[AutoFaultReset] ",
-            nullptr,
-            "[AutoFaultReset] MotionController not initialized; skipping power-on\n");
+        // 檢查所有從站是否已在 Operation Enabled 狀態，
+        // 若已是則跳過 PowerOnAll 以避免不必要的穩定化等待與狀態機序列。
+        bool overallPowerOnSuccess = false;
+        if (AreAllSlavesReadyByStatusword()) {
+            PostUTF8LogToUI(std::string("[AutoFaultReset] all slaves already Operation Enabled, skipping PowerOnAll\n"));
+            overallPowerOnSuccess = true;
+            // 清除可能遺留的 powerOnInProgress 旗標，避免 CyclicTask 被阻擋
+            if (bgMaster) bgMaster->SetPowerOnInProgress(false);
+        } else {
+            overallPowerOnSuccess = TryPowerOnAllSlaves(
+                "[AutoFaultReset] ",
+                nullptr,
+                "[AutoFaultReset] MotionController not initialized; skipping power-on\n");
+        }
 
         if (overallSuccess && overallPowerOnSuccess) {
             try {
@@ -361,20 +389,12 @@ void MainWindow::StartAutoProcedure(bool showAutoWindow)
                 PostUTF8LogToUI(std::string("[AutoFaultReset] Unknown error clearing error/resetting PDO filters after PowerOn\n"));
             }
 
-            // 🔧 關鍵修正：PowerOnAllAsync 完成後，立即觸發所有 PDO Filter 的軟啟動
-            // 這確保 Filter 的輸入移動平均線從當前實際位置開始初始化
-            // 防止軟啟動期間 MMF 輸入無法通過濾波器的問題
-            try {
-                if (auto* filterMaster = AppController::GetInstance().GetMaster()) {
-                    PostUTF8LogToUI(std::string("[AutoFaultReset] Triggering all PDO filters soft-start after PowerOn\n"));
-                    filterMaster->TriggerAllPDOFiltersSoftStart();
-                    PostUTF8LogToUI(std::string("[AutoFaultReset] All PDO filters soft-start triggered successfully\n"));
-                }
-            } catch (const std::exception &ex) {
-                PostUTF8LogToUI(std::string("[AutoFaultReset] Failed to trigger PDO filters soft-start: ") + ex.what() + "\n");
-            } catch (...) {
-                PostUTF8LogToUI(std::string("[AutoFaultReset] Unknown error triggering PDO filters soft-start\n"));
-            }
+            // Soft-start is now triggered by the AutoConnect monitoring
+            // thread AFTER EnablePDOFiltering(true).  Triggering it here
+            // (before filtering is enabled) creates a gap where the
+            // filter is uninitialised but Filter() is never called,
+            // allowing the actual position to drift and corrupting the
+            // initial soft-start state.
         }
         
         // Log combined result
@@ -413,8 +433,7 @@ void MainWindow::StopAutoProcedure()
     // 註: 0x603F 錯誤碼循環檢查在斷開連接時才停止,此處不停止
     
     if (auto* master = AppController::GetInstance().GetMaster()) {
-        // Keep 0x60FD monitoring alive while connected so external E-Stop lamps
-        // and buttons do not freeze on a stale cached value after Auto Stop.
+        // 0x60FD 現由 PDO 每週期自動更新，保證 Auto Stop 後 E-Stop 燈號不會凍結
         master->SetSdoReaderEnabled(true);
         StartPostConnectSdoReader();
     }

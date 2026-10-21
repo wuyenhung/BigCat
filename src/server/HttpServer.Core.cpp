@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,7 @@
 #include "MainWindow.h"
 #include "core/AppConfig.h"
 #include "core/CoreHelpers.h"
+#include "core/CpuIsolation.h"
 #include "HttpServer.Internal.h"
 
 namespace HttpServerInternal {
@@ -37,7 +39,11 @@ std::string g_slaveInfoCacheJson;
 std::mutex g_slaveSdoCacheMutex;
 std::unordered_map<int, std::string> g_slaveSdoCache;
 
-int g_httpPort = 8080;
+// 實際監聽埠號：起始值由 StartLocalHttpServer() 指定，bind 時若被占用會自動跳號，
+// 成功後更新為實際值（供 GetHttpServerUrl()/ui_state 回報）。
+std::atomic<int> g_httpPort(8080);
+std::atomic_bool g_httpBindDone(false);  // bind 嘗試已結束（成功或全部失敗）
+std::atomic_bool g_httpBindOk(false);    // bind + listen 成功
 std::string g_httpApiKey;
 std::string g_httpBindAddr;
 
@@ -54,6 +60,42 @@ std::unordered_map<std::string, RateLimitWindow> g_rateLimitMap;
 
 std::mutex g_perIpConnectionMutex;
 std::unordered_map<std::string, IPConnection> g_perIpConnections;
+
+// Track active client sockets so we can close them during shutdown,
+// preventing detached connection threads from accessing freed resources.
+std::mutex g_activeClientSocketsMutex;
+std::vector<SOCKET> g_activeClientSockets;
+
+static void RegisterActiveClientSocket(SOCKET s) {
+    if (s == INVALID_SOCKET) return;
+    std::lock_guard<std::mutex> lk(g_activeClientSocketsMutex);
+    g_activeClientSockets.push_back(s);
+}
+
+static void UnregisterActiveClientSocket(SOCKET s) {
+    if (s == INVALID_SOCKET) return;
+    std::lock_guard<std::mutex> lk(g_activeClientSocketsMutex);
+    auto it = std::find(g_activeClientSockets.begin(), g_activeClientSockets.end(), s);
+    if (it != g_activeClientSockets.end()) {
+        g_activeClientSockets.erase(it);
+    }
+}
+
+static void CloseAllClientSockets() {
+    std::vector<SOCKET> sockets;
+    {
+        std::lock_guard<std::mutex> lk(g_activeClientSocketsMutex);
+        sockets = g_activeClientSockets;
+        g_activeClientSockets.clear();
+    }
+    for (SOCKET s : sockets) {
+        closesocket(s);
+    }
+    // Wait for remaining detached connection threads to finish (max 1 second)
+    for (int i = 0; i < 10 && g_activeConnections.load() > 0; ++i) {
+        Sleep(100);
+    }
+}
 
 std::atomic<int> g_activeConnections{0};
 int g_maxConnections = 32;
@@ -90,6 +132,19 @@ StewartNativePlannerState g_stewartNativePlannerState;
 std::atomic_bool g_stewartNativePlannerRun(false);
 std::thread g_stewartNativePlannerThread;
 
+std::mutex g_pose6dLimitsMutex;
+WuSOEM::Pose6DLimits g_pose6dLimits{};
+
+void SetPose6DLimits(const WuSOEM::Pose6DLimits& limits) {
+    std::lock_guard<std::mutex> lk(g_pose6dLimitsMutex);
+    g_pose6dLimits = limits;
+}
+
+WuSOEM::Pose6DLimits GetPose6DLimits() {
+    std::lock_guard<std::mutex> lk(g_pose6dLimitsMutex);
+    return g_pose6dLimits;
+}
+
 std::mutex g_uiStateMutex;
 std::unordered_map<std::string, bool> g_uiDisabled;
 
@@ -98,6 +153,10 @@ uint32_t g_desiredCycleTimeUs = 2000;
 uint32_t g_commsTimeUs = 0;
 uint32_t g_actualCycleTimeUs = 0;
 uint32_t g_maxObservedCycleTimeUs = 0;
+uint32_t g_spikePhase = 0;       // 0=none, 1=comms, 2=idle
+uint32_t g_spikeCycleUs = 0;     // cycle time during last spike
+uint32_t g_spikeCommsUs = 0;     // comms time during last spike
+uint32_t g_spikeCount = 0;       // total spikes since last reset
 std::chrono::system_clock::time_point g_ignoreWin32EchoUntil;
 
 std::mutex g_mailboxMutex;
@@ -376,6 +435,10 @@ static void InitializeDefaultUiState() {
 }
 
 void HttpServerThreadFunc() {
+    // Exclude HTTP accept/listen thread from RT physical core (ALL logical
+    // cores including HT sibling) to prevent cache pollution of cyclic thread.
+    CoreHelpers::CpuIsolation::ExcludeCurrentThreadFromRtCores();
+
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
     WSADATA wsaData;
@@ -404,23 +467,43 @@ void HttpServerThreadFunc() {
         }
     }
 
-    g_listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (g_listenSocket == INVALID_SOCKET) {
-        WSACleanup();
-        return;
+    // 自動跳埠：起始埠被其他服務占用時（例如本機模型伺服器佔用 8080），
+    // 依序往後嘗試，直到 bind 成功或達嘗試上限。
+    constexpr int kPortAttempts = 10;  // 8080..8089
+    bool bound = false;
+
+    for (int attempt = 0; attempt < kPortAttempts && !bound; ++attempt) {
+        const int tryPort = g_httpPort.load() + attempt;
+        if (tryPort <= 0 || tryPort > 65535) {
+            break;
+        }
+
+        g_listenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (g_listenSocket == INVALID_SOCKET) {
+            break;
+        }
+
+        sockaddr_in srv{};
+        srv.sin_family = AF_INET;
+        srv.sin_addr.S_un.S_addr = inet_addr(bindAddr.c_str());
+        srv.sin_port = htons(static_cast<unsigned short>(tryPort));
+
+        BOOL reuse = TRUE;
+        setsockopt(g_listenSocket, SOL_SOCKET, SO_REUSEADDR,
+                   reinterpret_cast<const char*>(&reuse), sizeof(reuse));
+
+        if (bind(g_listenSocket, reinterpret_cast<sockaddr*>(&srv), sizeof(srv)) == SOCKET_ERROR) {
+            closesocket(g_listenSocket);
+            g_listenSocket = INVALID_SOCKET;
+            continue;
+        }
+
+        g_httpPort.store(tryPort);
+        bound = true;
     }
 
-    sockaddr_in srv{};
-    srv.sin_family = AF_INET;
-    srv.sin_addr.S_un.S_addr = inet_addr(bindAddr.c_str());
-    srv.sin_port = htons(static_cast<unsigned short>(g_httpPort));
-
-    BOOL reuse = TRUE;
-    setsockopt(g_listenSocket, SOL_SOCKET, SO_REUSEADDR, reinterpret_cast<const char*>(&reuse), sizeof(reuse));
-
-    if (bind(g_listenSocket, reinterpret_cast<sockaddr*>(&srv), sizeof(srv)) == SOCKET_ERROR) {
-        closesocket(g_listenSocket);
-        g_listenSocket = INVALID_SOCKET;
+    if (!bound) {
+        g_httpBindDone.store(true);
         WSACleanup();
         return;
     }
@@ -428,9 +511,13 @@ void HttpServerThreadFunc() {
     if (listen(g_listenSocket, SOMAXCONN) == SOCKET_ERROR) {
         closesocket(g_listenSocket);
         g_listenSocket = INVALID_SOCKET;
+        g_httpBindDone.store(true);
         WSACleanup();
         return;
     }
+
+    g_httpBindOk.store(true);
+    g_httpBindDone.store(true);
 
     try {
         std::string json = CoreHelpers::EnumerateAdaptersJson();
@@ -498,6 +585,15 @@ void HttpServerThreadFunc() {
         // payloads, etc.).  This is the primary fix for the slow-page-load
         // issue that required users to refresh their browser repeatedly.
         std::thread([client]() {
+            // Exclude per-connection HTTP handler from RT physical core.
+            CoreHelpers::CpuIsolation::ExcludeCurrentThreadFromRtCores();
+
+            RegisterActiveClientSocket(client);
+            struct ClientSocketGuard {
+                SOCKET s;
+                ~ClientSocketGuard() { UnregisterActiveClientSocket(s); }
+            } clientGuard{client};
+            try {
             SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
 
             timeval connTv;
@@ -574,6 +670,15 @@ void HttpServerThreadFunc() {
             UnregisterIPConnection(clientIP, client);
             CloseClientAndDecrement(client);
             PostHttpConnCountIfChanged();
+            } catch (const std::exception& e) {
+                OutputDebugStringA((std::string("[HttpServer] connection handler exception: ") + e.what() + "\n").c_str());
+                CloseClientAndDecrement(client);
+                PostHttpConnCountIfChanged();
+            } catch (...) {
+                OutputDebugStringA("[HttpServer] connection handler unknown exception\n");
+                CloseClientAndDecrement(client);
+                PostHttpConnCountIfChanged();
+            }
         }).detach();
     }
 
@@ -594,10 +699,18 @@ void StartLocalHttpServer(int port, HWND hwnd) {
         return;
     }
 
-    g_httpPort = port;
+    g_httpPort.store(port);
+    g_httpBindOk.store(false);
+    g_httpBindDone.store(false);
     g_hwndHttpTarget = hwnd;
     g_httpServerRun.store(true);
     g_httpThread = std::thread(HttpServerThreadFunc);
+
+    // 等待 bind 結果（最多約 1.5 秒）：讓呼叫端能立即回報實際埠號。
+    // 起始埠被占用時，伺服器執行緒會自動跳號並更新 g_httpPort。
+    for (int i = 0; i < 150 && !g_httpBindDone.load(); ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
 }
 
 void StopLocalHttpServer() {
@@ -617,6 +730,10 @@ void StopLocalHttpServer() {
         g_listenSocket = INVALID_SOCKET;
     }
 
+    // Close all active client sockets to wake up detached per-connection
+    // threads and prevent them from accessing freed EtherCAT resources.
+    CloseAllClientSockets();
+
     if (g_httpThread.joinable()) {
         g_httpThread.join();
     }
@@ -632,8 +749,16 @@ std::string GetHttpServerUrl() {
     }
 
     std::ostringstream ss;
-    ss << "http://localhost:" << g_httpPort << "/";
+    ss << "http://localhost:" << g_httpPort.load() << "/";
     return ss.str();
+}
+
+int GetLocalHttpServerPort() {
+    return HttpServerInternal::g_httpPort.load();
+}
+
+bool IsLocalHttpServerListening() {
+    return HttpServerInternal::g_httpBindOk.load();
 }
 
 int GetActiveHttpConnections() {

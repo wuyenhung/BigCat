@@ -8,6 +8,9 @@ out/
 bin/
 obj/
 
+# Baseline measurement results (local only, not committed)
+baseline_results/
+
 # Visual Studio
 .vs/
 *.suo
@@ -72,3 +75,9 @@ Makefile
 Thumbs.db
 
 .fake
+
+# cdb symbol cache (runtime artifacts, not committed)
+tools/cdb/sym/
+
+# License key stays local: public clones run trial-only (LicenseChecker/TPM enforcement unchanged)
+Par/license.txt

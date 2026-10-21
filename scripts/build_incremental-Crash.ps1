@@ -14,7 +14,7 @@ param(
     [int]$Parallel = [Environment]::ProcessorCount,
     [string]$Target = '',
     [bool]$AutoKill = $true,
-    [bool]$PruneIntermediates = $true,
+    [bool]$PruneIntermediates = $false,
 
     [switch]$Crash = $true,
     [switch]$UseSanitizers = $false,
@@ -540,14 +540,14 @@ function Wait-BuildOutputPathsReleased {
 
 if ($RunDetached -and -not $NonInteractive) {
     Write-Host "Launching detached build..."
-    $args = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"", '-NonInteractive')
-    if ($BuildDir -ne (Join-Path -Path $ProjectRoot -ChildPath 'build')) { $args += ('-BuildDir', $BuildDir) }
-    if ($Target -ne '') { $args += ('-Target', $Target) }
-    if ($Parallel -gt 0) { $args += ('-Parallel', $Parallel) }
-    if ($Crash) { $args += '-Crash' }
-    if ($UseSanitizers) { $args += '-UseSanitizers' }
+    $powershellArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',"`"$PSCommandPath`"", '-NonInteractive')
+    if ($BuildDir -ne (Join-Path -Path $ProjectRoot -ChildPath 'build')) { $powershellArgs += ('-BuildDir', $BuildDir) }
+    if ($Target -ne '') { $powershellArgs += ('-Target', $Target) }
+    if ($Parallel -gt 0) { $powershellArgs += ('-Parallel', $Parallel) }
+    if ($Crash) { $powershellArgs += '-Crash' }
+    if ($UseSanitizers) { $powershellArgs += '-UseSanitizers' }
     $powerShellExe = Find-WindowsPowerShellExe
-    Start-Process -FilePath $powerShellExe -ArgumentList $args -WorkingDirectory $ProjectRoot -WindowStyle Normal | Out-Null
+    Start-Process -FilePath $powerShellExe -ArgumentList $powershellArgs -WorkingDirectory $ProjectRoot -WindowStyle Normal | Out-Null
     Write-Host "Detached build launched"; exit 0
 }
 
@@ -573,6 +573,29 @@ if ($Crash) {
         }
     }
 
+    if ((Test-Path $cacheFile) -and -not $ForceConfigure) {
+        $cachedSourceRoot = Get-CMakeCacheEntryValue -CacheText $cacheText -Key 'CMAKE_HOME_DIRECTORY'
+        if (-not $cachedSourceRoot) { $cachedSourceRoot = Get-CMakeCacheEntryValue -CacheText $cacheText -Key 'BigCat_SOURCE_DIR' }
+        if ($cachedSourceRoot) {
+            try {
+                $cachedSourceRoot = (Resolve-Path -Path $cachedSourceRoot -ErrorAction Stop).ProviderPath.TrimEnd('\')
+            } catch {
+                $cachedSourceRoot = $cachedSourceRoot.TrimEnd('\')
+            }
+            try {
+                $projectRootResolved = (Resolve-Path -Path $ProjectRoot -ErrorAction Stop).ProviderPath.TrimEnd('\')
+            } catch {
+                $projectRootResolved = $ProjectRoot.TrimEnd('\')
+            }
+            if ($cachedSourceRoot -ne $projectRootResolved) {
+                Write-Warning "Cached CMake source root path mismatch: '$cachedSourceRoot' != '$projectRootResolved'"
+                Write-Warning "Forcing a clean reconfigure because the build directory points to a different repository source tree."
+                $repairBrokenBuildGraph = $true
+                $needConfigure = $true
+            }
+        }
+    }
+
     $cacheHealth = Test-BuildTreeCacheHealth -BuildDirPath $BuildDir -DesiredConfig $Config
     if (-not $cacheHealth.Valid) {
         Write-Warning "Build cache/toolchain drift detected: $($cacheHealth.Reason)"
@@ -590,13 +613,14 @@ if ($Crash) {
     if ($ForceConfigure -or $needConfigure) {
         Write-Host "Configuring project to enable crash handler (ENABLE_CRASH_HANDLER=ON) ..."
 
-        # Auto-initialize Visual Studio dev environment if requested and needed
-        if ($AutoInitVcVars -and -not (Get-Command cl -ErrorAction SilentlyContinue)) {
+        # Auto-initialize Visual Studio dev environment if requested.
+        # Even if cl.exe already exists on PATH, the current shell may still lack the full SDK/lib environment.
+        if ($AutoInitVcVars) {
             $vc = Find-VcVarsAll
             if ($vc) {
                 Write-Host "Found vcvarsall at: $vc; attempting to initialize environment..."
                 $ok = Initialize-VcVars -VcVarsPath $vc -Arch $Arch
-                if (-not $ok) { Write-Warning "vcvarsall initialization did not expose 'cl'. You may need to run this script inside a Developer Command Prompt or install Visual Studio Build Tools." }
+                if (-not $ok) { Write-Warning "vcvarsall initialization did not expose the full build environment. You may need to run this script inside a Developer Command Prompt or install Visual Studio Build Tools." }
             } else {
                 Write-Host "vcvarsall not found on system; cannot auto-initialize MSVC environment." -ForegroundColor Yellow
             }

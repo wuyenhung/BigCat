@@ -38,8 +38,8 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    const int targetPositionOffset = outBase + 2;
-    const int cyclicCommandOffset = outBase + 6;
+    const int targetPositionOffset = outBase + EtherCATMaster::kPdoOutOff_TargetPos;
+    const int cyclicCommandOffset = outBase + EtherCATMaster::kPdoOutOff_TargetVel;
     const int32_t stagedTargetPosition = 112233;
     const int32_t stagedCsvVelocity = 445566;
 
@@ -70,9 +70,9 @@ int main() {
 
     int32_t targetPositionSnapshot = 1;
     int32_t csvVelocitySnapshot = 1;
-    if (!Check(SnapshotI32(master, outBase + 2, targetPositionSnapshot),
+    if (!Check(SnapshotI32(master, outBase + EtherCATMaster::kPdoOutOff_TargetPos, targetPositionSnapshot),
                "should snapshot logical target position after reconnect") ||
-        !Check(SnapshotI32(master, outBase + 6, csvVelocitySnapshot),
+        !Check(SnapshotI32(master, outBase + EtherCATMaster::kPdoOutOff_TargetVel, csvVelocitySnapshot),
                "should snapshot CSV command velocity after reconnect") ||
         !Check(targetPositionSnapshot == 0,
                "simulation reconnect must not replay stale staged 0x607A values") ||
